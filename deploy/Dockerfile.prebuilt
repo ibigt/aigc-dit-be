@@ -1,0 +1,7 @@
+# 用本机已编译的 Spring Boot 胖 jar 替换现有后端镜像中的 /app/app.jar
+# 不在 Docker 里跑 Maven。首次仍须有 aigc-dit-backend:local（完整 Dockerfile 编过一次）。
+#
+# 构建上下文必须是本目录（deploy/），只拷 dit-server.jar。
+ARG BASE_IMAGE=aigc-dit-backend:local
+FROM ${BASE_IMAGE}
+COPY dit-server.jar /app/app.jar

@@ -1,0 +1,199 @@
+package cn.aigc.dit.server.generate;
+
+import cn.aigc.dit.common.constant.AssetKind;
+import cn.aigc.dit.common.constant.ModelCategory;
+import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.generate.FramePair;
+import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.GenerateRequest;
+import cn.aigc.dit.generate.ReferenceAsset;
+import cn.aigc.dit.server.entity.Asset;
+import cn.aigc.dit.server.entity.GenTask;
+import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+import cn.aigc.dit.server.service.AssetService;
+import org.springframework.util.StringUtils;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Canonical {@link GenerateRequest} 与任务 params 互转。
+ */
+public final class GenerateRequests {
+
+    public static final String SOURCE = "快速创作";
+
+    private GenerateRequests() {
+    }
+
+    public static GenerateRequest fromSubmit(Long userId, String modelKey, GenerateSubmitReq req, AssetService assetService) {
+        String category = ModelCategory.IMAGE.equalsIgnoreCase(req.getCategory())
+                ? ModelCategory.IMAGE : ModelCategory.VIDEO;
+        List<ReferenceAsset> references = resolveReferences(req, assetService);
+        FramePair frames = resolveFrames(req, assetService);
+        String mode = GenerateMode.derive(category, references, frames);
+        return new GenerateRequest()
+                .setUserId(userId)
+                .setModelKey(modelKey)
+                .setCategory(category)
+                .setMode(mode)
+                .setPrompt(req.getPrompt().trim())
+                .setRatio(blankToNull(req.getRatio()))
+                .setResolution(blankToNull(req.getResolution()))
+                .setQuality(blankToNull(req.getQuality()))
+                .setDurationSec(req.getDurationSec())
+                .setCopies(req.getCopies() == null ? 1 : req.getCopies())
+                .setReferences(references)
+                .setFrames(frames);
+    }
+
+    public static Map<String, Object> toParams(GenerateRequest request, Long sessionId) {
+        Map<String, Object> params = new LinkedHashMap<>();
+        params.put("source", SOURCE);
+        params.put("mode", request.getMode());
+        params.put("ratio", request.getRatio());
+        params.put("resolution", request.getResolution());
+        params.put("quality", request.getQuality());
+        params.put("durationSec", request.getDurationSec());
+        params.put("copies", request.resolvedCopies());
+        if (sessionId != null) {
+            params.put("sessionId", sessionId);
+        }
+        if (request.getReferences() != null && !request.getReferences().isEmpty()) {
+            List<Map<String, String>> refs = new ArrayList<>();
+            for (ReferenceAsset ref : request.getReferences()) {
+                Map<String, String> item = new LinkedHashMap<>();
+                item.put("type", ref.getType());
+                item.put("storageKey", ref.getStorageKey());
+                refs.add(item);
+            }
+            params.put("references", refs);
+        }
+        if (request.getFrames() != null && request.getFrames().hasAny()) {
+            Map<String, String> frames = new LinkedHashMap<>();
+            frames.put("firstFrameKey", request.getFrames().getFirstFrameKey());
+            frames.put("lastFrameKey", request.getFrames().getLastFrameKey());
+            params.put("frames", frames);
+        }
+        return params;
+    }
+
+    @SuppressWarnings("unchecked")
+    public static GenerateRequest fromTask(GenTask task, String modelKey) {
+        Map<String, Object> params = task.getParams() == null ? Map.of() : task.getParams();
+        List<ReferenceAsset> references = new ArrayList<>();
+        Object rawRefs = params.get("references");
+        if (rawRefs instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    references.add(new ReferenceAsset(
+                            stringVal(map.get("type"), AssetKind.IMAGE),
+                            stringVal(map.get("storageKey"), null)));
+                }
+            }
+        }
+        FramePair frames = null;
+        Object rawFrames = params.get("frames");
+        if (rawFrames instanceof Map<?, ?> map) {
+            frames = new FramePair(stringVal(map.get("firstFrameKey"), null), stringVal(map.get("lastFrameKey"), null));
+        }
+        String category = task.getCategory();
+        String mode = stringVal(params.get("mode"), GenerateMode.derive(category, references, frames));
+        return new GenerateRequest()
+                .setUserId(task.getUserId())
+                .setTaskId(task.getId())
+                .setModelKey(modelKey)
+                .setCategory(category)
+                .setMode(mode)
+                .setPrompt(task.getPrompt())
+                .setRatio(stringVal(params.get("ratio"), null))
+                .setResolution(stringVal(params.get("resolution"), null))
+                .setQuality(stringVal(params.get("quality"), null))
+                .setDurationSec(intVal(params.get("durationSec")))
+                .setCopies(task.getCopies() == null ? intVal(params.get("copies")) : task.getCopies())
+                .setReferences(references)
+                .setFrames(frames);
+    }
+
+    public static boolean supportsMode(List<String> capabilities, String category, String mode) {
+        if (capabilities == null || capabilities.isEmpty()) {
+            return true;
+        }
+        for (String item : capabilities) {
+            if (mode.equalsIgnoreCase(item) || category.equalsIgnoreCase(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<ReferenceAsset> resolveReferences(GenerateSubmitReq req, AssetService assetService) {
+        if (req.getReferences() == null || req.getReferences().isEmpty()) {
+            return List.of();
+        }
+        List<ReferenceAsset> result = new ArrayList<>();
+        for (GenerateSubmitReq.ReferenceInput input : req.getReferences()) {
+            String key = input.getStorageKey();
+            String type = input.getType();
+            if (input.getAssetId() != null) {
+                Asset asset = assetService.requireOwned(input.getAssetId());
+                key = asset.getStorageKey();
+                type = asset.getKind();
+            } else if (StringUtils.hasText(key)) {
+                Asset asset = assetService.requireOwnedKey(key);
+                type = StringUtils.hasText(type) ? type : asset.getKind();
+            } else {
+                throw new BizException(ErrorCode.BAD_REQUEST, "参考素材缺少 storageKey");
+            }
+            result.add(new ReferenceAsset(
+                    AssetKind.VIDEO.equalsIgnoreCase(type) ? AssetKind.VIDEO : AssetKind.IMAGE,
+                    key));
+        }
+        return result;
+    }
+
+    private static FramePair resolveFrames(GenerateSubmitReq req, AssetService assetService) {
+        if (req.getFrames() == null) {
+            return null;
+        }
+        String first = blankToNull(req.getFrames().getFirstFrameKey());
+        String last = blankToNull(req.getFrames().getLastFrameKey());
+        if (first != null) {
+            assetService.requireOwnedKey(first);
+        }
+        if (last != null) {
+            assetService.requireOwnedKey(last);
+        }
+        FramePair frames = new FramePair(first, last);
+        return frames.hasAny() ? frames : null;
+    }
+
+    private static String blankToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private static String stringVal(Object value, String fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        String text = String.valueOf(value);
+        return text.isBlank() || "null".equals(text) ? fallback : text;
+    }
+
+    private static Integer intVal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}

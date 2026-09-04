@@ -1,0 +1,43 @@
+package cn.aigc.dit.common.security;
+
+import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
+
+/**
+ * 请求级登录用户上下文，由 JWT 过滤器写入。
+ */
+public final class UserContext {
+    private static final ThreadLocal<LoginUser> HOLDER = new ThreadLocal<>();
+
+    private UserContext() {
+    }
+
+    public static void set(LoginUser user) {
+        HOLDER.set(user);
+    }
+
+    public static LoginUser get() {
+        return HOLDER.get();
+    }
+
+    public static LoginUser require() {
+        LoginUser user = HOLDER.get();
+        if (user == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED, "未登录");
+        }
+        return user;
+    }
+
+    public static Long requireUserId() {
+        return require().getUserId();
+    }
+
+    public static boolean isAdmin() {
+        LoginUser user = HOLDER.get();
+        return user != null && user.isAdmin();
+    }
+
+    public static void clear() {
+        HOLDER.remove();
+    }
+}

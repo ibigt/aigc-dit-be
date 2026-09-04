@@ -1,0 +1,43 @@
+package cn.aigc.dit.server.media;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+
+public final class MediaUrls {
+
+    private MediaUrls() {
+    }
+
+    public static String of(String storageKey) {
+        if (storageKey == null || storageKey.isBlank()) {
+            return null;
+        }
+        return "/api/media?key=" + URLEncoder.encode(storageKey, StandardCharsets.UTF_8);
+    }
+
+    public static String contentType(String storageKey, String fallback) {
+        if (storageKey == null) {
+            return fallback;
+        }
+        String lower = storageKey.toLowerCase();
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (lower.endsWith(".mp4")) {
+            return "video/mp4";
+        }
+        if (lower.endsWith(".webm")) {
+            return "video/webm";
+        }
+        return fallback == null ? "application/octet-stream" : fallback;
+    }
+}

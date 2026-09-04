@@ -1,93 +1,109 @@
 # aigc-dit-be
 
+致启·光驭后端。Maven 多模块单应用，包名 `cn.aigc.dit`。
 
+| 模块 | 职责 |
+| --- | --- |
+| `dit-common` | `CommonResult` / `BizException` / 分页 / JWT 用户上下文 |
+| `dit-storage` | S3 兼容 SPI（Put/Get/Delete/Presign），MinIO 实现 |
+| `dit-generate` | 生成 Provider SPI（`submit/poll/cancel`），默认 Mock |
+| `dit-server` | 唯一可运行模块：API、JWT、Flyway、Knife4j、健康检查 |
 
-## Getting started
+## 环境
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- JDK 17
+- Maven 3.9+
+- PostgreSQL 16（启动 `dit-server` 时需要）
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Docker Compose
 
-## Add your files
+两仓作为兄弟目录（`aigc-dit-be` 与 `aigc-dit-fe`），Linux 上先建数据目录，再一键拉起 Postgres、Redis、MinIO、backend、frontend：
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
+```bash
+bash deploy/prepare-dirs.sh
+docker compose up --build
 ```
-cd existing_repo
-git remote add origin http://172.171.113.47/aigc-dit/aigc-dit-be.git
-git branch -M master
-git push -uf origin master
+
+Windows / 不想用 `/mnt/ai-gc` 时，复制 `.env.example` 为 `.env`，改 `DIT_DATA_ROOT`（例如 `E:/data/ai-gc` 或 `./data`）。
+
+| 服务 | 端口 |
+| --- | --- |
+| frontend（Nginx 静态 + `/api` 反代） | `8088`（`http://<IP>:8088/login`） |
+| backend（`dit-server`，一般不必直连） | `18080` |
+| Postgres | `5432` |
+| Redis | `6379` |
+| MinIO API / Console | `9000` / `9001` |
+
+本机有 NVIDIA GPU 时再启 ComfyUI（无 GPU 保持 Mock）：
+
+```bash
+COMFYUI_ENABLED=true docker compose --profile comfy up --build
 ```
 
-## Integrate with your tools
+MinIO → OSS/COS 只改 `S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY` / `S3_SECRET_KEY`。
 
-- [ ] [Set up project integrations](http://172.171.113.47/aigc-dit/aigc-dit-be/-/settings/integrations)
+## 构建
 
-## Collaborate with your team
+```bash
+mvn -pl dit-server -am package
+```
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+本地启动前准备好 Postgres（库名默认 `dit`，账号密码默认 `fnii` / `Fnii@123`），然后：
 
-## Test and Deploy
+```bash
+mvn -pl dit-server spring-boot:run
+```
 
-Use the built-in continuous integration in GitLab.
+| 入口 | 说明 |
+| --- | --- |
+| `GET /api/health` | 业务健康检查 |
+| `GET /actuator/health` | Actuator |
+| `POST /api/auth/login` | 登录，默认管理员 `admin` / `Fnii@123` |
+| `POST /api/auth/register` | 注册创作者 |
+| `GET /api/auth/me` | 当前用户（Bearer JWT） |
+| `/doc.html` | Knife4j |
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+配置走环境变量：`POSTGRES_*`、`REDIS_*`、`JWT_SECRET`、`S3_ENDPOINT` / `S3_BUCKET` / `S3_ACCESS_KEY`。未配置 `S3_ENDPOINT` 时不装配对象存储客户端。
 
-***
+## 数据目录规范（Linux）
 
-# Editing this README
+默认根目录 **`/mnt/ai-gc`**，在 `application.yml` 的 `dit.storage` 下修改：
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```yaml
+dit:
+  storage:
+    root: /mnt/ai-gc
+    postgres: ${dit.storage.root}/postgres
+    redis: ${dit.storage.root}/redis
+    minio: ${dit.storage.root}/minio
+    logs: ${dit.storage.root}/logs
+```
 
-## Suggestions for a good README
+只改 `root` 时，子目录会跟着变；某个子目录也可以写成绝对路径单独覆盖。
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+| 配置项 | 默认值 | 用途 |
+| --- | --- | --- |
+| `dit.storage.root` | `/mnt/ai-gc` | 统一数据根 |
+| `dit.storage.postgres` | `/mnt/ai-gc/postgres` | PostgreSQL 数据 |
+| `dit.storage.redis` | `/mnt/ai-gc/redis` | Redis 持久化 |
+| `dit.storage.minio` | `/mnt/ai-gc/minio` | 图片、视频等对象存储 |
+| `dit.storage.logs` | `/mnt/ai-gc/logs` | 应用日志 |
 
-## Name
-Choose a self-explaining name for your project.
+库表只存相对 `storage_key` / `poster_key`，对象文件进 MinIO 目录。
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+在服务器上先建目录，再挂载启动 Postgres：
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```bash
+bash deploy/prepare-dirs.sh
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+docker rm -f dit-postgres
+docker run -d \
+  --name dit-postgres \
+  -e POSTGRES_USER=fnii \
+  -e POSTGRES_PASSWORD='Fnii@123' \
+  -e POSTGRES_DB=dit \
+  -p 5432:5432 \
+  -v /mnt/ai-gc/postgres:/var/lib/postgresql/data \
+  --restart unless-stopped \
+  postgres:16
+```

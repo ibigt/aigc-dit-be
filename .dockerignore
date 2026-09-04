@@ -1,0 +1,13 @@
+**/target
+**/.idea
+**/*.iml
+.git
+.gitignore
+.mvn
+**/.DS_Store
+**/Thumbs.db
+**/*.log
+.env
+.env.local
+docker-compose*.yml
+README.md

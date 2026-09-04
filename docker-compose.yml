@@ -1,0 +1,189 @@
+# 致启·光驭：默认 profile 一键拉起 Postgres / Redis / MinIO / backend / frontend
+# 前置：aigc-dit-be 与 aigc-dit-fe 为兄弟目录，在本目录执行
+#   docker compose up --build
+# 可选 GPU：COMFYUI_ENABLED=true docker compose --profile comfy up --build
+
+name: aigc-dit
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dit-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fnii}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Fnii@123}
+      POSTGRES_DB: ${POSTGRES_DB:-dit}
+      TZ: Asia/Shanghai
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ${DIT_DATA_ROOT:-/mnt/ai-gc}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fnii} -d ${POSTGRES_DB:-dit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - dit
+
+  redis:
+    image: redis:7-alpine
+    container_name: dit-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - ${DIT_DATA_ROOT:-/mnt/ai-gc}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - dit
+
+  minio:
+    image: minio/minio:latest
+    container_name: dit-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-ditminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-DitMinio123}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - ${DIT_DATA_ROOT:-/mnt/ai-gc}/minio:/data
+    networks:
+      - dit
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: dit-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-ditminio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-DitMinio123}
+      S3_BUCKET: ${S3_BUCKET:-dit}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        i=0
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          i=$$((i+1))
+          if [ $$i -gt 30 ]; then
+            echo "minio not ready" >&2
+            exit 1
+          fi
+          echo "waiting for minio... $$i"
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$${S3_BUCKET}"
+        echo "bucket $${S3_BUCKET} ready"
+    restart: "no"
+    networks:
+      - dit
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aigc-dit-backend:local
+    container_name: dit-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Shanghai
+      SERVER_PORT: "8080"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-dit}
+      POSTGRES_USER: ${POSTGRES_USER:-fnii}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Fnii@123}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-dit-dev-jwt-secret-change-me-32b}
+      CRYPTO_SECRET: ${CRYPTO_SECRET:-dit-dev-jwt-secret-change-me-32b}
+      JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-86400}
+      DIT_ADMIN_USERNAME: ${DIT_ADMIN_USERNAME:-admin}
+      DIT_ADMIN_PASSWORD: ${DIT_ADMIN_PASSWORD:-Fnii@123}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_BUCKET: ${S3_BUCKET:-dit}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-ditminio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-DitMinio123}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      COMFYUI_ENABLED: ${COMFYUI_ENABLED:-false}
+      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://comfyui:8188}
+      JAVA_OPTS: "${JAVA_OPTS:--Xms256m -Xmx512m}"
+    ports:
+      - "${BACKEND_PORT:-18080}:8080"
+    volumes:
+      - ${DIT_DATA_ROOT:-/mnt/ai-gc}/logs:/mnt/ai-gc/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 120s
+    networks:
+      - dit
+
+  frontend:
+    build:
+      context: ../aigc-dit-fe
+      dockerfile: Dockerfile
+    image: aigc-dit-frontend:local
+    container_name: dit-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks:
+      - dit
+
+  # 本机有 NVIDIA GPU 时再启用：docker compose --profile comfy up
+  comfyui:
+    profiles: ["comfy"]
+    image: yanwk/comfyui-boot:latest
+    container_name: dit-comfyui
+    restart: unless-stopped
+    ports:
+      - "${COMFYUI_PORT:-8188}:8188"
+    gpus: all
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      - dit
+
+networks:
+  dit:
+    driver: bridge
