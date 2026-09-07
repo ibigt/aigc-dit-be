@@ -9,11 +9,14 @@ import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
+import cn.aigc.dit.generate.runninghub.RunningHubUrls;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.CreationSessionMapper;
@@ -33,12 +36,15 @@ import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -59,8 +65,10 @@ public class GenerateWorker {
     private final GenerateProviderRegistry providerRegistry;
     private final PosterExtractor posterExtractor;
     private final CreditService creditService;
+    private final AesGcmEncryptor encryptor;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
+    private final ConcurrentHashMap<Long, Object> taskLocks = new ConcurrentHashMap<>();
     private Thread workerThread;
 
     @PostConstruct
@@ -97,6 +105,36 @@ public class GenerateWorker {
         }
     }
 
+    @Scheduled(fixedDelay = 15000)
+    public void resumeStaleJobs() {
+        OffsetDateTime staleBefore = OffsetDateTime.now().minusSeconds(20);
+        List<GenTask> runningTasks = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.RUNNING)
+                .isNotNull(GenTask::getProviderJobId)
+                .gt(GenTask::getCreatedAt, OffsetDateTime.now().minusHours(24))
+                .lt(GenTask::getUpdatedAt, staleBefore)
+                .last("LIMIT 10"));
+        List<GenTask> timedOut = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.FAILED)
+                .isNotNull(GenTask::getProviderJobId)
+                .gt(GenTask::getCreatedAt, OffsetDateTime.now().minusHours(24))
+                .and(w -> w.eq(GenTask::getErrorMessage, "生成超时")
+                        .or().like(GenTask::getErrorMessage, "下载 RunningHub")
+                        .or().like(GenTask::getErrorMessage, "成片回收")
+                        .or().like(GenTask::getErrorMessage, "成片为空")
+                        .or().like(GenTask::getErrorMessage, "成片 URL"))
+                .last("LIMIT 10"));
+        List<GenTask> toResume = new ArrayList<>(runningTasks);
+        toResume.addAll(timedOut);
+        for (GenTask task : toResume) {
+            try {
+                resumeOne(task);
+            } catch (Exception e) {
+                log.warn("resume generate task {} failed: {}", task.getId(), e.getMessage());
+            }
+        }
+    }
+
     private void loop() {
         String stream = generateProperties.getWorker().getStream();
         String group = generateProperties.getWorker().getGroup();
@@ -106,7 +144,7 @@ public class GenerateWorker {
             try {
                 List<MapRecord<String, Object, Object>> records = stringRedisTemplate.opsForStream().read(
                         Consumer.from(group, consumerName),
-                        StreamReadOptions.empty().count(1).block(Duration.ofSeconds(3)),
+                        StreamReadOptions.empty().count(1).block(Duration.ofSeconds(5)),
                         StreamOffset.create(stream, ReadOffset.lastConsumed()));
                 if (records == null || records.isEmpty()) {
                     continue;
@@ -121,11 +159,15 @@ public class GenerateWorker {
                     }
                 }
             } catch (Exception e) {
-                if (running.get()) {
-                    log.warn("generate stream read: {}", e.getMessage());
-                    sleep(2000);
-                    ensureGroup(stream, group);
+                if (!running.get()) {
+                    break;
                 }
+                if (isIdleReadTimeout(e)) {
+                    continue;
+                }
+                log.warn("generate stream read: {}", e.getMessage());
+                sleep(2000);
+                ensureGroup(stream, group);
             }
         }
     }
@@ -151,6 +193,7 @@ public class GenerateWorker {
         AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
         String modelKey = model == null ? null : model.getModelKey();
         GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
+        bindProvider(request, model);
         GenerateProvider provider = providerRegistry.resolve(model == null ? null : model.getProvider());
         task.setStatus(TaskStatus.RUNNING);
         task.setProgress(5);
@@ -160,14 +203,64 @@ public class GenerateWorker {
             task.setProviderJobId(submitted.getJobId());
             genTaskMapper.updateById(task);
             PollResult result = pollUntilDone(provider, submitted.getJobId());
-            if (result.isSucceeded()) {
-                finishSuccess(task, request, result);
-            } else {
-                finishFailed(task, result.getErrorMessage() == null ? "生成失败" : result.getErrorMessage());
-            }
+            applyPollResult(task, request, result);
         } catch (Exception e) {
             log.error("generate task {} failed", taskId, e);
             finishFailed(task, e.getMessage() == null ? "生成失败" : e.getMessage());
+        }
+    }
+
+    private void resumeOne(GenTask task) {
+        synchronized (lockFor(task.getId())) {
+            GenTask latest = genTaskMapper.selectById(task.getId());
+            if (latest == null || !StringUtils.hasText(latest.getProviderJobId())) {
+                return;
+            }
+            if (TaskStatus.SUCCEEDED.equals(latest.getStatus()) || TaskStatus.CANCELLED.equals(latest.getStatus())) {
+                return;
+            }
+            if (hasCreations(latest.getId())) {
+                return;
+            }
+            boolean recoverableFail = TaskStatus.FAILED.equals(latest.getStatus());
+            AiModel model = latest.getModelId() == null ? null : aiModelMapper.selectById(latest.getModelId());
+            String modelKey = model == null ? null : model.getModelKey();
+            GenerateRequest request = GenerateRequests.fromTask(latest, modelKey);
+            bindProvider(request, model);
+            GenerateProvider provider = providerRegistry.resolve(model == null ? null : model.getProvider());
+            rememberProviderJob(provider, latest, request, model);
+            if (recoverableFail) {
+                latest.setStatus(TaskStatus.RUNNING);
+                latest.setErrorMessage(null);
+                latest.setFinishedAt(null);
+                latest.setProgress(Math.max(latest.getProgress() == null ? 10 : latest.getProgress(), 55));
+                genTaskMapper.updateById(latest);
+            }
+            PollResult result = provider.poll(latest.getProviderJobId());
+            if (result.isSucceeded()) {
+                log.info("recovered generate task {} from RunningHub job {}", latest.getId(), latest.getProviderJobId());
+                finishSuccess(latest, request, result);
+                return;
+            }
+            if (result.isTerminal() && !isRecoverableIngestError(result.getErrorMessage())) {
+                finishFailed(latest, result.getErrorMessage() == null ? "生成失败" : result.getErrorMessage());
+                return;
+            }
+            updateProgress(latest.getProviderJobId(), result);
+            if (latest.getCreatedAt() != null && latest.getCreatedAt().isBefore(OffsetDateTime.now().minusHours(4))) {
+                finishFailed(latest, "生成超时");
+            }
+        }
+    }
+
+    private void applyPollResult(GenTask task, GenerateRequest request, PollResult result) {
+        if (result.isSucceeded()) {
+            finishSuccess(task, request, result);
+        } else if (result.isTerminal() && !isRecoverableIngestError(result.getErrorMessage())) {
+            finishFailed(task, result.getErrorMessage() == null ? "生成失败" : result.getErrorMessage());
+        } else {
+            log.info("generate task {} still running on provider job {}, will resume later",
+                    task.getId(), result.getJobId());
         }
     }
 
@@ -184,7 +277,13 @@ public class GenerateWorker {
             }
             Thread.sleep(interval);
         }
-        return PollResult.failed(jobId, "生成超时");
+        last = provider.poll(jobId);
+        updateProgress(jobId, last);
+        if (last.isTerminal()) {
+            return last;
+        }
+        log.warn("generate job {} still running after {}s, leave task open for resume", jobId, timeoutMs / 1000);
+        return last;
     }
 
     private void updateProgress(String jobId, PollResult result) {
@@ -200,69 +299,107 @@ public class GenerateWorker {
     }
 
     private void finishSuccess(GenTask task, GenerateRequest request, PollResult result) {
-        List<String> keys = result.getOutputKeys() == null || result.getOutputKeys().isEmpty()
-                ? (result.getOutputStorageKey() == null ? List.of() : List.of(result.getOutputStorageKey()))
-                : result.getOutputKeys();
-        if (keys.isEmpty()) {
-            finishFailed(task, "Mock 未返回成片");
-            return;
-        }
-        String firstPoster = null;
-        Long sessionId = sessionId(task);
-        CreationSession session = sessionId == null ? null : creationSessionMapper.selectById(sessionId);
-        if (session == null) {
-            sessionId = null;
-        }
-        long perCopy = Math.max(0, (task.getCreditCost() == null ? 0 : task.getCreditCost()) / Math.max(1, keys.size()));
-        int index = 1;
-        for (String key : keys) {
-            String poster = posterExtractor.extract(key);
-            if (firstPoster == null) {
-                firstPoster = poster;
+        synchronized (lockFor(task.getId())) {
+            GenTask latest = genTaskMapper.selectById(task.getId());
+            if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || hasCreations(latest.getId())) {
+                return;
             }
-            Creation creation = new Creation();
-            creation.setSessionId(sessionId);
-            creation.setUserId(task.getUserId());
-            creation.setTaskId(task.getId());
-            creation.setModelId(task.getModelId());
-            creation.setTitle(titleOf(request.getPrompt()));
-            creation.setCategory(task.getCategory());
-            creation.setStorageKey(key);
-            creation.setPosterKey(poster);
-            creation.setPrompt(task.getPrompt());
-            creation.setRatio(request.getRatio());
-            creation.setResolution(request.getResolution());
-            creation.setDurationSec(request.getDurationSec());
-            creation.setCreditCost(perCopy);
-            creation.setCopyIndex(index++);
-            creationMapper.insert(creation);
+            List<String> keys = result.getOutputKeys() == null || result.getOutputKeys().isEmpty()
+                    ? (result.getOutputStorageKey() == null ? List.of() : List.of(result.getOutputStorageKey()))
+                    : result.getOutputKeys();
+            if (keys.isEmpty()) {
+                finishFailed(latest, "未返回成片");
+                return;
+            }
+            String firstPoster = null;
+            Long sessionId = sessionId(latest);
+            CreationSession session = sessionId == null ? null : creationSessionMapper.selectById(sessionId);
+            if (session == null) {
+                sessionId = null;
+            }
+            long perCopy = Math.max(0, (latest.getCreditCost() == null ? 0 : latest.getCreditCost()) / Math.max(1, keys.size()));
+            int index = 1;
+            for (String key : keys) {
+                String poster = posterExtractor.extract(key);
+                if (firstPoster == null) {
+                    firstPoster = poster;
+                }
+                Creation creation = new Creation();
+                creation.setSessionId(sessionId);
+                creation.setUserId(latest.getUserId());
+                creation.setTaskId(latest.getId());
+                creation.setModelId(latest.getModelId());
+                creation.setTitle(titleOf(request.getPrompt()));
+                creation.setCategory(latest.getCategory());
+                creation.setStorageKey(key);
+                creation.setPosterKey(poster);
+                creation.setPrompt(latest.getPrompt());
+                creation.setRatio(request.getRatio());
+                creation.setResolution(request.getResolution());
+                creation.setDurationSec(request.getDurationSec());
+                creation.setCreditCost(perCopy);
+                creation.setCopyIndex(index++);
+                creationMapper.insert(creation);
+            }
+            if (session != null) {
+                creationSessionMapper.updateById(session);
+            }
+            latest.setOutputStorageKey(keys.get(0));
+            latest.setOutputKeys(keys);
+            latest.setPosterKey(firstPoster);
+            latest.setStatus(TaskStatus.SUCCEEDED);
+            latest.setProgress(100);
+            latest.setFinishedAt(OffsetDateTime.now());
+            latest.setErrorMessage(null);
+            genTaskMapper.updateById(latest);
         }
-        if (session != null) {
-            creationSessionMapper.updateById(session);
-        }
-        task.setOutputStorageKey(keys.get(0));
-        task.setOutputKeys(keys);
-        task.setPosterKey(firstPoster);
-        task.setStatus(TaskStatus.SUCCEEDED);
-        task.setProgress(100);
-        task.setFinishedAt(OffsetDateTime.now());
-        task.setErrorMessage(null);
-        genTaskMapper.updateById(task);
     }
 
     private void finishFailed(GenTask task, String message) {
-        task.setStatus(TaskStatus.FAILED);
-        task.setErrorMessage(message);
-        task.setFinishedAt(OffsetDateTime.now());
-        genTaskMapper.updateById(task);
-        if (task.getCreditCost() != null && task.getCreditCost() > 0) {
-            try {
-                creditService.change(task.getUserId(), task.getCreditCost(), CreditReason.REFUND,
-                        String.valueOf(task.getId()), "生成失败退还积分");
-            } catch (Exception e) {
-                log.error("refund credits failed for task {}", task.getId(), e);
+        synchronized (lockFor(task.getId())) {
+            GenTask latest = genTaskMapper.selectById(task.getId());
+            if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || TaskStatus.FAILED.equals(latest.getStatus())) {
+                return;
+            }
+            latest.setStatus(TaskStatus.FAILED);
+            latest.setErrorMessage(message);
+            latest.setFinishedAt(OffsetDateTime.now());
+            genTaskMapper.updateById(latest);
+            if (latest.getCreditCost() != null && latest.getCreditCost() > 0) {
+                try {
+                    creditService.change(latest.getUserId(), latest.getCreditCost(), CreditReason.REFUND,
+                            String.valueOf(latest.getId()), "生成失败退还积分");
+                } catch (Exception e) {
+                    log.error("refund credits failed for task {}", latest.getId(), e);
+                }
             }
         }
+    }
+
+    private void rememberProviderJob(GenerateProvider provider, GenTask task, GenerateRequest request, AiModel model) {
+        if (!(provider instanceof RunningHubGenerateProvider runningHub) || !StringUtils.hasText(task.getProviderJobId())) {
+            return;
+        }
+        String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), generateProperties.getRunninghub().getBaseUrl());
+        runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model));
+    }
+
+    private boolean hasCreations(Long taskId) {
+        return creationMapper.selectCount(new LambdaQueryWrapper<Creation>().eq(Creation::getTaskId, taskId)) > 0;
+    }
+
+    private Object lockFor(Long taskId) {
+        return taskLocks.computeIfAbsent(taskId, id -> new Object());
+    }
+
+    static boolean isRecoverableIngestError(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return message.contains("下载 RunningHub")
+                || message.contains("成片回收")
+                || message.contains("成片为空")
+                || message.contains("成片 URL");
     }
 
     private void ensureGroup(String stream, String group) {
@@ -274,6 +411,25 @@ public class GenerateWorker {
                 log.debug("create group {}: {}", group, msg);
             }
         }
+    }
+
+    private void bindProvider(GenerateRequest request, AiModel model) {
+        if (model == null) {
+            return;
+        }
+        request.setEndpoint(model.getEndpoint());
+        request.setAdapterConfig(model.getAdapterConfig());
+        request.setApiKey(resolveApiKey(model));
+    }
+
+    private String resolveApiKey(AiModel model) {
+        if (StringUtils.hasText(model.getApiKeyEnc())) {
+            String decrypted = encryptor.decrypt(model.getApiKeyEnc());
+            if (StringUtils.hasText(decrypted)) {
+                return decrypted.trim();
+            }
+        }
+        return generateProperties.getRunninghub().getApiKey();
     }
 
     private static Long sessionId(GenTask task) {
@@ -297,6 +453,19 @@ public class GenerateWorker {
         }
         String text = prompt.trim();
         return text.length() > 24 ? text.substring(0, 24) : text;
+    }
+
+    private static boolean isIdleReadTimeout(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String name = current.getClass().getSimpleName();
+            String message = current.getMessage() == null ? "" : current.getMessage();
+            if (name.contains("Timeout") || message.contains("timed out") || message.contains("Timeout")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static void sleep(long ms) {

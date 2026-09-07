@@ -1,7 +1,6 @@
 package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.common.constant.ModelCategory;
-import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
@@ -235,8 +234,6 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         List<Long> taskIds = creations.stream().map(Creation::getTaskId).filter(Objects::nonNull).distinct().toList();
         List<GenTask> extraTasks = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
                 .eq(GenTask::getUserId, session.getUserId())
-                .and(w -> w.eq(GenTask::getStatus, TaskStatus.PENDING)
-                        .or().eq(GenTask::getStatus, TaskStatus.RUNNING))
                 .apply("params->>'sessionId' = {0}", String.valueOf(session.getId()))
                 .orderByAsc(GenTask::getCreatedAt));
         Map<Long, List<Creation>> byTask = creations.stream()

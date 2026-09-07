@@ -34,7 +34,11 @@ public class AdminModelSaveReq {
     @Schema(description = "image / video / tool")
     private String category;
 
+    @Schema(description = "能力：t2i/i2i/t2v/r2v/v2v；r2v=参考生视频（图或视频），v2v=首尾帧。旧值 i2v/frames 写入时会规范为 r2v/v2v")
     private List<String> capabilities;
+
+    @Schema(description = "协议附加配置（如 t2iPath / t2vPath / r2vPath），厂商字段翻译在 Adapter")
+    private Map<String, Object> adapterConfig;
 
     @Schema(description = "计价 JSON（unit / sale / cost，以及可选的 concurrentLimit、instanceType、proxy）")
     private Map<String, Object> pricing;

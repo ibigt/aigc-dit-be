@@ -17,6 +17,7 @@ public class AdminModelResp {
     private String endpoint;
     private String category;
     private List<String> capabilities;
+    private Map<String, Object> adapterConfig;
     private Map<String, Object> pricing;
     private Boolean enabled;
     private String description;

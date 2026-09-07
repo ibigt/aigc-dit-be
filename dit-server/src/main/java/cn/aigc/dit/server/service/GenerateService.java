@@ -8,6 +8,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
+import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.server.credit.CreditCalculator;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
@@ -52,9 +53,9 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         }
         GenerateRequest request = GenerateRequests.fromSubmit(userId, model.getModelKey(), req, assetService);
         if (!GenerateRequests.supportsMode(model.getCapabilities(), request.getCategory(), request.getMode())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "该模型不支持当前生成模式");
+            throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
-        if (GenerateMode.FRAMES.equals(request.getMode()) && request.getFrames() != null) {
+        if (GenerateMode.V2V.equalsIgnoreCase(GenerateMode.canonical(request.getMode())) && request.getFrames() != null) {
             if (request.getFrames().getFirstFrameKey() == null || request.getFrames().getLastFrameKey() == null) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "首尾帧模式需要同时提供首帧与尾帧");
             }
@@ -62,6 +63,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (ModelCategory.VIDEO.equals(request.getCategory()) && request.getDurationSec() == null) {
             request.setDurationSec(5);
         }
+        applyRunningHubGuardrails(model, request);
         long cost = CreditCalculator.calculate(
                 model.getPricing(),
                 request.getCategory(),
@@ -103,6 +105,19 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             throw new BizException(ErrorCode.NOT_FOUND, "任务不存在");
         }
         return task;
+    }
+
+    private static void applyRunningHubGuardrails(AiModel model, GenerateRequest request) {
+        if (model.getProvider() == null
+                || !RunningHubGenerateProvider.KEY.equalsIgnoreCase(model.getProvider())) {
+            return;
+        }
+        request.setCopies(1);
+        if (GenerateMode.T2I.equalsIgnoreCase(request.getMode())
+                || GenerateMode.I2I.equalsIgnoreCase(request.getMode())) {
+            request.setResolution("1K");
+            request.setQuality("Low");
+        }
     }
 
     private AiModel requireEnabledModel(Long modelId) {

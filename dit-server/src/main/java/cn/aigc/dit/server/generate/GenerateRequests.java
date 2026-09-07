@@ -101,7 +101,7 @@ public final class GenerateRequests {
             frames = new FramePair(stringVal(map.get("firstFrameKey"), null), stringVal(map.get("lastFrameKey"), null));
         }
         String category = task.getCategory();
-        String mode = stringVal(params.get("mode"), GenerateMode.derive(category, references, frames));
+        String mode = GenerateMode.canonical(stringVal(params.get("mode"), GenerateMode.derive(category, references, frames)));
         return new GenerateRequest()
                 .setUserId(task.getUserId())
                 .setTaskId(task.getId())
@@ -122,12 +122,44 @@ public final class GenerateRequests {
         if (capabilities == null || capabilities.isEmpty()) {
             return true;
         }
+        boolean hasSpecificMode = false;
+        boolean modeAllowed = false;
+        boolean categoryAllowed = false;
         for (String item : capabilities) {
-            if (mode.equalsIgnoreCase(item) || category.equalsIgnoreCase(item)) {
-                return true;
+            if (!StringUtils.hasText(item)) {
+                continue;
+            }
+            String cap = GenerateMode.canonical(item.trim());
+            String wanted = GenerateMode.canonical(mode);
+            if (GenerateMode.isSpecificMode(cap)) {
+                hasSpecificMode = true;
+                if (wanted != null && wanted.equalsIgnoreCase(cap)) {
+                    modeAllowed = true;
+                }
+            }
+            if ((wanted != null && wanted.equalsIgnoreCase(cap))
+                    || (category != null && category.equalsIgnoreCase(item.trim()))) {
+                categoryAllowed = true;
             }
         }
-        return false;
+        if (hasSpecificMode) {
+            return modeAllowed;
+        }
+        return categoryAllowed;
+    }
+
+    public static String unsupportedModeMessage(String mode) {
+        String canonical = GenerateMode.canonical(mode);
+        if (GenerateMode.I2I.equalsIgnoreCase(canonical)) {
+            return "当前模型不支持参考图，请移除参考素材后再创作";
+        }
+        if (GenerateMode.R2V.equalsIgnoreCase(canonical)) {
+            return "当前模型不支持参考生视频，请移除参考素材后再创作";
+        }
+        if (GenerateMode.V2V.equalsIgnoreCase(canonical)) {
+            return "当前模型不支持首尾帧，请移除首尾帧后再创作";
+        }
+        return "该模型不支持当前生成模式";
     }
 
     private static List<ReferenceAsset> resolveReferences(GenerateSubmitReq req, AssetService assetService) {

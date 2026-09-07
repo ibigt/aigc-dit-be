@@ -16,7 +16,7 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      timeout: 3s
+      timeout: 15s
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -89,11 +89,22 @@ dit:
       enabled: true
       stream: dit:gen-tasks
       group: dit-workers
-      poll-interval-ms: 400
-      timeout-seconds: 120
+      poll-interval-ms: 2000
+      timeout-seconds: ${GENERATE_TIMEOUT_SECONDS:1800}
     comfyui:
       enabled: ${COMFYUI_ENABLED:false}
       base-url: ${COMFYUI_BASE_URL:http://127.0.0.1:8188}
+    runninghub:
+      base-url: ${RUNNINGHUB_BASE_URL:https://www.runninghub.ai}
+      api-key: ${RUNNINGHUB_API_KEY:}
+      t2i-path: ${RUNNINGHUB_T2I_PATH:rhart-image-g-2/text-to-image}
+      t2v-path: ${RUNNINGHUB_T2V_PATH:rhart-video/sparkvideo-2.0/text-to-video}
+      r2v-path: ${RUNNINGHUB_R2V_PATH:rhart-video/sparkvideo-2.0/multimodal-video}
+      max-calls: ${RUNNINGHUB_MAX_CALLS:0}
+      force-resolution: 1k
+      force-quality: low
+      download-timeout-seconds: ${RUNNINGHUB_DOWNLOAD_TIMEOUT_SECONDS:600}
+      download-retries: ${RUNNINGHUB_DOWNLOAD_RETRIES:3}
   s3:
     endpoint: ${S3_ENDPOINT:}
     bucket: ${S3_BUCKET:dit}

@@ -37,6 +37,9 @@ public class AiModel {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private List<String> capabilities;
 
+    @TableField(typeHandler = JsonbTypeHandler.class)
+    private Map<String, Object> adapterConfig;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

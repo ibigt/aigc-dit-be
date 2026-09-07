@@ -47,7 +47,7 @@ public class MockModelBootstrap implements ApplicationRunner {
                 ModelCategory.VIDEO,
                 "秒",
                 "12 积分",
-                List.of("video", "t2v", "i2v", "frames"),
+                List.of("video", "t2v", "r2v", "v2v"),
                 "视频",
                 "无 GPU 时的占位视频模型"));
         log.info("Bootstrapped mock image/video models");

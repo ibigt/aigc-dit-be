@@ -45,4 +45,9 @@ class AesGcmEncryptorTest {
         String cipher = encryptor.encrypt("secret");
         assertThrows(BizException.class, () -> encryptor.decrypt(cipher + "xx"));
     }
+
+    @Test
+    void plaintextApiKeyPassthroughForOpsInsert() {
+        assertEquals("rh-plain-key", encryptor.decrypt("rh-plain-key"));
+    }
 }

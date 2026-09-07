@@ -12,7 +12,7 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端按参考/首尾帧推导。")
+@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端按参考/首尾帧推导为 t2i/i2i/t2v/r2v/v2v。")
 public class GenerateSubmitReq {
 
     @NotNull(message = "模型不能为空")
@@ -48,7 +48,7 @@ public class GenerateSubmitReq {
 
     @Data
     public static class ReferenceInput {
-        @Schema(description = "image / video")
+        @Schema(description = "image / video；r2v 参考生视频可同时使用图片与视频")
         private String type;
         private String storageKey;
         private Long assetId;

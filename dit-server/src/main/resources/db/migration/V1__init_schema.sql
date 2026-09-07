@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS ai_model (
     api_key_enc     TEXT,
     category        VARCHAR(32)  NOT NULL,
     capabilities    JSONB,
+    adapter_config  JSONB,
     pricing         JSONB,
     enabled         BOOLEAN      NOT NULL DEFAULT TRUE,
     description     VARCHAR(512),
@@ -65,7 +66,8 @@ COMMENT ON COLUMN ai_model.provider IS '提供方（mock、comfyui 或厂商名�
 COMMENT ON COLUMN ai_model.endpoint IS '调用地址（HTTP endpoint）';
 COMMENT ON COLUMN ai_model.api_key_enc IS '加密后的厂商密钥，不明文落库';
 COMMENT ON COLUMN ai_model.category IS '模型分类（image 图像、video 视频、tool 工具）';
-COMMENT ON COLUMN ai_model.capabilities IS '模型能力（JSON 数组，如 ["image","video"]；创作端按当前类型过滤）';
+COMMENT ON COLUMN ai_model.capabilities IS '模型能力（JSON 数组，如 ["image","t2i"]；创作端按当前类型与模式过滤）';
+COMMENT ON COLUMN ai_model.adapter_config IS '协议附加配置 JSON（如 t2iPath、t2vPath）；出站字段映射写在对应 Adapter';
 COMMENT ON COLUMN ai_model.pricing IS '计价 JSON（单位、销售积分、成本等）';
 COMMENT ON COLUMN ai_model.enabled IS '是否启用（false 时创作端不可见）';
 COMMENT ON COLUMN ai_model.description IS '模型描述';

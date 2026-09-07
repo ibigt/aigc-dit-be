@@ -1,7 +1,9 @@
 package cn.aigc.dit.generate;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 提交给 Provider 的 Canonical 生成请求。
@@ -21,6 +23,11 @@ public class GenerateRequest {
     private Integer copies = 1;
     private List<ReferenceAsset> references = new ArrayList<>();
     private FramePair frames;
+    /** 模型记录上的 Base URL，由 Worker 填入，不进创作端合同。 */
+    private String endpoint;
+    /** 解密后的 API Key 或环境变量回退，由 Worker 填入，禁止入参/日志落明文。 */
+    private String apiKey;
+    private Map<String, Object> adapterConfig = new LinkedHashMap<>();
 
     public int resolvedCopies() {
         int value = copies == null ? 1 : copies;
@@ -141,6 +148,33 @@ public class GenerateRequest {
 
     public GenerateRequest setFrames(FramePair frames) {
         this.frames = frames;
+        return this;
+    }
+
+    public String getEndpoint() {
+        return endpoint;
+    }
+
+    public GenerateRequest setEndpoint(String endpoint) {
+        this.endpoint = endpoint;
+        return this;
+    }
+
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public GenerateRequest setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+        return this;
+    }
+
+    public Map<String, Object> getAdapterConfig() {
+        return adapterConfig;
+    }
+
+    public GenerateRequest setAdapterConfig(Map<String, Object> adapterConfig) {
+        this.adapterConfig = adapterConfig == null ? new LinkedHashMap<>() : adapterConfig;
         return this;
     }
 }

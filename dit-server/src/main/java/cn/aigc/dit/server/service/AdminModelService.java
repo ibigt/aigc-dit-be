@@ -3,6 +3,7 @@ package cn.aigc.dit.server.service;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -16,7 +17,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +91,11 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setEndpoint(trimToNull(req.getEndpoint()));
         model.setCategory(category);
         model.setCapabilities(normalizeCapabilities(req.getCapabilities(), category));
+        if (req.getAdapterConfig() != null) {
+            model.setAdapterConfig(req.getAdapterConfig().isEmpty() ? null : req.getAdapterConfig());
+        } else if (creating) {
+            model.setAdapterConfig(null);
+        }
         model.setPricing(mergePricing(req));
         model.setEnabled(req.getEnabled() == null || req.getEnabled());
         model.setDescription(trimToNull(req.getDescription()));
@@ -128,7 +133,8 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setProvider(model.getProvider());
         resp.setEndpoint(model.getEndpoint());
         resp.setCategory(model.getCategory());
-        resp.setCapabilities(model.getCapabilities());
+        resp.setCapabilities(GenerateMode.canonicalizeCapabilities(model.getCapabilities()));
+        resp.setAdapterConfig(model.getAdapterConfig());
         Map<String, Object> pricing = model.getPricing() == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(model.getPricing());
@@ -155,7 +161,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setModelKey(model.getModelKey());
         resp.setProvider(model.getProvider());
         resp.setCategory(model.getCategory());
-        resp.setCapabilities(model.getCapabilities());
+        resp.setCapabilities(GenerateMode.canonicalizeCapabilities(model.getCapabilities()));
         Map<String, Object> pricing = model.getPricing() == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(model.getPricing());
@@ -190,13 +196,8 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         if (capabilities == null || capabilities.isEmpty()) {
             return List.of(category);
         }
-        List<String> values = new ArrayList<>();
-        for (String item : capabilities) {
-            if (StringUtils.hasText(item) && !values.contains(item.trim())) {
-                values.add(item.trim());
-            }
-        }
-        return values.isEmpty() ? List.of(category) : values;
+        List<String> values = GenerateMode.canonicalizeCapabilities(capabilities);
+        return values == null || values.isEmpty() ? List.of(category) : values;
     }
 
     static String normalizeModelKey(String modelKey) {

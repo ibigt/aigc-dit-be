@@ -33,7 +33,7 @@ public class GenerateProviderRegistry {
     }
 
     /**
-     * M2：未接真 Adapter 的 provider 一律走 Mock，避免管理端填 ComfyUI 名称后无法出片。
+     * 已注册的 Adapter 按 provider 精确匹配；未知名称仍回退 Mock（ComfyUI 骨架未启用时）。
      */
     public GenerateProvider resolve(String providerKey) {
         if (providerKey == null || providerKey.isBlank()) {

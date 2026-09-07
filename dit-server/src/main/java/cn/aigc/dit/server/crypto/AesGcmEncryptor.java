@@ -19,6 +19,7 @@ import java.util.Base64;
 
 /**
  * AES-256-GCM 加解密，用于模型 api_key 落库。密文格式：{@code v1:<base64(iv+ciphertext+tag)>}。
+ * 不以 {@code v1:} 开头的值按明文回传，便于服务器手工把 Key 写入 {@code api_key_enc}。
  */
 @Component
 public class AesGcmEncryptor {
@@ -57,11 +58,13 @@ public class AesGcmEncryptor {
         if (!StringUtils.hasText(ciphertext)) {
             return null;
         }
-        if (!ciphertext.startsWith(PREFIX)) {
-            throw new BizException(ErrorCode.INTERNAL, "密钥密文格式无效");
+        String value = ciphertext.trim();
+        if (!value.startsWith(PREFIX)) {
+            // 允许运维直接把明文 Key 写入 api_key_enc；管理端保存后会改成 v1: 密文
+            return value;
         }
         try {
-            byte[] packed = Base64.getDecoder().decode(ciphertext.substring(PREFIX.length()));
+            byte[] packed = Base64.getDecoder().decode(value.substring(PREFIX.length()));
             if (packed.length <= IV_LENGTH) {
                 throw new BizException(ErrorCode.INTERNAL, "密钥密文格式无效");
             }

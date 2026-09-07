@@ -55,11 +55,15 @@ class AdminModelServiceTest {
         req.setCategory(ModelCategory.IMAGE);
         req.setApiKey("sk-test");
         req.setPricing(Map.of("unit", "张"));
+        req.setCapabilities(List.of("image", "t2i"));
+        req.setAdapterConfig(Map.of("t2iPath", "rhart-image-g-2/text-to-image"));
 
         var resp = service.create(req);
         assertEquals(3L, resp.getId());
         assertTrue(resp.isHasApiKey());
         assertEquals("图像", resp.getBadge());
+        assertEquals(List.of("image", "t2i"), resp.getCapabilities());
+        assertEquals("rhart-image-g-2/text-to-image", resp.getAdapterConfig().get("t2iPath"));
 
     }
 
@@ -99,10 +103,17 @@ class AdminModelServiceTest {
         model.setEnabled(true);
         model.setApiKeyEnc("v1:secret");
         model.setEndpoint("http://127.0.0.1:8188");
-        model.setCapabilities(List.of("video"));
+        model.setCapabilities(List.of("video", "t2v", "i2v", "frames"));
 
         var pub = service.toPublicResp(model);
         assertEquals("Mock", pub.getName());
         assertEquals(Boolean.TRUE, pub.getEnabled());
+        assertEquals(List.of("video", "t2v", "r2v", "v2v"), pub.getCapabilities());
+    }
+
+    @Test
+    void normalizeCapabilitiesRewritesLegacyVideoModes() {
+        assertEquals(List.of("video", "t2v", "r2v", "v2v"),
+                AdminModelService.normalizeCapabilities(List.of("video", "t2v", "i2v", "frames"), "video"));
     }
 }
