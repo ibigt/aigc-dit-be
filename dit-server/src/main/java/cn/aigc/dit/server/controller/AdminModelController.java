@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "管理端-模型")
 @RestController
@@ -31,6 +32,12 @@ import java.util.List;
 public class AdminModelController {
 
     private final AdminModelService adminModelService;
+
+    @Operation(summary = "已接入的适配协议")
+    @GetMapping("/adapters")
+    public CommonResult<List<Map<String, Object>>> adapters() {
+        return CommonResult.success(adminModelService.listAdapters());
+    }
 
     @Operation(summary = "模型列表")
     @GetMapping

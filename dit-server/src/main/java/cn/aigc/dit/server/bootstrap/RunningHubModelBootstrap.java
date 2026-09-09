@@ -51,6 +51,7 @@ public class RunningHubModelBootstrap implements ApplicationRunner {
         AiModel model = new AiModel();
         model.setName("GPT Image 2");
         model.setModelKey(T2I_MODEL_KEY);
+        model.setAdapterKey("gpt-image-2");
         model.setProvider("RunningHub");
         model.setEndpoint("https://www.runninghub.ai");
         model.setCategory(ModelCategory.IMAGE);
@@ -68,6 +69,7 @@ public class RunningHubModelBootstrap implements ApplicationRunner {
         AiModel model = new AiModel();
         model.setName("Seedance 2.0");
         model.setModelKey(T2V_MODEL_KEY);
+        model.setAdapterKey("seedance-2");
         model.setProvider("RunningHub");
         model.setEndpoint("https://www.runninghub.ai");
         model.setCategory(ModelCategory.VIDEO);

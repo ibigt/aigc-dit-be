@@ -3,6 +3,7 @@ package cn.aigc.dit.generate.runninghub;
 import cn.aigc.dit.common.constant.AssetKind;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.GenerateProvider;
@@ -28,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * RunningHub Adapter：Canonical {@link GenerateRequest} → OpenAPI v2。
- * 当前实现文生图（t2i）、文生视频（t2v）与参考生视频（r2v）；首尾帧（v2v）未接。
+ * RunningHub 运输层：submit/query/download。文生图走 gpt-image-2，视频走 seedance-2。
+ * 当前实现文生图（t2i）、文生视频（t2v）与参考生视频（r2v）；首尾帧（i2v）未接。
  */
 @Slf4j
 @Component
@@ -143,13 +144,26 @@ public class RunningHubGenerateProvider implements GenerateProvider {
         if (request.getPrompt() == null || request.getPrompt().isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
         }
+        String adapterKey = AdapterCatalog.resolveKey(
+                request.getAdapterKey(), RunningHubGenerateProvider.KEY, request.getCategory(), request.getModelKey());
+        if (adapterKey != null
+                && !AdapterCatalog.GPT_IMAGE_2.equals(adapterKey)
+                && !AdapterCatalog.SEEDANCE_2.equals(adapterKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前 RunningHub 通道不支持该适配协议");
+        }
+        if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    AdapterCatalog.GPT_IMAGE_2.equals(adapterKey)
+                            ? "GPT Image 2 仅支持文生图（t2i）"
+                            : "Seedance 2.x 仅支持文生视频（t2v）与参考生视频（r2v）");
+        }
         String mode = GenerateMode.canonical(safe(request.getMode()));
         if (GenerateMode.T2I.equalsIgnoreCase(mode)) {
             if (request.getReferences() != null && !request.getReferences().isEmpty()) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 验证通道不支持参考图（i2i）");
             }
             if (request.getFrames() != null && request.getFrames().hasAny()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 验证通道不支持首尾帧（v2v）");
+                throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 验证通道不支持首尾帧（i2v）");
             }
             return;
         }
@@ -158,7 +172,7 @@ public class RunningHubGenerateProvider implements GenerateProvider {
                 throw new BizException(ErrorCode.BAD_REQUEST, "当前通道为文生视频（t2v），请改用支持 r2v 的模型或移除参考素材");
             }
             if (request.getFrames() != null && request.getFrames().hasAny()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "本期 RunningHub Adapter 不支持首尾帧（v2v）");
+                throw new BizException(ErrorCode.BAD_REQUEST, "本期 RunningHub Adapter 不支持首尾帧（i2v）");
             }
             return;
         }

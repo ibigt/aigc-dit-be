@@ -12,6 +12,7 @@ public class ModelPublicResp {
     private Long id;
     private String name;
     private String modelKey;
+    private String adapterKey;
     private String provider;
     private String category;
     private List<String> capabilities;

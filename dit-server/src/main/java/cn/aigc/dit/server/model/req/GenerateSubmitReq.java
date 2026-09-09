@@ -12,7 +12,7 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端按参考/首尾帧推导为 t2i/i2i/t2v/r2v/v2v。")
+@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端按参考/首尾帧推导为 t2i/i2i/t2v/r2v/i2v。")
 public class GenerateSubmitReq {
 
     @NotNull(message = "模型不能为空")

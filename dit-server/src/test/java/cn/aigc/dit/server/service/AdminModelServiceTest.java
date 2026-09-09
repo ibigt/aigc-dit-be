@@ -51,6 +51,7 @@ class AdminModelServiceTest {
         AdminModelSaveReq req = new AdminModelSaveReq();
         req.setName("Seedream 5.0");
         req.setModelKey("seedream-5");
+        req.setAdapterKey("gpt-image-2");
         req.setProvider("RunningHub");
         req.setCategory(ModelCategory.IMAGE);
         req.setApiKey("sk-test");
@@ -64,6 +65,8 @@ class AdminModelServiceTest {
         assertEquals("图像", resp.getBadge());
         assertEquals(List.of("image", "t2i"), resp.getCapabilities());
         assertEquals("rhart-image-g-2/text-to-image", resp.getAdapterConfig().get("t2iPath"));
+        assertEquals("gpt-image-2", resp.getAdapterKey());
+        assertEquals("RunningHub", resp.getProvider());
 
     }
 
@@ -81,6 +84,7 @@ class AdminModelServiceTest {
         AdminModelSaveReq req = new AdminModelSaveReq();
         req.setName("Seedream 5.0");
         req.setModelKey("seedream-5");
+        req.setAdapterKey("gpt-image-2");
         req.setProvider("RunningHub");
         req.setCategory(ModelCategory.IMAGE);
         req.setApiKey("  ");
@@ -103,17 +107,17 @@ class AdminModelServiceTest {
         model.setEnabled(true);
         model.setApiKeyEnc("v1:secret");
         model.setEndpoint("http://127.0.0.1:8188");
-        model.setCapabilities(List.of("video", "t2v", "i2v", "frames"));
+        model.setCapabilities(List.of("video", "t2v", "r2v", "v2v"));
 
         var pub = service.toPublicResp(model);
         assertEquals("Mock", pub.getName());
         assertEquals(Boolean.TRUE, pub.getEnabled());
-        assertEquals(List.of("video", "t2v", "r2v", "v2v"), pub.getCapabilities());
+        assertEquals(List.of("video", "t2v", "r2v", "i2v"), pub.getCapabilities());
     }
 
     @Test
     void normalizeCapabilitiesRewritesLegacyVideoModes() {
-        assertEquals(List.of("video", "t2v", "r2v", "v2v"),
-                AdminModelService.normalizeCapabilities(List.of("video", "t2v", "i2v", "frames"), "video"));
+        assertEquals(List.of("video", "t2v", "r2v", "i2v"),
+                AdminModelService.normalizeCapabilities(List.of("video", "t2v", "r2v", "v2v", "frames"), "video"));
     }
 }

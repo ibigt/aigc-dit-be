@@ -2,6 +2,7 @@ package cn.aigc.dit.server.worker;
 
 import cn.aigc.dit.common.constant.CreditReason;
 import cn.aigc.dit.common.constant.TaskStatus;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.GenerateProvider;
 import cn.aigc.dit.generate.GenerateProviderRegistry;
@@ -9,6 +10,7 @@ import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
 import cn.aigc.dit.server.entity.AiModel;
@@ -194,7 +196,11 @@ public class GenerateWorker {
         String modelKey = model == null ? null : model.getModelKey();
         GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
         bindProvider(request, model);
-        GenerateProvider provider = providerRegistry.resolve(model == null ? null : model.getProvider());
+        GenerateProvider provider = providerRegistry.resolveByAdapter(
+                model == null ? null : model.getAdapterKey(),
+                model == null ? null : model.getProvider(),
+                model == null ? null : model.getCategory(),
+                modelKey);
         task.setStatus(TaskStatus.RUNNING);
         task.setProgress(5);
         genTaskMapper.updateById(task);
@@ -227,7 +233,11 @@ public class GenerateWorker {
             String modelKey = model == null ? null : model.getModelKey();
             GenerateRequest request = GenerateRequests.fromTask(latest, modelKey);
             bindProvider(request, model);
-            GenerateProvider provider = providerRegistry.resolve(model == null ? null : model.getProvider());
+            GenerateProvider provider = providerRegistry.resolveByAdapter(
+                    model == null ? null : model.getAdapterKey(),
+                    model == null ? null : model.getProvider(),
+                    model == null ? null : model.getCategory(),
+                    modelKey);
             rememberProviderJob(provider, latest, request, model);
             if (recoverableFail) {
                 latest.setStatus(TaskStatus.RUNNING);
@@ -377,11 +387,17 @@ public class GenerateWorker {
     }
 
     private void rememberProviderJob(GenerateProvider provider, GenTask task, GenerateRequest request, AiModel model) {
-        if (!(provider instanceof RunningHubGenerateProvider runningHub) || !StringUtils.hasText(task.getProviderJobId())) {
+        if (!StringUtils.hasText(task.getProviderJobId())) {
             return;
         }
-        String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), generateProperties.getRunninghub().getBaseUrl());
-        runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model));
+        if (provider instanceof RunningHubGenerateProvider runningHub) {
+            String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), generateProperties.getRunninghub().getBaseUrl());
+            runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model));
+            return;
+        }
+        if (provider instanceof ComfyUiGenerateProvider comfyUi) {
+            comfyUi.remember(task.getProviderJobId(), request, model == null ? request.getEndpoint() : model.getEndpoint());
+        }
     }
 
     private boolean hasCreations(Long taskId) {
@@ -397,6 +413,8 @@ public class GenerateWorker {
             return false;
         }
         return message.contains("下载 RunningHub")
+                || message.contains("下载 ComfyUI")
+                || message.contains("ComfyUI 成片")
                 || message.contains("成片回收")
                 || message.contains("成片为空")
                 || message.contains("成片 URL");
@@ -417,6 +435,9 @@ public class GenerateWorker {
         if (model == null) {
             return;
         }
+        String adapterKey = AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        request.setAdapterKey(adapterKey);
         request.setEndpoint(model.getEndpoint());
         request.setAdapterConfig(model.getAdapterConfig());
         request.setApiKey(resolveApiKey(model));

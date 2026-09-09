@@ -73,8 +73,10 @@ class GenerateRequestsTest {
         assertTrue(GenerateRequests.supportsMode(List.of("image"), "image", GenerateMode.I2I));
         assertTrue(GenerateRequests.supportsMode(List.of("video", "t2v"), "video", GenerateMode.T2V));
         assertFalse(GenerateRequests.supportsMode(List.of("video", "t2v"), "video", GenerateMode.R2V));
-        assertTrue(GenerateRequests.supportsMode(List.of("video", "t2v", "i2v"), "video", GenerateMode.R2V));
-        assertTrue(GenerateRequests.supportsMode(List.of("video", "frames"), "video", GenerateMode.V2V));
+        assertTrue(GenerateRequests.supportsMode(List.of("video", "t2v", "r2v"), "video", GenerateMode.R2V));
+        assertTrue(GenerateRequests.supportsMode(List.of("video", "t2v", "i2v"), "video", GenerateMode.I2V));
+        assertTrue(GenerateRequests.supportsMode(List.of("video", "frames"), "video", GenerateMode.I2V));
+        assertTrue(GenerateRequests.supportsMode(List.of("video", "v2v"), "video", GenerateMode.I2V));
         assertEquals("当前模型不支持参考图，请移除参考素材后再创作",
                 GenerateRequests.unsupportedModeMessage(GenerateMode.I2I));
         assertEquals("当前模型不支持参考生视频，请移除参考素材后再创作",

@@ -12,10 +12,17 @@ public class GenerateProperties {
     private Worker worker = new Worker();
     private Runninghub runninghub = new Runninghub();
 
+    /**
+     * ComfyUI Adapter 始终注册；实际地址以模型 {@code endpoint} 为准。
+     * {@code enabled} 仅给 compose sidecar 使用，不影响管理端接入。
+     */
     @Data
     public static class Comfyui {
         private boolean enabled = false;
         private String baseUrl = "http://127.0.0.1:8188";
+        private int connectTimeoutSeconds = 15;
+        private int requestTimeoutSeconds = 60;
+        private int downloadTimeoutSeconds = 600;
     }
 
     @Data

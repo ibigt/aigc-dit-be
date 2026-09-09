@@ -156,7 +156,7 @@ public final class GenerateRequests {
         if (GenerateMode.R2V.equalsIgnoreCase(canonical)) {
             return "当前模型不支持参考生视频，请移除参考素材后再创作";
         }
-        if (GenerateMode.V2V.equalsIgnoreCase(canonical)) {
+        if (GenerateMode.I2V.equalsIgnoreCase(canonical)) {
             return "当前模型不支持首尾帧，请移除首尾帧后再创作";
         }
         return "该模型不支持当前生成模式";

@@ -13,6 +13,8 @@ public class GenerateRequest {
     private Long userId;
     private Long taskId;
     private String modelKey;
+    /** 适配协议（翻译包），如 gpt-image-2 / seedance-2 / minimax-h3。 */
+    private String adapterKey;
     private String category;
     private String mode;
     private String prompt;
@@ -58,6 +60,15 @@ public class GenerateRequest {
 
     public GenerateRequest setModelKey(String modelKey) {
         this.modelKey = modelKey;
+        return this;
+    }
+
+    public String getAdapterKey() {
+        return adapterKey;
+    }
+
+    public GenerateRequest setAdapterKey(String adapterKey) {
+        this.adapterKey = adapterKey;
         return this;
     }
 

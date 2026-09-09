@@ -8,18 +8,18 @@ import java.util.List;
 /**
  * 内部生成模式。由参考素材 / 首尾帧推导，前端不传厂商接口名。
  * <p>
- * 视频：{@code t2v} 文生视频，{@code r2v} 参考生视频（图片或视频参考），{@code v2v} 首尾帧。
+ * 视频：{@code t2v} 文生视频，{@code r2v} 参考生视频（图片或视频参考），{@code i2v} 首尾帧。
  */
 public final class GenerateMode {
     public static final String T2I = "t2i";
     public static final String T2V = "t2v";
     public static final String I2I = "i2i";
     public static final String R2V = "r2v";
-    public static final String V2V = "v2v";
-
-    /** @deprecated 旧称，读入时规范为 {@link #R2V} */
     public static final String I2V = "i2v";
-    /** @deprecated 旧称，读入时规范为 {@link #V2V} */
+
+    /** @deprecated 旧称，读入时规范为 {@link #I2V} */
+    public static final String V2V = "v2v";
+    /** @deprecated 旧称，读入时规范为 {@link #I2V} */
     public static final String FRAMES = "frames";
 
     private GenerateMode() {
@@ -27,7 +27,7 @@ public final class GenerateMode {
 
     public static String derive(String category, List<ReferenceAsset> references, FramePair frames) {
         if (frames != null && frames.hasAny()) {
-            return V2V;
+            return I2V;
         }
         boolean hasRefs = references != null && !references.isEmpty();
         if (ModelCategory.IMAGE.equalsIgnoreCase(category)) {
@@ -41,11 +41,8 @@ public final class GenerateMode {
             return mode;
         }
         String value = mode.trim();
-        if (I2V.equalsIgnoreCase(value)) {
-            return R2V;
-        }
-        if (FRAMES.equalsIgnoreCase(value) || "frame".equalsIgnoreCase(value)) {
-            return V2V;
+        if (FRAMES.equalsIgnoreCase(value) || "frame".equalsIgnoreCase(value) || V2V.equalsIgnoreCase(value)) {
+            return I2V;
         }
         return value;
     }
@@ -59,7 +56,7 @@ public final class GenerateMode {
                 || I2I.equalsIgnoreCase(value)
                 || T2V.equalsIgnoreCase(value)
                 || R2V.equalsIgnoreCase(value)
-                || V2V.equalsIgnoreCase(value);
+                || I2V.equalsIgnoreCase(value);
     }
 
     public static List<String> canonicalizeCapabilities(List<String> capabilities) {
@@ -88,6 +85,6 @@ public final class GenerateMode {
 
     public static boolean isVideo(String mode) {
         String value = canonical(mode);
-        return T2V.equalsIgnoreCase(value) || R2V.equalsIgnoreCase(value) || V2V.equalsIgnoreCase(value);
+        return T2V.equalsIgnoreCase(value) || R2V.equalsIgnoreCase(value) || I2V.equalsIgnoreCase(value);
     }
 }

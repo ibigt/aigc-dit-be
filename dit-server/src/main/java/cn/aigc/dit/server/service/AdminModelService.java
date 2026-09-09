@@ -3,6 +3,7 @@ package cn.aigc.dit.server.service;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
@@ -85,12 +86,21 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
 
     private void apply(AiModel model, AdminModelSaveReq req, String modelKey, boolean creating) {
         String category = normalizeCategory(req.getCategory());
+        AdapterCatalog.Spec spec = resolveSpec(req, model, category, modelKey, creating);
+        if (spec.category() != null && !spec.category().equalsIgnoreCase(category)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "适配协议与模型类型不匹配");
+        }
         model.setName(req.getName().trim());
         model.setModelKey(modelKey);
-        model.setProvider(req.getProvider().trim());
-        model.setEndpoint(trimToNull(req.getEndpoint()));
+        model.setAdapterKey(spec.key());
+        model.setProvider(spec.providerLabel());
+        if (StringUtils.hasText(req.getEndpoint())) {
+            model.setEndpoint(trimToNull(req.getEndpoint()));
+        } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
+            model.setEndpoint(spec.defaultEndpoint());
+        }
         model.setCategory(category);
-        model.setCapabilities(normalizeCapabilities(req.getCapabilities(), category));
+        model.setCapabilities(AdapterCatalog.constrainCapabilities(req.getCapabilities(), category, spec));
         if (req.getAdapterConfig() != null) {
             model.setAdapterConfig(req.getAdapterConfig().isEmpty() ? null : req.getAdapterConfig());
         } else if (creating) {
@@ -130,6 +140,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setId(model.getId());
         resp.setName(model.getName());
         resp.setModelKey(model.getModelKey());
+        resp.setAdapterKey(model.getAdapterKey());
         resp.setProvider(model.getProvider());
         resp.setEndpoint(model.getEndpoint());
         resp.setCategory(model.getCategory());
@@ -159,6 +170,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setId(model.getId());
         resp.setName(model.getName());
         resp.setModelKey(model.getModelKey());
+        resp.setAdapterKey(model.getAdapterKey());
         resp.setProvider(model.getProvider());
         resp.setCategory(model.getCategory());
         resp.setCapabilities(GenerateMode.canonicalizeCapabilities(model.getCapabilities()));
@@ -190,6 +202,23 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
             pricing.put("proxy", req.getProxy().trim());
         }
         return pricing;
+    }
+
+    public List<Map<String, Object>> listAdapters() {
+        return AdapterCatalog.adminVisible().stream().map(AdapterCatalog::toAdminView).toList();
+    }
+
+    private AdapterCatalog.Spec resolveSpec(AdminModelSaveReq req, AiModel model, String category, String modelKey,
+                                            boolean creating) {
+        String requested = req.getAdapterKey();
+        if (!StringUtils.hasText(requested) && !creating) {
+            requested = model.getAdapterKey();
+        }
+        String resolved = AdapterCatalog.resolveKey(requested, req.getProvider(), category, modelKey);
+        if (resolved == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择已接入的适配协议");
+        }
+        return AdapterCatalog.require(resolved);
     }
 
     static List<String> normalizeCapabilities(List<String> capabilities, String category) {

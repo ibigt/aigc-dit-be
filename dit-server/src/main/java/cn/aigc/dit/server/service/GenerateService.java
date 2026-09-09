@@ -6,6 +6,7 @@ import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
@@ -55,7 +56,12 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (!GenerateRequests.supportsMode(model.getCapabilities(), request.getCategory(), request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
-        if (GenerateMode.V2V.equalsIgnoreCase(GenerateMode.canonical(request.getMode())) && request.getFrames() != null) {
+        String adapterKey = AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
+        }
+        if (GenerateMode.I2V.equalsIgnoreCase(GenerateMode.canonical(request.getMode())) && request.getFrames() != null) {
             if (request.getFrames().getFirstFrameKey() == null || request.getFrames().getLastFrameKey() == null) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "首尾帧模式需要同时提供首帧与尾帧");
             }
@@ -108,8 +114,10 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
     }
 
     private static void applyRunningHubGuardrails(AiModel model, GenerateRequest request) {
-        if (model.getProvider() == null
-                || !RunningHubGenerateProvider.KEY.equalsIgnoreCase(model.getProvider())) {
+        String adapterKey = AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (!AdapterCatalog.isRunningHub(adapterKey)
+                && (model.getProvider() == null || !RunningHubGenerateProvider.KEY.equalsIgnoreCase(model.getProvider()))) {
             return;
         }
         request.setCopies(1);

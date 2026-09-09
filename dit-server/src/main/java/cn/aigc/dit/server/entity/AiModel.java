@@ -21,6 +21,7 @@ public class AiModel {
 
     private String name;
     private String modelKey;
+    private String adapterKey;
     private String provider;
     private String endpoint;
     private String apiKeyEnc;

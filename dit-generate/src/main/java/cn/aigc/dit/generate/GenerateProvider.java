@@ -1,7 +1,8 @@
 package cn.aigc.dit.generate;
 
 /**
- * 生成 Provider SPI。一期用 Mock，后续只换实现即可接 ComfyUI / 付费 API。
+ * 生成 Provider SPI。运输层：Mock、RunningHub、ComfyUI。
+ * 出站字段由 {@link AdapterCatalog}（gpt-image-2 / seedance-2 / minimax-h3）选择翻译包。
  */
 public interface GenerateProvider {
 

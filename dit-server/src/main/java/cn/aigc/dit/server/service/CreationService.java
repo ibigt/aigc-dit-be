@@ -300,6 +300,28 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         }
         OffsetDateTime end = task.getFinishedAt() == null ? OffsetDateTime.now() : task.getFinishedAt();
         long seconds = Math.max(0, Duration.between(task.getCreatedAt(), end).getSeconds());
-        return seconds + " 秒";
+        return formatElapsed(seconds);
+    }
+
+    static String formatElapsed(long totalSeconds) {
+        if (totalSeconds < 60) {
+            return totalSeconds + "秒";
+        }
+        long hours = totalSeconds / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+        if (hours > 0) {
+            if (minutes == 0 && seconds == 0) {
+                return hours + "小时";
+            }
+            if (seconds == 0) {
+                return hours + "小时" + minutes + "分";
+            }
+            return hours + "小时" + minutes + "分" + seconds + "秒";
+        }
+        if (seconds == 0) {
+            return minutes + "分";
+        }
+        return minutes + "分" + seconds + "秒";
     }
 }

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS ai_model (
     id              BIGSERIAL PRIMARY KEY,
     name            VARCHAR(128) NOT NULL,
     model_key       VARCHAR(128) NOT NULL,
+    adapter_key     VARCHAR(64),
     provider        VARCHAR(64)  NOT NULL,
     endpoint        VARCHAR(512),
     api_key_enc     TEXT,
@@ -61,13 +62,14 @@ CREATE TABLE IF NOT EXISTS ai_model (
 COMMENT ON TABLE ai_model IS '生成模型目录表（第三方 / 本地；创作端只读 enabled=true 的记录）';
 COMMENT ON COLUMN ai_model.id IS '主键ID';
 COMMENT ON COLUMN ai_model.name IS '模型展示名称';
-COMMENT ON COLUMN ai_model.model_key IS '模型业务键（唯一，如 seedream-5）';
-COMMENT ON COLUMN ai_model.provider IS '提供方（mock、comfyui 或厂商名）';
+COMMENT ON COLUMN ai_model.model_key IS '模型业务键（唯一，如 seedance-2.0）；不负责选翻译包';
+COMMENT ON COLUMN ai_model.adapter_key IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / minimax-h3；mock 为占位';
+COMMENT ON COLUMN ai_model.provider IS '接入来源展示名（由 adapter_key 派生：RunningHub / ComfyUI / mock）';
 COMMENT ON COLUMN ai_model.endpoint IS '调用地址（HTTP endpoint）';
 COMMENT ON COLUMN ai_model.api_key_enc IS '加密后的厂商密钥，不明文落库';
 COMMENT ON COLUMN ai_model.category IS '模型分类（image 图像、video 视频、tool 工具）';
-COMMENT ON COLUMN ai_model.capabilities IS '模型能力（JSON 数组，如 ["image","t2i"]；创作端按当前类型与模式过滤）';
-COMMENT ON COLUMN ai_model.adapter_config IS '协议附加配置 JSON（如 t2iPath、t2vPath）；出站字段映射写在对应 Adapter';
+COMMENT ON COLUMN ai_model.capabilities IS '模型能力（JSON 数组，如 ["video","t2v","r2v","i2v"]；r2v=参考生视频，i2v=首尾帧；创作端按当前类型与模式过滤）';
+COMMENT ON COLUMN ai_model.adapter_config IS '协议附加配置 JSON（如 t2iPath、t2vPath、r2vPath、i2vPath）；出站字段映射写在对应 Adapter';
 COMMENT ON COLUMN ai_model.pricing IS '计价 JSON（单位、销售积分、成本等）';
 COMMENT ON COLUMN ai_model.enabled IS '是否启用（false 时创作端不可见）';
 COMMENT ON COLUMN ai_model.description IS '模型描述';
@@ -264,3 +266,76 @@ VALUES (
     100000
 )
 ON CONFLICT (username) DO NOTHING;
+
+-- 首尾帧能力从 v2v 规范为 i2v（幂等；空库无匹配行）
+UPDATE ai_model
+SET capabilities = (
+        SELECT COALESCE(jsonb_agg(to_jsonb(mapped) ORDER BY ord), '[]'::jsonb)
+        FROM (
+            SELECT MIN(ord) AS ord,
+                   CASE WHEN val IN ('v2v', 'frames', 'frame') THEN 'i2v' ELSE val END AS mapped
+            FROM jsonb_array_elements_text(capabilities) WITH ORDINALITY AS t(val, ord)
+            GROUP BY CASE WHEN val IN ('v2v', 'frames', 'frame') THEN 'i2v' ELSE val END
+        ) s
+    ),
+    updated_at = NOW()
+WHERE capabilities IS NOT NULL
+  AND jsonb_typeof(capabilities) = 'array'
+  AND EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements_text(capabilities) AS x(val)
+        WHERE val IN ('v2v', 'frames', 'frame')
+    );
+
+UPDATE ai_model
+SET adapter_config = (adapter_config - 'v2vPath')
+        || jsonb_build_object('i2vPath', adapter_config -> 'v2vPath'),
+    updated_at = NOW()
+WHERE adapter_config ? 'v2vPath'
+  AND NOT (adapter_config ? 'i2vPath');
+
+UPDATE ai_model
+SET adapter_config = adapter_config - 'v2vPath',
+    updated_at = NOW()
+WHERE adapter_config ? 'v2vPath';
+
+UPDATE gen_task
+SET params = jsonb_set(params, '{mode}', '"i2v"'::jsonb),
+    updated_at = NOW()
+WHERE params->>'mode' IN ('v2v', 'frames', 'frame');
+
+-- 适配协议 adapter_key（已有库 CREATE IF NOT EXISTS 不会加列，这里幂等补齐）
+ALTER TABLE ai_model ADD COLUMN IF NOT EXISTS adapter_key VARCHAR(64);
+COMMENT ON COLUMN ai_model.adapter_key IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / minimax-h3；mock 为占位';
+
+UPDATE ai_model
+SET adapter_key = 'minimax-h3', updated_at = NOW()
+WHERE (adapter_key IS NULL OR adapter_key = '')
+  AND category = 'video'
+  AND (provider ILIKE '%comfy%' OR model_key ILIKE '%minimax%');
+
+UPDATE ai_model
+SET adapter_key = 'seedance-2', updated_at = NOW()
+WHERE (adapter_key IS NULL OR adapter_key = '')
+  AND category = 'video'
+  AND (provider ILIKE '%running%' OR model_key ILIKE '%seedance%');
+
+UPDATE ai_model
+SET adapter_key = 'gpt-image-2', updated_at = NOW()
+WHERE (adapter_key IS NULL OR adapter_key = '')
+  AND category = 'image'
+  AND (provider ILIKE '%running%' OR model_key ILIKE '%gpt-image%');
+
+UPDATE ai_model
+SET adapter_key = 'mock', updated_at = NOW()
+WHERE (adapter_key IS NULL OR adapter_key = '')
+  AND (provider ILIKE 'mock' OR model_key ILIKE 'mock%');
+
+UPDATE ai_model SET provider = 'ComfyUI', updated_at = NOW()
+WHERE adapter_key = 'minimax-h3' AND provider IS DISTINCT FROM 'ComfyUI';
+
+UPDATE ai_model SET provider = 'RunningHub', updated_at = NOW()
+WHERE adapter_key IN ('gpt-image-2', 'seedance-2') AND provider IS DISTINCT FROM 'RunningHub';
+
+UPDATE ai_model SET provider = 'mock', updated_at = NOW()
+WHERE adapter_key = 'mock' AND provider IS DISTINCT FROM 'mock';
