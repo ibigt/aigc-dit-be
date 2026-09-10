@@ -5,6 +5,7 @@ import cn.aigc.dit.server.drama.text.DramaTextServiceImpl;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.drama.text.ShotDraftList;
+import cn.aigc.dit.server.drama.text.TextChatGateway;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,7 +29,15 @@ class DetectiveClubRegressionTest {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    private final DramaTextServiceImpl service = new DramaTextServiceImpl();
+    private final DramaTextServiceImpl service = new DramaTextServiceImpl(unboundGateway());
+
+    /** 本回归钉规则路径：让每个系列都表现为「未绑定文本模型」。 */
+    private static TextChatGateway unboundGateway() {
+        TextChatGateway gateway = org.mockito.Mockito.mock(TextChatGateway.class);
+        org.mockito.Mockito.when(gateway.resolve(org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(java.util.Optional.empty());
+        return gateway;
+    }
 
     private static String fixture(String name) {
         try (InputStream in = DetectiveClubRegressionTest.class.getResourceAsStream("/fixtures/detective-club/" + name)) {
