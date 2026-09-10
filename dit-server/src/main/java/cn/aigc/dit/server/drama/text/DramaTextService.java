@@ -39,4 +39,13 @@ public interface DramaTextService {
     default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames) {
         return cn.aigc.dit.server.drama.DramaShotDrafts.fromScript(script, assetNames);
     }
+
+    /**
+     * 阶段 6 跨集：新一集梗概 → 分场剧本，且必须沿用已锁定资产名。
+     * {@code lockedAssetNames} 来自上一集 {@code drama_asset} 已锁定条目；
+     * 主力接线 {@code drama_episode.inherited_from_episode_id} 时调本方法即可，两条引擎路径共用同一道守卫。
+     */
+    default ScriptDoc parseNextEpisode(long seriesId, String raw, java.util.List<String> lockedAssetNames) {
+        return EpisodeNameGuard.applyTo(parseScript(seriesId, raw), lockedAssetNames);
+    }
 }
