@@ -1,6 +1,8 @@
 package cn.aigc.dit.server.drama.text;
 
 import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.server.drama.DramaAssetDrafts;
+import cn.aigc.dit.server.drama.DramaContract;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,8 +12,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 剧本理解层实现。按系列绑定的文本模型判定引擎；未绑定走规则分场，调用方无感。
@@ -55,18 +62,45 @@ public class DramaTextServiceImpl implements DramaTextService {
         ScriptDoc doc = null;
         try {
             doc = llmParse(seriesId, raw);
-        } catch (BizException e) {
-            if (TextChatGateway.BINDING_UNUSABLE.equals(e.getMessage())) {
-                throw e;
-            }
-            log.warn("[drama-text] 文本模型调用失败，回落规则分场 seriesId={}: {}", seriesId, e.getMessage());
         } catch (RuntimeException e) {
-            log.warn("[drama-text] 文本模型异常，回落规则分场 seriesId={}", seriesId, e);
+            swallowUnlessUnbound(seriesId, "分场", e);
         }
-        if (doc == null) {
-            return record(seriesId, ENGINE_RULES, ScriptParser.parse(raw));
+        return doc == null
+                ? record(seriesId, ENGINE_RULES, ScriptParser.parse(raw))
+                : record(seriesId, ENGINE_LLM, doc);
+    }
+
+    @Override
+    public AssetDraftList extractAssets(long seriesId, ScriptDoc script) {
+        if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
+            return DramaTextService.super.extractAssets(seriesId, script);
         }
-        return record(seriesId, ENGINE_LLM, doc);
+        AssetDraftList drafts = null;
+        try {
+            drafts = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
+                    DramaTextPrompts.assetUser(toJson(script)),
+                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList");
+        } catch (RuntimeException e) {
+            swallowUnlessUnbound(seriesId, "资产抽取", e);
+        }
+        return drafts == null ? DramaTextService.super.extractAssets(seriesId, script) : drafts;
+    }
+
+    @Override
+    public ShotDraftList draftShots(long seriesId, ScriptDoc script, List<String> assetNames) {
+        if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
+            return DramaTextService.super.draftShots(seriesId, script, assetNames);
+        }
+        ShotDraftList drafts = null;
+        try {
+            drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
+                    DramaTextPrompts.shotUser(toJson(script), String.join("、", safe(assetNames))),
+                    content -> normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
+                    "ShotDraftList");
+        } catch (RuntimeException e) {
+            swallowUnlessUnbound(seriesId, "分镜草稿", e);
+        }
+        return drafts == null ? DramaTextService.super.draftShots(seriesId, script, assetNames) : drafts;
     }
 
     /**
@@ -79,19 +113,40 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     private ScriptDoc llmParse(long seriesId, String raw) {
-        TextChatRequest req = new TextChatRequest(
-                DramaTextPrompts.scriptSystem(), DramaTextPrompts.scriptUser(raw), true);
+        return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), DramaTextPrompts.scriptUser(raw),
+                DramaTextServiceImpl::readScript, "ScriptDoc");
+    }
+
+    /** 供三条 LLM 路径共用：换绑提示原样上抛，其余吞掉并由调用方回落规则。 */
+    private void swallowUnlessUnbound(long seriesId, String what, RuntimeException e) {
+        if (e instanceof BizException biz && TextChatGateway.BINDING_UNUSABLE.equals(biz.getMessage())) {
+            throw biz;
+        }
+        log.warn("[drama-text] {} 走文本模型失败，回落规则 seriesId={}: {}", what, seriesId, e.toString());
+    }
+
+    private <T> T attemptJson(long seriesId, String system, String user,
+                              java.util.function.Function<String, T> reader, String what) {
+        TextChatRequest req = new TextChatRequest(system, user, true);
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
-            ScriptDoc doc = readScript(gateway.chat(seriesId, req).getContent());
-            if (doc != null) {
+            T value = reader.apply(gateway.chat(seriesId, req).getContent());
+            if (value != null) {
                 if (attempt > 1) {
-                    log.info("[drama-text] 第 {} 次输出符合合同 seriesId={}", attempt, seriesId);
+                    log.info("[drama-text] {} 第 {} 次输出符合合同 seriesId={}", what, attempt, seriesId);
                 }
-                return doc;
+                return value;
             }
-            log.warn("[drama-text] 输出不符合 ScriptDoc 合同 seriesId={} attempt={}", seriesId, attempt);
+            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={}", what, seriesId, attempt);
         }
         return null;
+    }
+
+    private String toJson(Object value) {
+        try {
+            return MAPPER.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            return "{}";
+        }
     }
 
     static ScriptDoc readScript(String content) {
@@ -162,6 +217,115 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     private static <T> List<T> safe(List<T> values) {
         return values == null ? List.of() : values;
+    }
+
+    private static <T> T readList(String content, Class<T> type) {
+        String json = extractJsonObject(content);
+        if (json == null) {
+            return null;
+        }
+        try {
+            return MAPPER.readValue(json, type);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    static AssetDraftList normalizeAssets(AssetDraftList list) {
+        if (list == null || list.getAssets() == null) {
+            return null;
+        }
+        Map<String, AssetDraftList.AssetDraft> unique = new LinkedHashMap<>();
+        for (AssetDraftList.AssetDraft draft : list.getAssets()) {
+            if (draft == null || !StringUtils.hasText(draft.getName()) || !StringUtils.hasText(draft.getType())) {
+                continue;
+            }
+            String name = draft.getName().strip();
+            String tag = StringUtils.hasText(draft.getStateTag())
+                    ? draft.getStateTag().strip()
+                    : DramaAssetDrafts.inferStateTag(name);
+            draft.setName(name);
+            draft.setType(draft.getType().strip());
+            draft.setStateTag(tag);
+            // 入梦/换装态必须独立且 must_split，模型标错就按同一套词表纠正。
+            draft.setMustSplit(!DramaContract.STATE_TAG_BASE.equals(tag));
+            if (!StringUtils.hasText(draft.getIdentityInvariants())) {
+                draft.setNeedsHuman(true);
+            }
+            unique.putIfAbsent(draft.getType() + "\0" + name + "\0" + tag, draft);
+        }
+        if (unique.isEmpty()) {
+            return null;
+        }
+        list.setAssets(new ArrayList<>(unique.values()));
+        return list;
+    }
+
+    static ShotDraftList normalizeShots(ShotDraftList list, ScriptDoc script, List<String> assetNames) {
+        if (list == null || list.getShots() == null || list.getShots().isEmpty()) {
+            return null;
+        }
+        Set<String> allowed = new LinkedHashSet<>(assetNames);
+        Map<Integer, Integer> perChapter = new HashMap<>();
+        List<ShotDraftList.ShotDraft> kept = new ArrayList<>();
+        for (ShotDraftList.ShotDraft shot : list.getShots()) {
+            if (shot == null || !StringUtils.hasText(shot.getTitle())) {
+                continue;
+            }
+            int chapter = shot.getChapterIndex() == null ? 1 : shot.getChapterIndex();
+            shot.setChapterIndex(chapter);
+            shot.setIndex(perChapter.merge(chapter, 1, Integer::sum));
+            shot.setTitle(shot.getTitle().strip());
+            Integer duration = shot.getDurationSec();
+            shot.setDurationSec(duration != null && DramaContract.DURATIONS.contains(duration)
+                    ? duration
+                    : DramaContract.DEFAULT_DURATION_SEC);
+            shot.setCharacterNames(retain(shot.getCharacterNames(), allowed));
+            shot.setPropNames(retain(shot.getPropNames(), allowed));
+            if (!allowed.contains(shot.getLocationName())) {
+                shot.setLocationName(null);
+            }
+            shot.setCastCount(shot.getCharacterNames().size());
+            kept.add(shot);
+        }
+        if (kept.isEmpty()) {
+            return null;
+        }
+        list.setShots(kept);
+        if (list.getChapters() == null || list.getChapters().isEmpty()) {
+            list.setChapters(chaptersFrom(script));
+        }
+        return list;
+    }
+
+    private static List<String> retain(List<String> names, Set<String> allowed) {
+        List<String> kept = new ArrayList<>();
+        for (String name : safe(names)) {
+            if (StringUtils.hasText(name)) {
+                String clean = name.strip();
+                if (allowed.contains(clean) && !kept.contains(clean)) {
+                    kept.add(clean);
+                }
+            }
+        }
+        return kept;
+    }
+
+    private static List<ShotDraftList.ChapterDraft> chaptersFrom(ScriptDoc script) {
+        List<ShotDraftList.ChapterDraft> chapters = new ArrayList<>();
+        if (script == null) {
+            return chapters;
+        }
+        for (ScriptDoc.Scene scene : safe(script.getScenes())) {
+            ShotDraftList.ChapterDraft chapter = new ShotDraftList.ChapterDraft();
+            chapter.setIndex(scene.getIndex());
+            chapter.setSceneIndex(scene.getIndex());
+            chapter.setName(StringUtils.hasText(scene.getHeading())
+                    ? scene.getHeading().strip()
+                    : "第" + scene.getIndex() + "场");
+            chapters.add(chapter);
+        }
+        return chapters;
     }
 
     private ScriptDoc record(long seriesId, String engine, ScriptDoc doc) {

@@ -235,7 +235,7 @@ public final class DramaAssetDrafts {
         return type + "\0" + name + "\0" + (StringUtils.hasText(stateTag) ? stateTag : DramaContract.STATE_TAG_BASE);
     }
 
-    static String inferStateTag(String name) {
+    public static String inferStateTag(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         if (name.contains("入梦") || name.contains("梦境") || name.contains("梦魇")
                 || lower.contains("dream")) {
