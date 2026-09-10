@@ -206,6 +206,57 @@ class DramaAssetServiceTest {
         assertFalse(list.get(0).getReferenceEligible());
     }
 
+    @Test
+    void regeneratingUnlockedAssetReplacesLibraryImage() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setImageAssetId(41L);
+        asset.setImageStorageKey("users/7/assets/old.png");
+        asset.setGenTaskId(100L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(100L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/new.png");
+        task.setOutputKeys(List.of("users/7/gen/new.png"));
+        when(generateService.getMine(100L)).thenReturn(task);
+        cn.aigc.dit.server.model.resp.AssetResp imported = new cn.aigc.dit.server.model.resp.AssetResp();
+        imported.setId(42L);
+        imported.setStorageKey("users/7/gen/new.png");
+        when(libraryAssetService.importFromStorage(any(), any(), any(), any(), any())).thenReturn(imported);
+
+        service.getGenerateTask(9L, 100L);
+
+        verify(libraryAssetService).deleteMine(41L);
+        assertEquals(42L, asset.getImageAssetId());
+        assertEquals("users/7/gen/new.png", asset.getImageStorageKey());
+    }
+
+    @Test
+    void regeneratingLockedAssetKeepsPreviousLibraryImage() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_LOCKED);
+        asset.setImageAssetId(41L);
+        asset.setImageStorageKey("users/7/assets/old.png");
+        asset.setGenTaskId(100L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(100L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/new.png");
+        task.setOutputKeys(List.of("users/7/gen/new.png"));
+        when(generateService.getMine(100L)).thenReturn(task);
+        cn.aigc.dit.server.model.resp.AssetResp imported = new cn.aigc.dit.server.model.resp.AssetResp();
+        imported.setId(42L);
+        imported.setStorageKey("users/7/gen/new.png");
+        when(libraryAssetService.importFromStorage(any(), any(), any(), any(), any())).thenReturn(imported);
+
+        service.getGenerateTask(9L, 100L);
+
+        verify(libraryAssetService, never()).deleteMine(any());
+        assertEquals(42L, asset.getImageAssetId());
+    }
+
     private static DramaEpisode ownedEpisode() {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);

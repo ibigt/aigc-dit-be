@@ -331,7 +331,8 @@ public class GenerateWorker {
                 return;
             }
             String firstPoster = null;
-            Long sessionId = sessionId(latest);
+            boolean recordCreation = GenerateRequests.bindsQuickCreate(latest.getParams());
+            Long sessionId = recordCreation ? sessionId(latest) : null;
             CreationSession session = sessionId == null ? null : creationSessionMapper.selectById(sessionId);
             if (session == null) {
                 sessionId = null;
@@ -342,6 +343,9 @@ public class GenerateWorker {
                 String poster = posterExtractor.extract(key);
                 if (firstPoster == null) {
                     firstPoster = poster;
+                }
+                if (!recordCreation) {
+                    continue;
                 }
                 Creation creation = new Creation();
                 creation.setSessionId(sessionId);
@@ -360,7 +364,7 @@ public class GenerateWorker {
                 creation.setCopyIndex(index++);
                 creationMapper.insert(creation);
             }
-            if (session != null) {
+            if (recordCreation && session != null) {
                 creationSessionMapper.updateById(session);
             }
             latest.setOutputStorageKey(keys.get(0));

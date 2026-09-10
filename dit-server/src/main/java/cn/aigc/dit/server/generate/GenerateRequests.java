@@ -51,6 +51,38 @@ public final class GenerateRequests {
                 .setFrames(frames);
     }
 
+    /** 漫剧任务不挂快速创作会话，也不写入「我的创作」。 */
+    public static boolean isDramaSource(Map<String, Object> params) {
+        return SOURCE_DRAMA.equals(sourceOf(params));
+    }
+
+    public static boolean bindsQuickCreate(Map<String, Object> params) {
+        return !isDramaSource(params);
+    }
+
+    public static String sourceOf(Map<String, Object> params) {
+        if (params == null || params.get("source") == null) {
+            return SOURCE;
+        }
+        String text = String.valueOf(params.get("source")).trim();
+        return text.isEmpty() || "null".equals(text) ? SOURCE : text;
+    }
+
+    public static Long sessionIdFromParams(Map<String, Object> params) {
+        if (params == null || params.get("sessionId") == null) {
+            return null;
+        }
+        Object value = params.get("sessionId");
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     public static Map<String, Object> toParams(GenerateRequest request, Long sessionId) {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("source", SOURCE);

@@ -84,6 +84,16 @@ class GenerateRequestsTest {
     }
 
     @Test
+    void dramaSourceDoesNotBindQuickCreate() {
+        assertTrue(GenerateRequests.bindsQuickCreate(null));
+        assertTrue(GenerateRequests.bindsQuickCreate(java.util.Map.of("source", GenerateRequests.SOURCE)));
+        assertFalse(GenerateRequests.bindsQuickCreate(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
+        assertTrue(GenerateRequests.isDramaSource(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
+        assertEquals(31L, GenerateRequests.sessionIdFromParams(java.util.Map.of("sessionId", 31)));
+        assertEquals(null, GenerateRequests.sessionIdFromParams(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
+    }
+
+    @Test
     void buildsCanonicalR2vRequestFromVideoReference() {
         Asset asset = new Asset();
         asset.setId(11L);

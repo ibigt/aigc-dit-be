@@ -8,6 +8,7 @@ import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
+import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.CreationSessionMapper;
@@ -27,10 +28,12 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,7 +50,11 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         List<CreationSession> sessions = sessionMapper.selectList(new LambdaQueryWrapper<CreationSession>()
                 .eq(CreationSession::getUserId, userId)
                 .orderByDesc(CreationSession::getUpdatedAt));
-        return sessions.stream().map(session -> toSessionResp(session, false)).toList();
+        Set<Long> dramaSessions = dramaBoundSessionIds(userId);
+        return sessions.stream()
+                .filter(session -> !dramaSessions.contains(session.getId()))
+                .map(session -> toSessionResp(session, false))
+                .toList();
     }
 
     public CreationSessionResp getSession(Long id) {
@@ -119,6 +126,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 .and(StringUtils.hasText(query), w -> w.like(Creation::getTitle, query).or().like(Creation::getPrompt, query))
                 .orderByDesc(Creation::getCreatedAt);
         List<Creation> items = list(wrapper);
+        items = excludeDramaCreations(items);
         Map<Long, String> modelNames = loadModelNames(items.stream().map(Creation::getModelId).toList());
         return items.stream().map(item -> toItem(item, modelNames.get(item.getModelId()))).toList();
     }
@@ -260,6 +268,39 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         });
         resp.setTasks(taskResps);
         return resp;
+    }
+
+    private List<Creation> excludeDramaCreations(List<Creation> items) {
+        Set<Long> taskIds = items.stream().map(Creation::getTaskId).filter(Objects::nonNull).collect(Collectors.toSet());
+        if (taskIds.isEmpty()) {
+            return items;
+        }
+        Set<Long> dramaTaskIds = new HashSet<>();
+        for (GenTask task : genTaskMapper.selectBatchIds(taskIds)) {
+            if (GenerateRequests.isDramaSource(task.getParams())) {
+                dramaTaskIds.add(task.getId());
+            }
+        }
+        if (dramaTaskIds.isEmpty()) {
+            return items;
+        }
+        return items.stream()
+                .filter(item -> item.getTaskId() == null || !dramaTaskIds.contains(item.getTaskId()))
+                .toList();
+    }
+
+    private Set<Long> dramaBoundSessionIds(Long userId) {
+        List<GenTask> tasks = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getUserId, userId)
+                .apply("params->>'source' = {0}", GenerateRequests.SOURCE_DRAMA));
+        Set<Long> ids = new HashSet<>();
+        for (GenTask task : tasks) {
+            Long sessionId = GenerateRequests.sessionIdFromParams(task.getParams());
+            if (sessionId != null) {
+                ids.add(sessionId);
+            }
+        }
+        return ids;
     }
 
     private Map<Long, String> loadModelNames(List<Long> ids) {

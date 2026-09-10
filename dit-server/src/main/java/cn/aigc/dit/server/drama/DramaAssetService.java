@@ -162,12 +162,14 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "资产参考图仅支持图片");
         }
         AssetResp uploaded = assetService.upload(file);
+        Long previousLibraryId = replaceableLibraryId(asset);
         attachImage(asset, uploaded.getId(), uploaded.getStorageKey());
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
+        deleteReplacedLibrary(previousLibraryId, uploaded.getId());
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
@@ -423,6 +425,7 @@ public class DramaAssetService {
             return;
         }
         String poster = StringUtils.hasText(task.getPosterKey()) ? task.getPosterKey() : key;
+        Long previousLibraryId = replaceableLibraryId(asset);
         AssetResp imported = assetService.importFromStorage(
                 UserContext.requireUserId(),
                 asset.getName(),
@@ -435,6 +438,27 @@ public class DramaAssetService {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
+        deleteReplacedLibrary(previousLibraryId, imported.getId());
+    }
+
+    /** 未锁定草稿被换图时，旧素材库记录可以删；已锁定图留给身份版本，不跟着清。 */
+    private Long replaceableLibraryId(DramaAsset asset) {
+        if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())
+                || DramaContract.STATUS_EXPIRED.equals(asset.getStatus())) {
+            return null;
+        }
+        return asset.getImageAssetId();
+    }
+
+    private void deleteReplacedLibrary(Long previousId, Long nextId) {
+        if (previousId == null || previousId.equals(nextId)) {
+            return;
+        }
+        try {
+            assetService.deleteMine(previousId);
+        } catch (BizException ignored) {
+            // 用户可能已从素材库删掉旧图
+        }
     }
 
     private void reopenIfConfirmed(DramaAsset asset) {

@@ -89,7 +89,10 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getQuality(),
                 request.getDurationSec(),
                 request.resolvedCopies());
-        CreationSession session = creationService.ensureSession(req.getSessionId(), userId, request.getCategory(), request.getPrompt());
+        boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
+        CreationSession session = bindSession
+                ? creationService.ensureSession(req.getSessionId(), userId, request.getCategory(), request.getPrompt())
+                : null;
         GenTask task = new GenTask();
         task.setUserId(userId);
         task.setModelId(model.getId());
@@ -97,7 +100,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         task.setStatus(TaskStatus.PENDING);
         task.setProgress(0);
         task.setPrompt(request.getPrompt());
-        Map<String, Object> params = GenerateRequests.toParams(request, session.getId());
+        Map<String, Object> params = GenerateRequests.toParams(request, session == null ? null : session.getId());
         if (extraParams != null) {
             extraParams.forEach((key, value) -> {
                 if (value != null) {
