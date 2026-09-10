@@ -1,0 +1,7 @@
+{
+  "_comment": "镜数上下限与时长白名单取 DramaContract 常量，此处只记合同里没有的验收点。",
+  "chapter_count": 5,
+  "first_chapter_beats": ["侦探社开场", "夏安整理线索", "局长闯入", "掏出古铜怀表"],
+  "scene_one_must_reference_prop": "古铜怀表",
+  "scene_one_must_reference_characters": ["洛白", "夏安", "局长"]
+}
