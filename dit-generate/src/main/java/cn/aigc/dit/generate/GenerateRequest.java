@@ -13,7 +13,7 @@ public class GenerateRequest {
     private Long userId;
     private Long taskId;
     private String modelKey;
-    /** 适配协议（翻译包），如 gpt-image-2 / seedance-2 / minimax-h3。 */
+    /** 适配协议（翻译包），如 gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5。 */
     private String adapterKey;
     private String category;
     private String mode;

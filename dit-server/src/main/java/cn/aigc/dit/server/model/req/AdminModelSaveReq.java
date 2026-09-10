@@ -22,7 +22,7 @@ public class AdminModelSaveReq {
 
     @NotBlank(message = "适配协议不能为空")
     @Size(max = 64)
-    @Schema(description = "适配协议（翻译包）：gpt-image-2 / seedance-2 / minimax-h3")
+    @Schema(description = "适配协议（翻译包）：gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5 / agnes-video-2.5")
     private String adapterKey;
 
     @Size(max = 64)

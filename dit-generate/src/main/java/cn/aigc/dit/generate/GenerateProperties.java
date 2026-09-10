@@ -11,6 +11,7 @@ public class GenerateProperties {
     private Mock mock = new Mock();
     private Worker worker = new Worker();
     private Runninghub runninghub = new Runninghub();
+    private Agnes agnes = new Agnes();
 
     /**
      * ComfyUI Adapter 始终注册；实际地址以模型 {@code endpoint} 为准。
@@ -61,6 +62,26 @@ public class GenerateProperties {
         private int connectTimeoutSeconds = 15;
         private int requestTimeoutSeconds = 120;
         /** 成片（尤其是视频）下载超时。 */
+        private int downloadTimeoutSeconds = 600;
+        private int downloadRetries = 3;
+    }
+
+    /**
+     * Agnes 官方 REST：图片 {@code POST /v1/images/generations}，视频 {@code POST /v1/videos}。
+     * 默认地址 {@code https://api.agnes-ai.cn/v1}；模型记录上的 API Key 优先，其次本配置。
+     */
+    @Data
+    public static class Agnes {
+        private String baseUrl = "https://api.agnes-ai.cn/v1";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        /** 文生图为同步接口，可能需要数分钟。 */
+        private int requestTimeoutSeconds = 180;
+        private int pollTimeoutSeconds = 30;
+        /** 视频状态查询最小间隔；官方建议 1–2 秒，过密会 429。 */
+        private int pollIntervalSeconds = 5;
+        /** 命中查询限流后的起始退避秒数，随后指数增加，上限 60 秒。 */
+        private int rateLimitBackoffSeconds = 8;
         private int downloadTimeoutSeconds = 600;
         private int downloadRetries = 3;
     }

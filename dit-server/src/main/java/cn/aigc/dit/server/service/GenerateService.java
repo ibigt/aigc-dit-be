@@ -9,6 +9,8 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
+import cn.aigc.dit.generate.agnes.AgnesRequestMapper;
+import cn.aigc.dit.generate.comfyui.ComfyUiGeometry;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.server.credit.CreditCalculator;
 import cn.aigc.dit.server.entity.AiModel;
@@ -69,7 +71,11 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (ModelCategory.VIDEO.equals(request.getCategory()) && request.getDurationSec() == null) {
             request.setDurationSec(5);
         }
+        if (AdapterCatalog.MINIMAX_H3.equals(adapterKey) && ModelCategory.VIDEO.equals(request.getCategory())) {
+            request.setDurationSec(ComfyUiGeometry.durationSec(request.getDurationSec()));
+        }
         applyRunningHubGuardrails(model, request);
+        applyAgnesGuardrails(adapterKey, request);
         long cost = CreditCalculator.calculate(
                 model.getPricing(),
                 request.getCategory(),
@@ -111,6 +117,16 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             throw new BizException(ErrorCode.NOT_FOUND, "任务不存在");
         }
         return task;
+    }
+
+    private static void applyAgnesGuardrails(String adapterKey, GenerateRequest request) {
+        if (!AdapterCatalog.isAgnes(adapterKey)) {
+            return;
+        }
+        request.setCopies(1);
+        if (ModelCategory.VIDEO.equals(request.getCategory())) {
+            request.setDurationSec(AgnesRequestMapper.clampSeconds(request.getDurationSec()));
+        }
     }
 
     private static void applyRunningHubGuardrails(AiModel model, GenerateRequest request) {

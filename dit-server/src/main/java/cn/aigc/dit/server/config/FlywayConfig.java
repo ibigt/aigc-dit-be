@@ -24,7 +24,7 @@ public class FlywayConfig {
                 statement.execute("ALTER TABLE ai_model ADD COLUMN IF NOT EXISTS adapter_key VARCHAR(64)");
                 statement.execute("""
                         COMMENT ON COLUMN ai_model.adapter_key
-                        IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / minimax-h3；mock 为占位'
+                        IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5 / agnes-video-2.5；mock 为占位'
                         """);
                 statement.execute("""
                         UPDATE ai_model
@@ -60,6 +60,10 @@ public class FlywayConfig {
                 statement.execute("""
                         UPDATE ai_model SET provider = 'RunningHub', updated_at = NOW()
                         WHERE adapter_key IN ('gpt-image-2', 'seedance-2') AND provider IS DISTINCT FROM 'RunningHub'
+                        """);
+                statement.execute("""
+                        UPDATE ai_model SET provider = '官方API', updated_at = NOW()
+                        WHERE adapter_key IN ('agnes-image-2.5', 'agnes-video-2.5') AND provider IS DISTINCT FROM '官方API'
                         """);
                 statement.execute("""
                         UPDATE ai_model SET provider = 'mock', updated_at = NOW()

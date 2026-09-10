@@ -18,11 +18,19 @@ public final class AdapterCatalog {
     public static final String GPT_IMAGE_2 = "gpt-image-2";
     public static final String SEEDANCE_2 = "seedance-2";
     public static final String MINIMAX_H3 = "minimax-h3";
+    public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
+    public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
     public static final String MOCK = "mock";
 
     public static final String TRANSPORT_RUNNINGHUB = "runninghub";
     public static final String TRANSPORT_COMFYUI = "comfyui";
+    public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_MOCK = "mock";
+
+    public static final String PROVIDER_OFFICIAL = "官方API";
+    public static final String AGNES_DEFAULT_ENDPOINT = "https://api.agnes-ai.cn/v1";
+    public static final String AGNES_IMAGE_MODEL = "agnes-image-2.5-flash";
+    public static final String AGNES_VIDEO_MODEL = "agnes-video-2.5-flash";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
@@ -35,6 +43,12 @@ public final class AdapterCatalog {
                             "r2vPath", "rhart-video/sparkvideo-2.0/multimodal-video"), true),
             new Spec(MINIMAX_H3, "MiniMax-H3", ModelCategory.VIDEO, TRANSPORT_COMFYUI, "ComfyUI",
                     "http://127.0.0.1:8188", List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+                    Map.of(), true),
+            new Spec(AGNES_IMAGE_2_5, "Agnes Image 2.5", ModelCategory.IMAGE, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
+                    AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
+            new Spec(AGNES_VIDEO_2_5, "Agnes Video 2.5", ModelCategory.VIDEO, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
+                    AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
             new Spec(MOCK, "Mock 占位", null, TRANSPORT_MOCK, "mock",
                     "/mock-api", List.of(GenerateMode.T2I, GenerateMode.I2I, GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
@@ -87,6 +101,12 @@ public final class AdapterCatalog {
         String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
         String prov = provider == null ? "" : provider.toLowerCase(Locale.ROOT);
         String cat = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        if (key.contains("agnes-image") || (isOfficialProvider(prov) && ModelCategory.IMAGE.equals(cat))) {
+            return AGNES_IMAGE_2_5;
+        }
+        if (key.contains("agnes") || (isOfficialProvider(prov) && ModelCategory.VIDEO.equals(cat))) {
+            return AGNES_VIDEO_2_5;
+        }
         if (key.contains("minimax") || (prov.contains("comfy") && ModelCategory.VIDEO.equals(cat))) {
             return MINIMAX_H3;
         }
@@ -128,6 +148,11 @@ public final class AdapterCatalog {
     public static boolean isRunningHub(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && TRANSPORT_RUNNINGHUB.equals(spec.transport());
+    }
+
+    public static boolean isAgnes(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && TRANSPORT_AGNES.equals(spec.transport());
     }
 
     public static List<String> constrainCapabilities(List<String> capabilities, String category, Spec spec) {
@@ -179,7 +204,24 @@ public final class AdapterCatalog {
         row.put("defaultEndpoint", spec.defaultEndpoint());
         row.put("modes", spec.modes());
         row.put("defaultPaths", spec.defaultPaths());
+        row.put("defaultModelKey", defaultModelKey(spec.key()));
         return row;
+    }
+
+    public static String defaultModelKey(String adapterKey) {
+        if (AGNES_IMAGE_2_5.equals(adapterKey)) {
+            return AGNES_IMAGE_MODEL;
+        }
+        if (AGNES_VIDEO_2_5.equals(adapterKey)) {
+            return AGNES_VIDEO_MODEL;
+        }
+        return "";
+    }
+
+    private static boolean isOfficialProvider(String provider) {
+        return provider.contains("官方")
+                || provider.contains("agnes")
+                || provider.contains("official");
     }
 
     private static boolean containsIgnoreCase(List<String> values, String wanted) {

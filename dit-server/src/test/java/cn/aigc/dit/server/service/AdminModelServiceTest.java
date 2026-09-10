@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.common.constant.ModelCategory;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -68,6 +69,33 @@ class AdminModelServiceTest {
         assertEquals("gpt-image-2", resp.getAdapterKey());
         assertEquals("RunningHub", resp.getProvider());
 
+    }
+
+    @Test
+    void createAgnesImageDerivesOfficialProviderAndEndpoint() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(encryptor.encrypt("agnes-key")).thenReturn("v1:cipher");
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(9L);
+            assertEquals("官方API", model.getProvider());
+            assertEquals("https://api.agnes-ai.cn/v1", model.getEndpoint());
+            assertEquals(AdapterCatalog.AGNES_IMAGE_2_5, model.getAdapterKey());
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Agnes Image 2.5 Flash");
+        req.setModelKey("agnes-image-2.5-flash");
+        req.setAdapterKey("agnes-image-2.5");
+        req.setCategory(ModelCategory.IMAGE);
+        req.setApiKey("agnes-key");
+        req.setCapabilities(List.of("image", "t2i", "i2i"));
+
+        var resp = service.create(req);
+        assertEquals(9L, resp.getId());
+        assertEquals("官方API", resp.getProvider());
+        assertEquals(List.of("image", "t2i", "i2i"), resp.getCapabilities());
     }
 
     @Test

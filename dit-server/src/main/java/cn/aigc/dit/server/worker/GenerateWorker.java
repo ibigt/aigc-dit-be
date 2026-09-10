@@ -10,6 +10,8 @@ import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.generate.agnes.AgnesGenerateProvider;
+import cn.aigc.dit.generate.agnes.AgnesUrls;
 import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
@@ -122,6 +124,7 @@ public class GenerateWorker {
                 .gt(GenTask::getCreatedAt, OffsetDateTime.now().minusHours(24))
                 .and(w -> w.eq(GenTask::getErrorMessage, "生成超时")
                         .or().like(GenTask::getErrorMessage, "下载 RunningHub")
+                        .or().like(GenTask::getErrorMessage, "下载 Agnes")
                         .or().like(GenTask::getErrorMessage, "成片回收")
                         .or().like(GenTask::getErrorMessage, "成片为空")
                         .or().like(GenTask::getErrorMessage, "成片 URL"))
@@ -211,8 +214,14 @@ public class GenerateWorker {
             PollResult result = pollUntilDone(provider, submitted.getJobId());
             applyPollResult(task, request, result);
         } catch (Exception e) {
+            String message = e.getMessage() == null ? "生成失败" : e.getMessage();
+            if (!StringUtils.hasText(task.getProviderJobId()) && isRetryableSubmitError(message)) {
+                log.warn("generate task {} submit busy, will retry later: {}", taskId, message);
+                deferSubmit(task, message);
+                return;
+            }
             log.error("generate task {} failed", taskId, e);
-            finishFailed(task, e.getMessage() == null ? "生成失败" : e.getMessage());
+            finishFailed(task, message);
         }
     }
 
@@ -397,6 +406,11 @@ public class GenerateWorker {
         }
         if (provider instanceof ComfyUiGenerateProvider comfyUi) {
             comfyUi.remember(task.getProviderJobId(), request, model == null ? request.getEndpoint() : model.getEndpoint());
+            return;
+        }
+        if (provider instanceof AgnesGenerateProvider agnes) {
+            String v1Base = AgnesUrls.v1Base(request.getEndpoint(), generateProperties.getAgnes().getBaseUrl());
+            agnes.remember(task.getProviderJobId(), request, v1Base, resolveApiKey(model));
         }
     }
 
@@ -413,11 +427,52 @@ public class GenerateWorker {
             return false;
         }
         return message.contains("下载 RunningHub")
+                || message.contains("下载 Agnes")
                 || message.contains("下载 ComfyUI")
                 || message.contains("ComfyUI 成片")
                 || message.contains("成片回收")
                 || message.contains("成片为空")
                 || message.contains("成片 URL");
+    }
+
+    static boolean isRetryableSubmitError(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("http 503")
+                || lower.contains("http 429")
+                || lower.contains("queue is full")
+                || lower.contains("rate limit")
+                || message.contains("请稍后")
+                || lower.contains("retry later");
+    }
+
+    private void deferSubmit(GenTask task, String message) {
+        GenTask latest = genTaskMapper.selectById(task.getId());
+        if (latest == null
+                || TaskStatus.SUCCEEDED.equals(latest.getStatus())
+                || TaskStatus.CANCELLED.equals(latest.getStatus())) {
+            return;
+        }
+        if (latest.getCreatedAt() != null
+                && latest.getCreatedAt().isBefore(OffsetDateTime.now().minusMinutes(30))) {
+            finishFailed(latest, friendlyBusyMessage(message));
+            return;
+        }
+        latest.setStatus(TaskStatus.PENDING);
+        latest.setProviderJobId(null);
+        latest.setFinishedAt(null);
+        latest.setErrorMessage(null);
+        latest.setProgress(Math.max(5, latest.getProgress() == null ? 5 : latest.getProgress()));
+        genTaskMapper.updateById(latest);
+    }
+
+    static String friendlyBusyMessage(String message) {
+        if (message != null && message.toLowerCase().contains("queue is full")) {
+            return "Agnes 视频队列繁忙，请稍后重试";
+        }
+        return message == null || message.isBlank() ? "生成失败" : message;
     }
 
     private void ensureGroup(String stream, String group) {
@@ -444,13 +499,23 @@ public class GenerateWorker {
     }
 
     private String resolveApiKey(AiModel model) {
-        if (StringUtils.hasText(model.getApiKeyEnc())) {
+        if (model != null && StringUtils.hasText(model.getApiKeyEnc())) {
             String decrypted = encryptor.decrypt(model.getApiKeyEnc());
             if (StringUtils.hasText(decrypted)) {
                 return decrypted.trim();
             }
         }
-        return generateProperties.getRunninghub().getApiKey();
+        String adapterKey = model == null ? null : AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (AdapterCatalog.isAgnes(adapterKey)) {
+            return generateProperties.getAgnes().getApiKey();
+        }
+        if (AdapterCatalog.isRunningHub(adapterKey)
+                || (model != null && model.getProvider() != null
+                && RunningHubGenerateProvider.KEY.equalsIgnoreCase(model.getProvider()))) {
+            return generateProperties.getRunninghub().getApiKey();
+        }
+        return null;
     }
 
     private static Long sessionId(GenTask task) {

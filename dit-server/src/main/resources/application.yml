@@ -114,6 +114,16 @@ dit:
       force-quality: low
       download-timeout-seconds: ${RUNNINGHUB_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${RUNNINGHUB_DOWNLOAD_RETRIES:3}
+    agnes:
+      base-url: ${AGNES_BASE_URL:https://api.agnes-ai.cn/v1}
+      api-key: ${AGNES_API_KEY:}
+      connect-timeout-seconds: 15
+      request-timeout-seconds: ${AGNES_REQUEST_TIMEOUT_SECONDS:180}
+      poll-timeout-seconds: 30
+      poll-interval-seconds: ${AGNES_POLL_INTERVAL_SECONDS:5}
+      rate-limit-backoff-seconds: ${AGNES_RATE_LIMIT_BACKOFF_SECONDS:8}
+      download-timeout-seconds: ${AGNES_DOWNLOAD_TIMEOUT_SECONDS:600}
+      download-retries: ${AGNES_DOWNLOAD_RETRIES:3}
   s3:
     endpoint: ${S3_ENDPOINT:}
     bucket: ${S3_BUCKET:dit}
