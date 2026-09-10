@@ -192,7 +192,7 @@ public class DramaService {
         episode.setSourceText(raw);
         ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
         episode.setScript(ScriptDocs.toMap(doc));
-        episode.setEngine(DramaContract.normalizeEngine(svc.engine()));
+        episode.setEngine(DramaContract.normalizeEngine(svc.engine(episode.getSeriesId())));
         episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         episodeMapper.updateById(episode);
         touchSeries(episode.getSeriesId());
@@ -331,7 +331,7 @@ public class DramaService {
         }
         ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
         episode.setScript(ScriptDocs.toMap(doc));
-        episode.setEngine(DramaContract.normalizeEngine(svc.engine()));
+        episode.setEngine(DramaContract.normalizeEngine(svc.engine(episode.getSeriesId())));
     }
 
     private DramaTextService requireTextService() {

@@ -95,7 +95,7 @@ class DramaServiceScriptTest {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(textService.getIfAvailable()).thenReturn(dramaTextService);
-        when(dramaTextService.engine()).thenReturn(DramaTextService.ENGINE_RULES);
+        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_RULES);
         when(dramaTextService.parseScript(21L, "第1场 日 内")).thenReturn(sampleDoc());
 
         DramaScriptImportReq req = new DramaScriptImportReq();
@@ -137,7 +137,7 @@ class DramaServiceScriptTest {
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(textService.getIfAvailable()).thenReturn(dramaTextService);
         when(textChatGateway.llmAvailable(21L)).thenReturn(true);
-        when(dramaTextService.engine()).thenReturn(DramaTextService.ENGINE_LLM);
+        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
         when(dramaTextService.parseScript(anyLong(), anyString())).thenReturn(sampleDoc());
 
         DramaScriptImportReq req = new DramaScriptImportReq();

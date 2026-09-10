@@ -15,9 +15,10 @@ public interface DramaTextService {
     String ENGINE_LLM = "llm";
 
     /**
-     * 本次解析实际使用的引擎：{@code rules} 或 {@code llm}。
+     * 该系列本次解析会实际使用的引擎：{@code rules} 或 {@code llm}。
+     * 必须与 {@link #parseScript(long, String)} 同源判定，否则 engine 与 script 会不一致。
      */
-    String engine();
+    String engine(long seriesId);
 
     /**
      * 原文或梗概 → 分场剧本。无可用文本模型时走规则分场。
