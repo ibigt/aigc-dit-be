@@ -6,6 +6,7 @@ import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
+import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,12 +30,14 @@ class AdminModelServiceTest {
     private AiModelMapper modelMapper;
     @Mock
     private AesGcmEncryptor encryptor;
+    @Mock
+    private cn.aigc.dit.server.drama.text.OpenAiCompatChatClient chatClient;
 
     private AdminModelService service;
 
     @BeforeEach
     void setUp() {
-        service = new AdminModelService(encryptor);
+        service = new AdminModelService(encryptor, chatClient);
         ReflectionTestUtils.setField(service, "baseMapper", modelMapper);
     }
 
@@ -147,5 +150,78 @@ class AdminModelServiceTest {
     void normalizeCapabilitiesRewritesLegacyVideoModes() {
         assertEquals(List.of("video", "t2v", "r2v", "i2v"),
                 AdminModelService.normalizeCapabilities(List.of("video", "t2v", "r2v", "v2v", "frames"), "video"));
+    }
+
+    @Test
+    void createTextModelUsesTextCatalogNotVideoAgnes() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(encryptor.encrypt("sk-text")).thenReturn("v1:cipher");
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(12L);
+            assertEquals("agnes-text", model.getAdapterKey());
+            assertEquals("官方API", model.getProvider());
+            assertEquals("https://api.agnes-ai.cn/v1", model.getEndpoint());
+            assertEquals(ModelCategory.TEXT, model.getCategory());
+            assertEquals(List.of("text"), model.getCapabilities());
+            assertEquals("agnes-2.5-flash", model.getAdapterConfig().get("chatModel"));
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Agnes 对话");
+        req.setModelKey("agnes-2.5-flash");
+        req.setAdapterKey("agnes-text");
+        req.setCategory(ModelCategory.TEXT);
+        req.setApiKey("sk-text");
+
+        var resp = service.create(req);
+        assertEquals(12L, resp.getId());
+        assertEquals("官方API", resp.getProvider());
+        assertEquals("agnes-text", resp.getAdapterKey());
+        assertEquals("文本", resp.getBadge());
+        assertEquals(List.of("text"), resp.getCapabilities());
+    }
+
+    @Test
+    void testConnectionUsesStoredKeyWhenBlank() {
+        AiModel existing = new AiModel();
+        existing.setId(12L);
+        existing.setCategory(ModelCategory.TEXT);
+        existing.setEndpoint("https://api.agnes-ai.cn/v1");
+        existing.setModelKey("agnes-2.5-flash");
+        existing.setApiKeyEnc("v1:cipher");
+        when(modelMapper.selectById(12L)).thenReturn(existing);
+        when(encryptor.decrypt("v1:cipher")).thenReturn("sk-stored");
+
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setId(12L);
+        req.setEndpoint("https://api.agnes-ai.cn/v1");
+        req.setModelKey("agnes-2.5-flash");
+        req.setApiKey("");
+
+        var resp = service.testConnection(req);
+        assertEquals("连接成功", resp.getMessage());
+        org.mockito.Mockito.verify(chatClient).ping(
+                "https://api.agnes-ai.cn/v1", "sk-stored", "agnes-2.5-flash");
+    }
+
+    @Test
+    void testConnectionAllowsBlankApiKey() {
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setEndpoint("http://172.171.114.10:8080/v1");
+        req.setModelKey("deepseek-v3-flash");
+        req.setApiKey("");
+
+        var resp = service.testConnection(req);
+        assertEquals("连接成功", resp.getMessage());
+        org.mockito.Mockito.verify(chatClient).ping(
+                "http://172.171.114.10:8080/v1", null, "deepseek-v3-flash");
+    }
+
+    @Test
+    void normalizeCategoryAllowsText() {
+        assertEquals(ModelCategory.TEXT, AdminModelService.normalizeCategory("TEXT"));
+        assertFalse(ModelCategory.isCreatable(ModelCategory.TEXT));
     }
 }

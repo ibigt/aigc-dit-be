@@ -3,7 +3,9 @@ package cn.aigc.dit.server.controller;
 import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.model.req.AdminModelEnabledReq;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
+import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import cn.aigc.dit.server.model.resp.AdminModelResp;
+import cn.aigc.dit.server.model.resp.AdminModelTestConnectionResp;
 import cn.aigc.dit.server.service.AdminModelService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -46,6 +48,13 @@ public class AdminModelController {
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String provider) {
         return CommonResult.success(adminModelService.listAdmin(keyword, category, provider));
+    }
+
+    @Operation(summary = "测试文本模型连接（OpenAI 兼容最小 chat，不写库）")
+    @PostMapping("/test-connection")
+    public CommonResult<AdminModelTestConnectionResp> testConnection(
+            @RequestBody AdminModelTestConnectionReq req) {
+        return CommonResult.success(adminModelService.testConnection(req));
     }
 
     @Operation(summary = "接入模型")

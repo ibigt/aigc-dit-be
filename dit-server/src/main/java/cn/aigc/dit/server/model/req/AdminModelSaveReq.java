@@ -22,7 +22,7 @@ public class AdminModelSaveReq {
 
     @NotBlank(message = "适配协议不能为空")
     @Size(max = 64)
-    @Schema(description = "适配协议（翻译包）：gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5 / agnes-video-2.5")
+    @Schema(description = "适配协议：图像/视频见 AdapterCatalog；文本为 agnes-text / openai-compat")
     private String adapterKey;
 
     @Size(max = 64)
@@ -32,11 +32,11 @@ public class AdminModelSaveReq {
     @Size(max = 512)
     private String endpoint;
 
-    @Schema(description = "明文 API Key；更新时留空表示保持原密钥")
+    @Schema(description = "明文 API Key；可空。更新时留空表示保持原密钥，新建留空表示无鉴权")
     private String apiKey;
 
     @NotBlank(message = "模型类型不能为空")
-    @Schema(description = "image / video / tool")
+    @Schema(description = "image / video / text / tool")
     private String category;
 
     @Schema(description = "能力：t2i/i2i/t2v/r2v/i2v；r2v=参考生视频（图或视频），i2v=首尾帧。旧值 v2v/frames 写入时会规范为 i2v")

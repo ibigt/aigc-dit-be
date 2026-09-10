@@ -339,3 +339,77 @@ WHERE adapter_key IN ('gpt-image-2', 'seedance-2') AND provider IS DISTINCT FROM
 
 UPDATE ai_model SET provider = 'mock', updated_at = NOW()
 WHERE adapter_key = 'mock' AND provider IS DISTINCT FROM 'mock';
+
+-- ----------------------------
+-- Table structure for drama_series
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS drama_series (
+    id                      BIGSERIAL PRIMARY KEY,
+    user_id                 BIGINT       NOT NULL REFERENCES sys_user (id),
+    name                    VARCHAR(128) NOT NULL,
+    style_key               VARCHAR(64)  NOT NULL DEFAULT 'anime-comic',
+    style_prefix            VARCHAR(512),
+    aspect_ratio            VARCHAR(16)  NOT NULL DEFAULT '16:9',
+    default_resolution      VARCHAR(16)  NOT NULL DEFAULT '720P',
+    default_duration_sec    INTEGER      NOT NULL DEFAULT 5,
+    planned_episode_count   INTEGER      NOT NULL DEFAULT 1,
+    text_model_id           BIGINT       REFERENCES ai_model (id),
+    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
+    CONSTRAINT ck_drama_series_resolution CHECK (default_resolution IN ('480P', '720P')),
+    CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec IN (5, 10, 15)),
+    CONSTRAINT ck_drama_series_planned CHECK (planned_episode_count >= 1 AND planned_episode_count <= 99)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drama_series_user ON drama_series (user_id, updated_at DESC);
+
+COMMENT ON TABLE drama_series IS '漫剧系列（项目容器）；与快速创作会话分离';
+COMMENT ON COLUMN drama_series.id IS '主键ID';
+COMMENT ON COLUMN drama_series.user_id IS '所属用户ID（关联 sys_user.id）';
+COMMENT ON COLUMN drama_series.name IS '系列名称（如 侦探社）';
+COMMENT ON COLUMN drama_series.style_key IS '风格键（如 anime-comic）；UI 用图例卡片选择，不展示前缀文本';
+COMMENT ON COLUMN drama_series.style_prefix IS '风格前缀（仅分镜编译注入，由 style_key 在服务端解析，不暴露编辑）';
+COMMENT ON COLUMN drama_series.aspect_ratio IS '画幅（16:9 / 9:16 / 1:1）';
+COMMENT ON COLUMN drama_series.default_resolution IS '默认清晰度（480P / 720P）；验收默认 720P';
+COMMENT ON COLUMN drama_series.default_duration_sec IS '默认单镜时长秒（仅 5 / 10 / 15，对齐 MiniMax）';
+COMMENT ON COLUMN drama_series.planned_episode_count IS '规划集数';
+COMMENT ON COLUMN drama_series.text_model_id IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，乙走规则引擎';
+COMMENT ON COLUMN drama_series.created_at IS '创建时间';
+COMMENT ON COLUMN drama_series.updated_at IS '更新时间';
+
+-- ----------------------------
+-- Table structure for drama_episode
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS drama_episode (
+    id                          BIGSERIAL PRIMARY KEY,
+    series_id                   BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+    user_id                     BIGINT       NOT NULL REFERENCES sys_user (id),
+    episode_number              INTEGER      NOT NULL,
+    name                        VARCHAR(128) NOT NULL,
+    source_text                 TEXT,
+    script                      JSONB,
+    status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
+    inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
+    created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
+    CONSTRAINT ck_drama_episode_number CHECK (episode_number >= 1),
+    CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_drama_episode_series ON drama_episode (series_id, episode_number);
+CREATE INDEX IF NOT EXISTS idx_drama_episode_user ON drama_episode (user_id, updated_at DESC);
+
+COMMENT ON TABLE drama_episode IS '漫剧剧集；跨集只继承锁定资产与风格，剧本/分镜/视频从零开始';
+COMMENT ON COLUMN drama_episode.id IS '主键ID';
+COMMENT ON COLUMN drama_episode.series_id IS '所属系列ID（关联 drama_series.id）';
+COMMENT ON COLUMN drama_episode.user_id IS '所属用户ID（关联 sys_user.id）';
+COMMENT ON COLUMN drama_episode.episode_number IS '集序号（从 1 起）';
+COMMENT ON COLUMN drama_episode.name IS '集名称（如 第 1 集）';
+COMMENT ON COLUMN drama_episode.source_text IS '导入原文或梗概';
+COMMENT ON COLUMN drama_episode.script IS '分场剧本文档 JSON（ScriptDoc）；阶段 2 写入';
+COMMENT ON COLUMN drama_episode.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
+COMMENT ON COLUMN drama_episode.inherited_from_episode_id IS '继承来源集ID（下一集复制资产时记录）';
+COMMENT ON COLUMN drama_episode.created_at IS '创建时间';
+COMMENT ON COLUMN drama_episode.updated_at IS '更新时间';

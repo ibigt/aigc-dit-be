@@ -6,10 +6,15 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
+import cn.aigc.dit.server.drama.text.OpenAiCompatChatClient;
+import cn.aigc.dit.server.drama.text.TextAdapterCatalog;
+import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
+import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import cn.aigc.dit.server.model.resp.AdminModelResp;
+import cn.aigc.dit.server.model.resp.AdminModelTestConnectionResp;
 import cn.aigc.dit.server.model.resp.ModelPublicResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -18,6 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +33,7 @@ import java.util.Map;
 public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
 
     private final AesGcmEncryptor encryptor;
+    private final OpenAiCompatChatClient chatClient;
 
     public List<AdminModelResp> listAdmin(String keyword, String category, String provider) {
         LambdaQueryWrapper<AiModel> wrapper = new LambdaQueryWrapper<AiModel>()
@@ -84,8 +91,35 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         removeById(id);
     }
 
+    public AdminModelTestConnectionResp testConnection(AdminModelTestConnectionReq req) {
+        String endpoint = trimToNull(req == null ? null : req.getEndpoint());
+        String modelKey = trimToNull(req == null ? null : req.getModelKey());
+        String apiKey = trimToNull(req == null ? null : req.getApiKey());
+        if (req != null && req.getId() != null) {
+            AiModel stored = requireModel(req.getId());
+            if (!ModelCategory.TEXT.equalsIgnoreCase(stored.getCategory())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "仅文本模型支持测试连接");
+            }
+            if (!StringUtils.hasText(apiKey)) {
+                apiKey = encryptor.decrypt(stored.getApiKeyEnc());
+            }
+            if (!StringUtils.hasText(endpoint)) {
+                endpoint = stored.getEndpoint();
+            }
+            if (!StringUtils.hasText(modelKey)) {
+                modelKey = TextChatGatewayImpl.chatModelOf(stored);
+            }
+        }
+        chatClient.ping(endpoint, apiKey, modelKey);
+        return AdminModelTestConnectionResp.success();
+    }
+
     private void apply(AiModel model, AdminModelSaveReq req, String modelKey, boolean creating) {
         String category = normalizeCategory(req.getCategory());
+        if (ModelCategory.TEXT.equals(category)) {
+            applyText(model, req, modelKey, creating);
+            return;
+        }
         AdapterCatalog.Spec spec = resolveSpec(req, model, category, modelKey, creating);
         if (spec.category() != null && !spec.category().equalsIgnoreCase(category)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "适配协议与模型类型不匹配");
@@ -110,6 +144,39 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setEnabled(req.getEnabled() == null || req.getEnabled());
         model.setDescription(trimToNull(req.getDescription()));
         model.setBadge(StringUtils.hasText(req.getBadge()) ? req.getBadge().trim() : defaultBadge(category));
+        model.setLogo(trimToNull(req.getLogo()));
+        if (StringUtils.hasText(req.getApiKey())) {
+            model.setApiKeyEnc(encryptor.encrypt(req.getApiKey().trim()));
+        } else if (creating) {
+            model.setApiKeyEnc(null);
+        }
+    }
+
+    private void applyText(AiModel model, AdminModelSaveReq req, String modelKey, boolean creating) {
+        TextAdapterCatalog.Spec spec = resolveTextSpec(req, model, creating);
+        model.setName(req.getName().trim());
+        model.setModelKey(modelKey);
+        model.setAdapterKey(spec.key());
+        model.setProvider(spec.providerLabel());
+        if (StringUtils.hasText(req.getEndpoint())) {
+            model.setEndpoint(trimToNull(req.getEndpoint()));
+        } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
+            model.setEndpoint(trimToNull(spec.defaultEndpoint()));
+        }
+        if (!StringUtils.hasText(model.getEndpoint())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写 Base URL");
+        }
+        model.setCategory(ModelCategory.TEXT);
+        model.setCapabilities(List.of(ModelCategory.TEXT));
+        Map<String, Object> adapterConfig = req.getAdapterConfig() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(req.getAdapterConfig());
+        adapterConfig.put("chatModel", modelKey);
+        model.setAdapterConfig(adapterConfig.isEmpty() ? null : adapterConfig);
+        model.setPricing(mergePricing(req));
+        model.setEnabled(req.getEnabled() == null || req.getEnabled());
+        model.setDescription(trimToNull(req.getDescription()));
+        model.setBadge(StringUtils.hasText(req.getBadge()) ? req.getBadge().trim() : defaultBadge(ModelCategory.TEXT));
         model.setLogo(trimToNull(req.getLogo()));
         if (StringUtils.hasText(req.getApiKey())) {
             model.setApiKeyEnc(encryptor.encrypt(req.getApiKey().trim()));
@@ -205,7 +272,14 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
     }
 
     public List<Map<String, Object>> listAdapters() {
-        return AdapterCatalog.adminVisible().stream().map(AdapterCatalog::toAdminView).toList();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (AdapterCatalog.Spec spec : AdapterCatalog.adminVisible()) {
+            rows.add(AdapterCatalog.toAdminView(spec));
+        }
+        for (TextAdapterCatalog.Spec spec : TextAdapterCatalog.adminVisible()) {
+            rows.add(TextAdapterCatalog.toAdminView(spec));
+        }
+        return rows;
     }
 
     private AdapterCatalog.Spec resolveSpec(AdminModelSaveReq req, AiModel model, String category, String modelKey,
@@ -219,6 +293,18 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择已接入的适配协议");
         }
         return AdapterCatalog.require(resolved);
+    }
+
+    private TextAdapterCatalog.Spec resolveTextSpec(AdminModelSaveReq req, AiModel model, boolean creating) {
+        String requested = req.getAdapterKey();
+        if (!StringUtils.hasText(requested) && !creating) {
+            requested = model.getAdapterKey();
+        }
+        String resolved = TextAdapterCatalog.resolveKey(requested, req.getProvider(), req.getModelKey());
+        if (resolved == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择已接入的文本适配协议（官方API 或自定义配置）");
+        }
+        return TextAdapterCatalog.require(resolved);
     }
 
     static List<String> normalizeCapabilities(List<String> capabilities, String category) {
@@ -243,15 +329,21 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         if (ModelCategory.VIDEO.equalsIgnoreCase(category)) {
             return ModelCategory.VIDEO;
         }
+        if (ModelCategory.TEXT.equalsIgnoreCase(category)) {
+            return ModelCategory.TEXT;
+        }
         if (ModelCategory.TOOL.equalsIgnoreCase(category)) {
             return ModelCategory.TOOL;
         }
-        throw new BizException(ErrorCode.BAD_REQUEST, "模型类型仅支持 image / video / tool");
+        throw new BizException(ErrorCode.BAD_REQUEST, "模型类型仅支持 image / video / text / tool");
     }
 
     static String defaultBadge(String category) {
         if (ModelCategory.VIDEO.equals(category)) {
             return "视频";
+        }
+        if (ModelCategory.TEXT.equals(category)) {
+            return "文本";
         }
         if (ModelCategory.TOOL.equals(category)) {
             return "工具";

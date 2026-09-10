@@ -11,7 +11,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "cn.aigc.dit")
-@MapperScan("cn.aigc.dit.server.mapper")
+@MapperScan({"cn.aigc.dit.server.mapper", "cn.aigc.dit.server.drama.mapper"})
 @EnableConfigurationProperties({JwtProperties.class, AdminProperties.class, DataRootProperties.class, CryptoProperties.class})
 @EnableScheduling
 public class DitServerApplication {

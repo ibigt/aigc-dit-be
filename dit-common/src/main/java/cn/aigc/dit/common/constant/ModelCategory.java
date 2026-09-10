@@ -6,6 +6,7 @@ package cn.aigc.dit.common.constant;
 public final class ModelCategory {
     public static final String IMAGE = "image";
     public static final String VIDEO = "video";
+    public static final String TEXT = "text";
     public static final String TOOL = "tool";
 
     private ModelCategory() {
