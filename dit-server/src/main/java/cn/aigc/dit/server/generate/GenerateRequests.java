@@ -25,6 +25,7 @@ import java.util.Map;
 public final class GenerateRequests {
 
     public static final String SOURCE = "快速创作";
+    public static final String SOURCE_DRAMA = "漫剧";
 
     private GenerateRequests() {
     }

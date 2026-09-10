@@ -25,6 +25,43 @@ public final class DramaContract {
     public static final Set<String> RESOLUTIONS = Set.of("480P", "720P");
     public static final Set<Integer> DURATIONS = Set.of(5, 10, 15);
 
+    /** 乙未合入：导入只存原文。 */
+    public static final String ENGINE_PENDING = "pending";
+    /** 规则分场（无可用文本模型）。 */
+    public static final String ENGINE_RULES = "rules";
+    /** 文本模型分场。 */
+    public static final String ENGINE_LLM = "llm";
+
+    public static final Set<String> ENGINES = Set.of(ENGINE_PENDING, ENGINE_RULES, ENGINE_LLM);
+
+    public static final String ASSET_TYPE_CHARACTER = "角色";
+    public static final String ASSET_TYPE_SCENE = "场景";
+    public static final String ASSET_TYPE_PROP = "道具";
+    public static final Set<String> ASSET_TYPES = Set.of(
+            ASSET_TYPE_CHARACTER, ASSET_TYPE_SCENE, ASSET_TYPE_PROP);
+
+    public static final String STATE_TAG_BASE = "base";
+    public static final String STATE_TAG_DREAM = "dream";
+    public static final String STATE_TAG_COSTUME = "costume";
+
+    /** 资产页同时进行的 t2i 上限。 */
+    public static final int MAX_ASSET_GENERATE = 4;
+
+    /** 单场分镜下限（乙/规则草稿）。 */
+    public static final int MIN_SHOTS_PER_CHAPTER = 2;
+    /** 单场分镜上限。 */
+    public static final int MAX_SHOTS_PER_CHAPTER = 12;
+    /** 第一场验收：4–8 镜。 */
+    public static final int FIRST_SCENE_MIN_SHOTS = 4;
+    public static final int FIRST_SCENE_MAX_SHOTS = 8;
+
     private DramaContract() {
+    }
+
+    public static String normalizeEngine(String engine) {
+        if (ENGINE_RULES.equals(engine) || ENGINE_LLM.equals(engine)) {
+            return engine;
+        }
+        return ENGINE_PENDING;
     }
 }

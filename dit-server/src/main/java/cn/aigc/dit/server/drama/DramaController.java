@@ -1,10 +1,21 @@
 package cn.aigc.dit.server.drama;
 
 import cn.aigc.dit.common.model.resp.CommonResult;
+import cn.aigc.dit.server.drama.model.req.DramaAssetGenerateReq;
+import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
+import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
+import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
@@ -12,13 +23,16 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -29,6 +43,8 @@ import java.util.List;
 public class DramaController {
 
     private final DramaService dramaService;
+    private final DramaAssetService dramaAssetService;
+    private final DramaStoryboardService dramaStoryboardService;
 
     @Operation(summary = "可选视觉风格（图例；不含编译前缀）")
     @GetMapping("/styles")
@@ -40,6 +56,12 @@ public class DramaController {
     @GetMapping("/text-models")
     public CommonResult<List<DramaTextModelResp>> listTextModels() {
         return CommonResult.success(dramaService.listEnabledTextModels());
+    }
+
+    @Operation(summary = "已启用图像模型（资产页全局绑定；不含密钥）")
+    @GetMapping("/image-models")
+    public CommonResult<List<DramaImageModelResp>> listImageModels() {
+        return CommonResult.success(dramaService.listEnabledImageModels());
     }
 
     @Operation(summary = "系列列表")
@@ -80,5 +102,147 @@ public class DramaController {
             @PathVariable Long id,
             @Valid @RequestBody DramaEpisodeUpdateReq req) {
         return CommonResult.success(dramaService.updateEpisode(id, req));
+    }
+
+    @Operation(summary = "导入剧本原文；乙未合入时只存 source_text")
+    @PostMapping("/episodes/{id}/script/import")
+    public CommonResult<DramaEpisodeResp> importSource(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaScriptImportReq req) {
+        return CommonResult.success(dramaService.importSource(id, req));
+    }
+
+    @Operation(summary = "从梗概生成分场剧本（需乙实现且项目文本模型可用）")
+    @PostMapping("/episodes/{id}/script/generate")
+    public CommonResult<DramaEpisodeResp> generateScript(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaScriptImportReq req) {
+        return CommonResult.success(dramaService.generateScript(id, req));
+    }
+
+    @Operation(summary = "保存分场剧本；已锁定后再改会使本集回到待确认、下游过期")
+    @PutMapping("/episodes/{id}/script")
+    public CommonResult<DramaEpisodeResp> saveScript(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaScriptSaveReq req) {
+        return CommonResult.success(dramaService.saveScript(id, req));
+    }
+
+    @Operation(summary = "锁定分场剧本")
+    @PostMapping("/episodes/{id}/script/lock")
+    public CommonResult<DramaEpisodeResp> lockScript(@PathVariable Long id) {
+        return CommonResult.success(dramaService.lockScript(id));
+    }
+
+    @Operation(summary = "资产页全局绑定图像模型（本页所有 t2i 都用这一条）")
+    @PutMapping("/series/{id}/image-model")
+    public CommonResult<DramaSeriesResp> bindImageModel(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaImageModelBindReq req) {
+        return CommonResult.success(dramaService.bindImageModel(id, req));
+    }
+
+    @Operation(summary = "剧集资产列表")
+    @GetMapping("/episodes/{id}/assets")
+    public CommonResult<List<DramaAssetResp>> listAssets(@PathVariable Long id) {
+        return CommonResult.success(dramaAssetService.listByEpisode(id));
+    }
+
+    @Operation(summary = "从锁定剧本提取角色/场景/道具")
+    @PostMapping("/episodes/{id}/assets/extract")
+    public CommonResult<List<DramaAssetResp>> extractAssets(@PathVariable Long id) {
+        return CommonResult.success(dramaAssetService.extractFromScript(id));
+    }
+
+    @Operation(summary = "手工新增资产")
+    @PostMapping("/episodes/{id}/assets")
+    public CommonResult<DramaAssetResp> createAsset(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaAssetSaveReq req) {
+        return CommonResult.success(dramaAssetService.create(id, req));
+    }
+
+    @Operation(summary = "更新资产描述；已锁定后再改会回到待确认")
+    @PutMapping("/assets/{id}")
+    public CommonResult<DramaAssetResp> updateAsset(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaAssetSaveReq req) {
+        return CommonResult.success(dramaAssetService.update(id, req));
+    }
+
+    @Operation(summary = "删除资产")
+    @DeleteMapping("/assets/{id}")
+    public CommonResult<Void> deleteAsset(@PathVariable Long id) {
+        dramaAssetService.delete(id);
+        return CommonResult.success();
+    }
+
+    @Operation(summary = "上传参考图（不依赖图像模型）")
+    @PostMapping("/assets/{id}/upload")
+    public CommonResult<DramaAssetResp> uploadAssetImage(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file) {
+        return CommonResult.success(dramaAssetService.uploadImage(id, file));
+    }
+
+    @Operation(summary = "用系列绑定的图像模型纯 t2i；不按素材选模型")
+    @PostMapping("/assets/{id}/generate")
+    public CommonResult<DramaAssetGenerateResp> generateAssetImage(
+            @PathVariable Long id,
+            @RequestBody(required = false) DramaAssetGenerateReq req) {
+        return CommonResult.success(dramaAssetService.generateImage(
+                id, req == null ? null : req.getResolution()));
+    }
+
+    @Operation(summary = "查询资产生图任务；成功后写入参考图")
+    @GetMapping("/assets/{id}/generate/tasks/{taskId}")
+    public CommonResult<DramaAssetGenerateResp> getAssetGenerateTask(
+            @PathVariable Long id,
+            @PathVariable Long taskId) {
+        return CommonResult.success(dramaAssetService.getGenerateTask(id, taskId));
+    }
+
+    @Operation(summary = "确认锁定资产并升 identity_version；未锁定不能进分镜")
+    @PostMapping("/assets/{id}/lock")
+    public CommonResult<DramaAssetResp> lockAsset(@PathVariable Long id) {
+        return CommonResult.success(dramaAssetService.lock(id));
+    }
+
+    @Operation(summary = "章节与分镜（含编译预览）")
+    @GetMapping("/episodes/{id}/storyboard")
+    public CommonResult<DramaStoryboardResp> getStoryboard(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.getStoryboard(id));
+    }
+
+    @Operation(summary = "按场拆章并生成分镜草稿，随后编译 Style Prefix / 身份 / Picture")
+    @PostMapping("/episodes/{id}/storyboard/draft")
+    public CommonResult<DramaStoryboardResp> draftStoryboard(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.draft(id));
+    }
+
+    @Operation(summary = "重新编译本集全部分镜（预览，不调视频模型）")
+    @PostMapping("/episodes/{id}/storyboard/compile")
+    public CommonResult<DramaStoryboardResp> compileStoryboard(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.compileEpisode(id));
+    }
+
+    @Operation(summary = "更新分镜台词/时长/衔接/参考资产；视频 prompt 由编译器重算")
+    @PutMapping("/shots/{id}")
+    public CommonResult<DramaShotResp> updateShot(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaShotSaveReq req) {
+        return CommonResult.success(dramaStoryboardService.updateShot(id, req));
+    }
+
+    @Operation(summary = "编译单镜（预览 compiled_prompt，不调 MiniMax）")
+    @PostMapping("/shots/{id}/compile")
+    public CommonResult<DramaShotResp> compileShot(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.compileShot(id));
+    }
+
+    @Operation(summary = "确认分镜；未锁定资产不能进参考")
+    @PostMapping("/shots/{id}/confirm")
+    public CommonResult<DramaShotResp> confirmShot(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.confirmShot(id));
     }
 }

@@ -354,6 +354,10 @@ CREATE TABLE IF NOT EXISTS drama_series (
     default_duration_sec    INTEGER      NOT NULL DEFAULT 5,
     planned_episode_count   INTEGER      NOT NULL DEFAULT 1,
     text_model_id           BIGINT       REFERENCES ai_model (id),
+    image_model_id          BIGINT       REFERENCES ai_model (id),
+    image_adapter_key       VARCHAR(64),
+    video_model_id          BIGINT       REFERENCES ai_model (id),
+    video_adapter_key       VARCHAR(64),
     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
@@ -375,6 +379,10 @@ COMMENT ON COLUMN drama_series.default_resolution IS '默认清晰度（480P / 7
 COMMENT ON COLUMN drama_series.default_duration_sec IS '默认单镜时长秒（仅 5 / 10 / 15，对齐 MiniMax）';
 COMMENT ON COLUMN drama_series.planned_episode_count IS '规划集数';
 COMMENT ON COLUMN drama_series.text_model_id IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，乙走规则引擎';
+COMMENT ON COLUMN drama_series.image_model_id IS '资产页全局图像模型（ai_model.id，category=image）；空则不可 t2i，仍可上传';
+COMMENT ON COLUMN drama_series.image_adapter_key IS '绑定图像模型当时的 adapter_key（不要只存 provider）';
+COMMENT ON COLUMN drama_series.video_model_id IS '出片页全局视频模型（ai_model.id，category=video）；阶段 6 再绑';
+COMMENT ON COLUMN drama_series.video_adapter_key IS '绑定视频模型当时的 adapter_key';
 COMMENT ON COLUMN drama_series.created_at IS '创建时间';
 COMMENT ON COLUMN drama_series.updated_at IS '更新时间';
 
@@ -389,13 +397,15 @@ CREATE TABLE IF NOT EXISTS drama_episode (
     name                        VARCHAR(128) NOT NULL,
     source_text                 TEXT,
     script                      JSONB,
+    engine                      VARCHAR(16)  NOT NULL DEFAULT 'pending',
     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
     CONSTRAINT ck_drama_episode_number CHECK (episode_number >= 1),
-    CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+    CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
+    CONSTRAINT ck_drama_episode_engine CHECK (engine IN ('pending', 'rules', 'llm'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_drama_episode_series ON drama_episode (series_id, episode_number);
@@ -408,8 +418,179 @@ COMMENT ON COLUMN drama_episode.user_id IS '所属用户ID（关联 sys_user.id�
 COMMENT ON COLUMN drama_episode.episode_number IS '集序号（从 1 起）';
 COMMENT ON COLUMN drama_episode.name IS '集名称（如 第 1 集）';
 COMMENT ON COLUMN drama_episode.source_text IS '导入原文或梗概';
-COMMENT ON COLUMN drama_episode.script IS '分场剧本文档 JSON（ScriptDoc）；阶段 2 写入';
+COMMENT ON COLUMN drama_episode.script IS '分场剧本文档 JSON（ScriptDoc）；阶段 3 由 DramaTextService 写入，乙未合入时可空';
+COMMENT ON COLUMN drama_episode.engine IS '分场引擎：pending 乙未合入；rules 规则分场；llm 文本模型';
 COMMENT ON COLUMN drama_episode.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
 COMMENT ON COLUMN drama_episode.inherited_from_episode_id IS '继承来源集ID（下一集复制资产时记录）';
 COMMENT ON COLUMN drama_episode.created_at IS '创建时间';
 COMMENT ON COLUMN drama_episode.updated_at IS '更新时间';
+
+-- 已有库 CREATE IF NOT EXISTS 不会加列，这里幂等补齐
+ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS text_model_id BIGINT REFERENCES ai_model (id);
+ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_model_id BIGINT REFERENCES ai_model (id);
+ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_adapter_key VARCHAR(64);
+ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS video_model_id BIGINT REFERENCES ai_model (id);
+ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS video_adapter_key VARCHAR(64);
+COMMENT ON COLUMN drama_series.text_model_id IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，乙走规则引擎';
+COMMENT ON COLUMN drama_series.image_model_id IS '资产页全局图像模型（ai_model.id，category=image）；空则不可 t2i，仍可上传';
+COMMENT ON COLUMN drama_series.image_adapter_key IS '绑定图像模型当时的 adapter_key（不要只存 provider）';
+COMMENT ON COLUMN drama_series.video_model_id IS '出片页全局视频模型（ai_model.id，category=video）；阶段 6 再绑';
+COMMENT ON COLUMN drama_series.video_adapter_key IS '绑定视频模型当时的 adapter_key';
+
+-- ----------------------------
+-- Table structure for drama_asset
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS drama_asset (
+    id                      BIGSERIAL PRIMARY KEY,
+    series_id               BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+    episode_id              BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+    user_id                 BIGINT       NOT NULL REFERENCES sys_user (id),
+    name                    VARCHAR(128) NOT NULL,
+    type                    VARCHAR(16)  NOT NULL,
+    state_tag               VARCHAR(64)  NOT NULL DEFAULT 'base',
+    description             TEXT,
+    identity_invariants     TEXT,
+    image_prompt            TEXT,
+    voice_lock              VARCHAR(256),
+    must_split              BOOLEAN      NOT NULL DEFAULT FALSE,
+    needs_human             BOOLEAN      NOT NULL DEFAULT FALSE,
+    status                  VARCHAR(16)  NOT NULL DEFAULT '未开始',
+    identity_version        INTEGER      NOT NULL DEFAULT 0,
+    image_storage_key       VARCHAR(512),
+    image_asset_id          BIGINT       REFERENCES asset (id) ON DELETE SET NULL,
+    gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
+    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_drama_asset_type CHECK (type IN ('角色', '场景', '道具')),
+    CONSTRAINT ck_drama_asset_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
+    CONSTRAINT ck_drama_asset_identity_version CHECK (identity_version >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_drama_asset_episode ON drama_asset (episode_id, type, id);
+CREATE INDEX IF NOT EXISTS idx_drama_asset_series ON drama_asset (series_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_drama_asset_episode_name_state
+    ON drama_asset (episode_id, type, name, state_tag);
+
+COMMENT ON TABLE drama_asset IS '漫剧资产注册表：描述符 + 参考图 + 身份不变量 + 版本号；未锁定不能进分镜参考';
+COMMENT ON COLUMN drama_asset.id IS '主键ID';
+COMMENT ON COLUMN drama_asset.series_id IS '所属系列ID（关联 drama_series.id）';
+COMMENT ON COLUMN drama_asset.episode_id IS '所属剧集ID（关联 drama_episode.id）';
+COMMENT ON COLUMN drama_asset.user_id IS '所属用户ID（关联 sys_user.id）';
+COMMENT ON COLUMN drama_asset.name IS '资产名（须能对上剧本人物/道具/场景；入梦/换装为独立行）';
+COMMENT ON COLUMN drama_asset.type IS '类型：角色 / 场景 / 道具';
+COMMENT ON COLUMN drama_asset.state_tag IS '状态标签：base / dream / costume 等；湿身换装入梦必须独立资产';
+COMMENT ON COLUMN drama_asset.description IS '完整描述符，永不缩写';
+COMMENT ON COLUMN drama_asset.identity_invariants IS '身份不变量（脸、发型、服装剪影、标志物）';
+COMMENT ON COLUMN drama_asset.image_prompt IS '中文生图 prompt；t2i 用此条，不按素材选模型';
+COMMENT ON COLUMN drama_asset.voice_lock IS '可选固定音色';
+COMMENT ON COLUMN drama_asset.must_split IS '是否必须与主身份拆开（入梦/换装）';
+COMMENT ON COLUMN drama_asset.needs_human IS '规则抽取后身份不完整，需人工补全';
+COMMENT ON COLUMN drama_asset.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
+COMMENT ON COLUMN drama_asset.identity_version IS '锁定时递增；分镜编译按此版本注入';
+COMMENT ON COLUMN drama_asset.image_storage_key IS '当前参考图相对对象存储 key';
+COMMENT ON COLUMN drama_asset.image_asset_id IS '素材库记录（关联 asset.id），供后续 r2v 引用';
+COMMENT ON COLUMN drama_asset.gen_task_id IS '最近一次 t2i 任务（关联 gen_task.id）';
+COMMENT ON COLUMN drama_asset.created_at IS '创建时间';
+COMMENT ON COLUMN drama_asset.updated_at IS '更新时间';
+
+-- ----------------------------
+-- Table structure for drama_chapter
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS drama_chapter (
+    id              BIGSERIAL PRIMARY KEY,
+    series_id       BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+    episode_id      BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+    user_id         BIGINT       NOT NULL REFERENCES sys_user (id),
+    chapter_index   INTEGER      NOT NULL,
+    name            VARCHAR(128) NOT NULL,
+    scene_index     INTEGER      NOT NULL,
+    body            TEXT,
+    status          VARCHAR(16)  NOT NULL DEFAULT '待确认',
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_drama_chapter_episode_index UNIQUE (episode_id, chapter_index),
+    CONSTRAINT ck_drama_chapter_index CHECK (chapter_index >= 1),
+    CONSTRAINT ck_drama_chapter_scene CHECK (scene_index >= 1),
+    CONSTRAINT ck_drama_chapter_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_drama_chapter_episode ON drama_chapter (episode_id, chapter_index);
+
+COMMENT ON TABLE drama_chapter IS '漫剧章节（按场拆章）；正文来自分场剧本';
+COMMENT ON COLUMN drama_chapter.id IS '主键ID';
+COMMENT ON COLUMN drama_chapter.series_id IS '所属系列ID（关联 drama_series.id）';
+COMMENT ON COLUMN drama_chapter.episode_id IS '所属剧集ID（关联 drama_episode.id）';
+COMMENT ON COLUMN drama_chapter.user_id IS '所属用户ID（关联 sys_user.id）';
+COMMENT ON COLUMN drama_chapter.chapter_index IS '章序号（从 1 起，通常等于场次）';
+COMMENT ON COLUMN drama_chapter.name IS '章名（如 第一场 / 场次 heading）';
+COMMENT ON COLUMN drama_chapter.scene_index IS '对应 ScriptDoc.scenes[].index';
+COMMENT ON COLUMN drama_chapter.body IS '章节正文（heading + action + sound）';
+COMMENT ON COLUMN drama_chapter.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
+COMMENT ON COLUMN drama_chapter.created_at IS '创建时间';
+COMMENT ON COLUMN drama_chapter.updated_at IS '更新时间';
+
+-- ----------------------------
+-- Table structure for drama_shot
+-- ----------------------------
+CREATE TABLE IF NOT EXISTS drama_shot (
+    id                      BIGSERIAL PRIMARY KEY,
+    series_id               BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+    episode_id              BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+    chapter_id              BIGINT       NOT NULL REFERENCES drama_chapter (id) ON DELETE CASCADE,
+    user_id                 BIGINT       NOT NULL REFERENCES sys_user (id),
+    shot_index              INTEGER      NOT NULL,
+    title                   VARCHAR(128),
+    duration_sec            INTEGER      NOT NULL DEFAULT 5,
+    narrative_goal          TEXT,
+    scene                   TEXT,
+    dialogue                TEXT,
+    continuity_in           VARCHAR(256),
+    continuity_out          VARCHAR(256),
+    reference_asset_ids     JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    character_names         JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    prop_names              JSONB        NOT NULL DEFAULT '[]'::jsonb,
+    location_name           VARCHAR(128),
+    cast_count              INTEGER      NOT NULL DEFAULT 0,
+    compiled_prompt         TEXT,
+    compiled_fingerprint    VARCHAR(128),
+    status                  VARCHAR(16)  NOT NULL DEFAULT '待确认',
+    gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
+    video_key               VARCHAR(512),
+    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
+    CONSTRAINT ck_drama_shot_index CHECK (shot_index >= 1),
+    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec IN (5, 10, 15)),
+    CONSTRAINT ck_drama_shot_cast CHECK (cast_count >= 0),
+    CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_drama_shot_chapter ON drama_shot (chapter_id, shot_index);
+CREATE INDEX IF NOT EXISTS idx_drama_shot_episode ON drama_shot (episode_id, shot_index);
+
+COMMENT ON TABLE drama_shot IS '漫剧分镜；视频提示词由编译器注入 Style Prefix / 身份不变量 / Picture 序号，用户不手写长 prompt';
+COMMENT ON COLUMN drama_shot.id IS '主键ID';
+COMMENT ON COLUMN drama_shot.series_id IS '所属系列ID';
+COMMENT ON COLUMN drama_shot.episode_id IS '所属剧集ID';
+COMMENT ON COLUMN drama_shot.chapter_id IS '所属章节ID';
+COMMENT ON COLUMN drama_shot.user_id IS '所属用户ID';
+COMMENT ON COLUMN drama_shot.shot_index IS '集内镜序号（从 1 起）';
+COMMENT ON COLUMN drama_shot.title IS '分镜标题';
+COMMENT ON COLUMN drama_shot.duration_sec IS '时长秒（仅 5 / 10 / 15）';
+COMMENT ON COLUMN drama_shot.narrative_goal IS '本镜叙事目标';
+COMMENT ON COLUMN drama_shot.scene IS '场景/空间描述';
+COMMENT ON COLUMN drama_shot.dialogue IS '台词';
+COMMENT ON COLUMN drama_shot.continuity_in IS '镜进入衔接';
+COMMENT ON COLUMN drama_shot.continuity_out IS '镜离开衔接；应等于下一镜 continuity_in';
+COMMENT ON COLUMN drama_shot.reference_asset_ids IS '本镜参考资产 id 数组（顺序 = Picture 序号；仅已锁定）';
+COMMENT ON COLUMN drama_shot.character_names IS '出场角色名 JSON 数组';
+COMMENT ON COLUMN drama_shot.prop_names IS '出场道具名 JSON 数组';
+COMMENT ON COLUMN drama_shot.location_name IS '场景名';
+COMMENT ON COLUMN drama_shot.cast_count IS '人数，必须等于 character_names.length';
+COMMENT ON COLUMN drama_shot.compiled_prompt IS '编译后的自包含视频 prompt；资产或剧本过期则作废';
+COMMENT ON COLUMN drama_shot.compiled_fingerprint IS '风格前缀 + 资产 identity_version + 镜字段哈希；不匹配则 compiled_prompt 作废';
+COMMENT ON COLUMN drama_shot.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
+COMMENT ON COLUMN drama_shot.gen_task_id IS '阶段 6 出片任务（关联 gen_task.id）';
+COMMENT ON COLUMN drama_shot.video_key IS '阶段 6 镜头成片相对对象存储 key';
+COMMENT ON COLUMN drama_shot.created_at IS '创建时间';
+COMMENT ON COLUMN drama_shot.updated_at IS '更新时间';

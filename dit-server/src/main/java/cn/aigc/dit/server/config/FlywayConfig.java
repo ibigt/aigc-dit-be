@@ -108,13 +108,15 @@ public class FlywayConfig {
                     name                        VARCHAR(128) NOT NULL,
                     source_text                 TEXT,
                     script                      JSONB,
+                    engine                      VARCHAR(16)  NOT NULL DEFAULT 'pending',
                     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
                     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
                     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
                     CONSTRAINT ck_drama_episode_number CHECK (episode_number >= 1),
-                    CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+                    CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
+                    CONSTRAINT ck_drama_episode_engine CHECK (engine IN ('pending', 'rules', 'llm'))
                 )
                 """);
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_episode_series ON drama_episode (series_id, episode_number)");
@@ -154,6 +156,18 @@ public class FlywayConfig {
         statement.execute("""
                 UPDATE ai_model SET provider = '自定义配置', updated_at = NOW()
                 WHERE adapter_key = 'openai-compat' AND provider IS DISTINCT FROM '自定义配置'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS engine VARCHAR(16) NOT NULL DEFAULT 'pending'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.engine
+                IS '分场引擎：pending 乙未合入；rules 规则分场；llm 文本模型'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.script
+                IS '分场剧本文档 JSON（ScriptDoc）；阶段 3 由 DramaTextService 写入，乙未合入时可空'
                 """);
     }
 }

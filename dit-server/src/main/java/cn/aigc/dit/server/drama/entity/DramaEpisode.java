@@ -27,6 +27,7 @@ public class DramaEpisode {
     @TableField(typeHandler = JsonbTypeHandler.class)
     private Map<String, Object> script;
 
+    private String engine;
     private String status;
     private Long inheritedFromEpisodeId;
 

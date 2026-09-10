@@ -21,6 +21,12 @@ public class DramaSeriesResp {
     private Integer plannedEpisodeCount;
     private Long textModelId;
     private String textModelName;
+    private Long imageModelId;
+    private String imageModelName;
+    private String imageAdapterKey;
+    private Long videoModelId;
+    private String videoModelName;
+    private String videoAdapterKey;
     private Integer episodeCount;
     private DramaEpisodeResp latestEpisode;
     private List<DramaEpisodeResp> episodes;

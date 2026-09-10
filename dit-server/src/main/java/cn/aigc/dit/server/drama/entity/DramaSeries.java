@@ -25,6 +25,10 @@ public class DramaSeries {
     private Integer defaultDurationSec;
     private Integer plannedEpisodeCount;
     private Long textModelId;
+    private Long imageModelId;
+    private String imageAdapterKey;
+    private Long videoModelId;
+    private String videoAdapterKey;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

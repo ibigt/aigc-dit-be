@@ -33,6 +33,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -47,6 +48,11 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
 
     @Transactional
     public GenerateTaskResp submit(GenerateSubmitReq req) {
+        return submit(req, null);
+    }
+
+    @Transactional
+    public GenerateTaskResp submit(GenerateSubmitReq req, Map<String, Object> extraParams) {
         Long userId = UserContext.requireUserId();
         AiModel model = requireEnabledModel(req.getModelId());
         if (!model.getCategory().equalsIgnoreCase(req.getCategory())
@@ -91,7 +97,15 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         task.setStatus(TaskStatus.PENDING);
         task.setProgress(0);
         task.setPrompt(request.getPrompt());
-        task.setParams(GenerateRequests.toParams(request, session.getId()));
+        Map<String, Object> params = GenerateRequests.toParams(request, session.getId());
+        if (extraParams != null) {
+            extraParams.forEach((key, value) -> {
+                if (value != null) {
+                    params.put(key, value);
+                }
+            });
+        }
+        task.setParams(params);
         task.setCreditCost(cost);
         task.setCopies(request.resolvedCopies());
         save(task);

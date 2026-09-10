@@ -4,21 +4,35 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
+import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
+import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
+import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
+import cn.aigc.dit.server.drama.text.DramaTextService;
+import cn.aigc.dit.server.drama.text.ScriptDoc;
+import cn.aigc.dit.server.drama.text.ScriptDocs;
+import cn.aigc.dit.server.drama.text.TextChatGateway;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -38,7 +52,11 @@ public class DramaService {
 
     private final DramaSeriesMapper seriesMapper;
     private final DramaEpisodeMapper episodeMapper;
+    private final DramaAssetMapper assetMapper;
     private final AiModelMapper aiModelMapper;
+    private final ObjectProvider<DramaTextService> textService;
+    private final TextChatGateway textChatGateway;
+    private final DramaStoryboardService storyboardService;
 
     public List<DramaSeriesResp> listSeries() {
         Long userId = UserContext.requireUserId();
@@ -54,9 +72,12 @@ public class DramaService {
                         .orderByAsc(DramaEpisode::getEpisodeNumber))
                 .stream()
                 .collect(Collectors.groupingBy(DramaEpisode::getSeriesId));
-        Map<Long, String> textModelNames = textModelNames(series.stream().map(DramaSeries::getTextModelId).toList());
+        Map<Long, String> modelNames = modelNames(series.stream()
+                .flatMap(item -> java.util.stream.Stream.of(
+                        item.getTextModelId(), item.getImageModelId(), item.getVideoModelId()))
+                .toList());
         return series.stream()
-                .map(item -> toSeriesResp(item, bySeries.getOrDefault(item.getId(), List.of()), false, textModelNames))
+                .map(item -> toSeriesResp(item, bySeries.getOrDefault(item.getId(), List.of()), false, modelNames))
                 .toList();
     }
 
@@ -65,7 +86,8 @@ public class DramaService {
         List<DramaEpisode> episodes = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
                 .eq(DramaEpisode::getSeriesId, series.getId())
                 .orderByAsc(DramaEpisode::getEpisodeNumber));
-        return toSeriesResp(series, episodes, true, textModelNames(idsOf(series.getTextModelId())));
+        return toSeriesResp(series, episodes, true, modelNames(idsOf(
+                series.getTextModelId(), series.getImageModelId(), series.getVideoModelId())));
     }
 
     @Transactional
@@ -90,13 +112,15 @@ public class DramaService {
                 ? req.getFirstEpisodeName().trim()
                 : "第 1 集");
         episode.setStatus(DramaContract.STATUS_NOT_STARTED);
+        episode.setEngine(DramaContract.ENGINE_PENDING);
         episodeMapper.insert(episode);
-        return toSeriesResp(series, List.of(episode), true, textModelNames(idsOf(series.getTextModelId())));
+        return toSeriesResp(series, List.of(episode), true, modelNames(idsOf(series.getTextModelId())));
     }
 
     @Transactional
     public DramaSeriesResp updateSeries(Long id, DramaSeriesUpdateReq req) {
         DramaSeries series = requireSeries(id);
+        String previousStyle = series.getStyleKey();
         if (StringUtils.hasText(req.getName())) {
             series.setName(req.getName().trim());
         }
@@ -119,6 +143,9 @@ public class DramaService {
             series.setTextModelId(requireEnabledTextModel(req.getTextModelId()).getId());
         }
         seriesMapper.updateById(series);
+        if (req.getStyleKey() != null && !java.util.Objects.equals(previousStyle, series.getStyleKey())) {
+            storyboardService.expireCompiledBySeries(series.getId());
+        }
         return getSeries(series.getId());
     }
 
@@ -131,6 +158,86 @@ public class DramaService {
         DramaEpisode episode = requireEpisode(id);
         episode.setName(req.getName().trim());
         episodeMapper.updateById(episode);
+        return toEpisodeResp(episode, true);
+    }
+
+    /**
+     * 导入原文。乙合入后写入 {@code script}；否则只存 {@code source_text}，engine=pending。
+     */
+    @Transactional
+    public DramaEpisodeResp importSource(Long id, DramaScriptImportReq req) {
+        DramaEpisode episode = requireEpisode(id);
+        String raw = req.getSourceText().trim();
+        onScriptMutated(episode);
+        episode.setSourceText(raw);
+        applyParseIfPresent(episode, raw);
+        episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        episodeMapper.updateById(episode);
+        touchSeries(episode.getSeriesId());
+        return toEpisodeResp(episode, true);
+    }
+
+    /**
+     * 从梗概生成分场剧本。需乙实现 + 项目绑定的文本模型可用。
+     */
+    @Transactional
+    public DramaEpisodeResp generateScript(Long id, DramaScriptImportReq req) {
+        DramaEpisode episode = requireEpisode(id);
+        DramaTextService svc = requireTextService();
+        if (!textChatGateway.llmAvailable(episode.getSeriesId())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前项目未绑定可用文本模型，无法生成剧本");
+        }
+        String raw = req.getSourceText().trim();
+        onScriptMutated(episode);
+        episode.setSourceText(raw);
+        ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
+        episode.setScript(ScriptDocs.toMap(doc));
+        episode.setEngine(DramaContract.normalizeEngine(svc.engine()));
+        episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        episodeMapper.updateById(episode);
+        touchSeries(episode.getSeriesId());
+        return toEpisodeResp(episode, true);
+    }
+
+    /**
+     * 人工保存分场剧本。已锁定后再改：本集回到待确认，下游标已过期。
+     */
+    @Transactional
+    public DramaEpisodeResp saveScript(Long id, DramaScriptSaveReq req) {
+        DramaEpisode episode = requireEpisode(id);
+        if (req.getSourceText() == null && req.getScript() == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写剧本原文或分场内容");
+        }
+        onScriptMutated(episode);
+        if (req.getSourceText() != null) {
+            episode.setSourceText(StringUtils.hasText(req.getSourceText()) ? req.getSourceText().trim() : null);
+        }
+        if (req.getScript() != null) {
+            episode.setScript(ScriptDocs.toMap(req.getScript()));
+        }
+        if (DramaContract.STATUS_NOT_STARTED.equals(episode.getStatus())) {
+            episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        }
+        episodeMapper.updateById(episode);
+        touchSeries(episode.getSeriesId());
+        return toEpisodeResp(episode, true);
+    }
+
+    /**
+     * 锁定分场剧本。乙未合入时有原文即可锁，供甲当纯文本编辑。
+     */
+    @Transactional
+    public DramaEpisodeResp lockScript(Long id) {
+        DramaEpisode episode = requireEpisode(id);
+        if (DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
+            return toEpisodeResp(episode, true);
+        }
+        if (!ScriptDocs.lockable(episode.getSourceText(), episode.getScript())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先导入或生成剧本");
+        }
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episodeMapper.updateById(episode);
+        touchSeries(episode.getSeriesId());
         return toEpisodeResp(episode, true);
     }
 
@@ -151,7 +258,7 @@ public class DramaService {
     }
 
     private DramaSeriesResp toSeriesResp(DramaSeries series, List<DramaEpisode> episodes, boolean withEpisodes,
-                                         Map<Long, String> textModelNames) {
+                                         Map<Long, String> modelNames) {
         List<DramaEpisode> ordered = episodes.stream()
                 .sorted(Comparator.comparing(DramaEpisode::getEpisodeNumber))
                 .toList();
@@ -169,7 +276,17 @@ public class DramaService {
         resp.setPlannedEpisodeCount(series.getPlannedEpisodeCount());
         resp.setTextModelId(series.getTextModelId());
         if (series.getTextModelId() != null) {
-            resp.setTextModelName(textModelNames.get(series.getTextModelId()));
+            resp.setTextModelName(modelNames.get(series.getTextModelId()));
+        }
+        resp.setImageModelId(series.getImageModelId());
+        resp.setImageAdapterKey(series.getImageAdapterKey());
+        if (series.getImageModelId() != null) {
+            resp.setImageModelName(modelNames.get(series.getImageModelId()));
+        }
+        resp.setVideoModelId(series.getVideoModelId());
+        resp.setVideoAdapterKey(series.getVideoAdapterKey());
+        if (series.getVideoModelId() != null) {
+            resp.setVideoModelName(modelNames.get(series.getVideoModelId()));
         }
         resp.setEpisodeCount(ordered.size());
         resp.setCreatedAt(series.getCreatedAt());
@@ -190,14 +307,78 @@ public class DramaService {
         resp.setEpisodeNumber(episode.getEpisodeNumber());
         resp.setName(episode.getName());
         resp.setStatus(episode.getStatus());
+        resp.setEngine(StringUtils.hasText(episode.getEngine())
+                ? episode.getEngine()
+                : DramaContract.ENGINE_PENDING);
         resp.setInheritedFromEpisodeId(episode.getInheritedFromEpisodeId());
         resp.setCreatedAt(episode.getCreatedAt());
         resp.setUpdatedAt(episode.getUpdatedAt());
         if (withBody) {
             resp.setSourceText(episode.getSourceText());
             resp.setScript(episode.getScript());
+            boolean serviceAvailable = textService.getIfAvailable() != null;
+            resp.setTextServiceAvailable(serviceAvailable);
+            resp.setCanGenerate(serviceAvailable && textChatGateway.llmAvailable(episode.getSeriesId()));
         }
         return resp;
+    }
+
+    private void applyParseIfPresent(DramaEpisode episode, String raw) {
+        DramaTextService svc = textService.getIfAvailable();
+        if (svc == null) {
+            episode.setEngine(DramaContract.ENGINE_PENDING);
+            return;
+        }
+        ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
+        episode.setScript(ScriptDocs.toMap(doc));
+        episode.setEngine(DramaContract.normalizeEngine(svc.engine()));
+    }
+
+    private DramaTextService requireTextService() {
+        DramaTextService svc = textService.getIfAvailable();
+        if (svc == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
+        }
+        return svc;
+    }
+
+    /**
+     * 锁定后再改剧本：本集回到待确认，资产/章节/分镜标已过期。
+     */
+    private void onScriptMutated(DramaEpisode episode) {
+        String status = episode.getStatus();
+        if (DramaContract.STATUS_LOCKED.equals(status) || DramaContract.STATUS_EXPIRED.equals(status)) {
+            episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+            expireDownstream(episode.getId());
+        }
+    }
+
+    /**
+     * 把本集下游资产、章节、分镜标为已过期；分镜 compiled_prompt 作废。
+     */
+    void expireDownstream(Long episodeId) {
+        if (episodeId == null) {
+            return;
+        }
+        List<DramaAsset> assets = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getEpisodeId, episodeId));
+        if (assets != null) {
+            for (DramaAsset asset : assets) {
+                if (DramaContract.STATUS_EXPIRED.equals(asset.getStatus())) {
+                    continue;
+                }
+                asset.setStatus(DramaContract.STATUS_EXPIRED);
+                assetMapper.updateById(asset);
+            }
+        }
+        storyboardService.expireByEpisode(episodeId);
+    }
+
+    private void touchSeries(Long seriesId) {
+        DramaSeries series = seriesMapper.selectById(seriesId);
+        if (series != null) {
+            seriesMapper.updateById(series);
+        }
     }
 
     static String normalizeAspectRatio(String value) {
@@ -242,6 +423,30 @@ public class DramaService {
         }).toList();
     }
 
+    public List<DramaImageModelResp> listEnabledImageModels() {
+        UserContext.requireUserId();
+        return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
+                        .eq(AiModel::getCategory, ModelCategory.IMAGE)
+                        .eq(AiModel::getEnabled, true)
+                        .orderByAsc(AiModel::getId))
+                .stream()
+                .filter(model -> GenerateRequests.supportsMode(
+                        model.getCapabilities(), ModelCategory.IMAGE, GenerateMode.T2I))
+                .map(DramaService::toImageModelResp)
+                .toList();
+    }
+
+    @Transactional
+    public DramaSeriesResp bindImageModel(Long seriesId, DramaImageModelBindReq req) {
+        DramaSeries series = requireSeries(seriesId);
+        AiModel model = requireEnabledImageModel(req.getImageModelId());
+        series.setImageModelId(model.getId());
+        series.setImageAdapterKey(AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
+        seriesMapper.updateById(series);
+        return getSeries(series.getId());
+    }
+
     public List<DramaTextModelResp> listEnabledTextModels() {
         UserContext.requireUserId();
         return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
@@ -277,11 +482,20 @@ public class DramaService {
         return model;
     }
 
-    private static List<Long> idsOf(Long id) {
-        return id == null ? List.of() : List.of(id);
+    private static List<Long> idsOf(Long... ids) {
+        if (ids == null || ids.length == 0) {
+            return List.of();
+        }
+        List<Long> values = new java.util.ArrayList<>();
+        for (Long id : ids) {
+            if (id != null) {
+                values.add(id);
+            }
+        }
+        return values;
     }
 
-    private Map<Long, String> textModelNames(Collection<Long> ids) {
+    private Map<Long, String> modelNames(Collection<Long> ids) {
         Set<Long> wanted = new HashSet<>();
         for (Long id : ids) {
             if (id != null) {
@@ -296,6 +510,29 @@ public class DramaService {
             names.put(model.getId(), model.getName());
         }
         return names;
+    }
+
+    private static DramaImageModelResp toImageModelResp(AiModel model) {
+        DramaImageModelResp resp = new DramaImageModelResp();
+        resp.setId(model.getId());
+        resp.setName(model.getName());
+        resp.setProvider(model.getProvider());
+        resp.setAdapterKey(model.getAdapterKey());
+        return resp;
+    }
+
+    private AiModel requireEnabledImageModel(Long id) {
+        AiModel model = aiModelMapper.selectById(id);
+        if (model == null || !ModelCategory.IMAGE.equalsIgnoreCase(model.getCategory())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "图像模型不存在");
+        }
+        if (!Boolean.TRUE.equals(model.getEnabled())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选图像模型已停用");
+        }
+        if (!GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.IMAGE, GenerateMode.T2I)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选图像模型不支持文生图");
+        }
+        return model;
     }
 
     private static DramaTextModelResp toTextModelResp(AiModel model) {

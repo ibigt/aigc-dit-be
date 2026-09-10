@@ -5,12 +5,16 @@ import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
+import cn.aigc.dit.server.drama.text.DramaTextService;
+import cn.aigc.dit.server.drama.text.TextChatGateway;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +24,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 
@@ -37,13 +42,21 @@ class DramaServiceTest {
     @Mock
     private DramaEpisodeMapper episodeMapper;
     @Mock
+    private DramaAssetMapper assetMapper;
+    @Mock
     private AiModelMapper aiModelMapper;
+    @Mock
+    private ObjectProvider<DramaTextService> textService;
+    @Mock
+    private TextChatGateway textChatGateway;
+    @Mock
+    private DramaStoryboardService storyboardService;
 
     private DramaService service;
 
     @BeforeEach
     void setUp() {
-        service = new DramaService(seriesMapper, episodeMapper, aiModelMapper);
+        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(aiModelMapper.selectCount(any())).thenReturn(0L);
     }
@@ -203,5 +216,40 @@ class DramaServiceTest {
         req.setName(" 开场 ");
         assertEquals("开场", service.updateEpisode(31L, req).getName());
         verify(episodeMapper).updateById(episode);
+    }
+
+    @Test
+    void bindImageModelWritesIdAndAdapterKey() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setDefaultResolution("720P");
+        existing.setDefaultDurationSec(5);
+        existing.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        AiModel image = new AiModel();
+        image.setId(12L);
+        image.setName("GPT Image 2");
+        image.setCategory("image");
+        image.setEnabled(true);
+        image.setAdapterKey("gpt-image-2");
+        image.setProvider("RunningHub");
+        image.setModelKey("gpt-image-2");
+        image.setCapabilities(List.of("image", "t2i"));
+        when(aiModelMapper.selectById(12L)).thenReturn(image);
+        when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(image));
+
+        DramaImageModelBindReq req = new DramaImageModelBindReq();
+        req.setImageModelId(12L);
+        DramaSeriesResp resp = service.bindImageModel(21L, req);
+        assertEquals(12L, existing.getImageModelId());
+        assertEquals("gpt-image-2", existing.getImageAdapterKey());
+        assertEquals("GPT Image 2", resp.getImageModelName());
+        verify(seriesMapper).updateById(existing);
     }
 }

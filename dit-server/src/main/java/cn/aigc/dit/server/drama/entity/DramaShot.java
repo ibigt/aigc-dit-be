@@ -1,0 +1,63 @@
+package cn.aigc.dit.server.drama.entity;
+
+import cn.aigc.dit.server.mybatis.JsonLongListTypeHandler;
+import cn.aigc.dit.server.mybatis.JsonStringListTypeHandler;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Data
+@TableName(value = "drama_shot", autoResultMap = true)
+public class DramaShot {
+
+    @TableId(type = IdType.AUTO)
+    private Long id;
+
+    private Long seriesId;
+    private Long episodeId;
+    private Long chapterId;
+    private Long userId;
+    private Integer shotIndex;
+    private String title;
+    private Integer durationSec;
+    private String narrativeGoal;
+    private String scene;
+    private String dialogue;
+    private String continuityIn;
+    private String continuityOut;
+
+    @TableField(typeHandler = JsonLongListTypeHandler.class)
+    private List<Long> referenceAssetIds = new ArrayList<>();
+
+    @TableField(typeHandler = JsonStringListTypeHandler.class)
+    private List<String> characterNames = new ArrayList<>();
+
+    @TableField(typeHandler = JsonStringListTypeHandler.class)
+    private List<String> propNames = new ArrayList<>();
+
+    private String locationName;
+    private Integer castCount;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String compiledPrompt;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String compiledFingerprint;
+    private String status;
+    private Long genTaskId;
+    private String videoKey;
+
+    @TableField(fill = FieldFill.INSERT)
+    private OffsetDateTime createdAt;
+
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private OffsetDateTime updatedAt;
+}

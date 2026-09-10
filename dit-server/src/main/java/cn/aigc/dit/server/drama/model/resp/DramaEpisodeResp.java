@@ -15,8 +15,13 @@ public class DramaEpisodeResp {
     private Integer episodeNumber;
     private String name;
     private String status;
+    private String engine;
     private String sourceText;
     private Map<String, Object> script;
+    @Schema(description = "乙的 DramaTextService 是否已合入")
+    private Boolean textServiceAvailable;
+    @Schema(description = "是否可点「生成 AI 剧本」（服务已合入且项目文本模型可用）")
+    private Boolean canGenerate;
     private Long inheritedFromEpisodeId;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
