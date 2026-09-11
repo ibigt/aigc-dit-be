@@ -5,6 +5,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.model.resp.CommonResult;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -55,6 +56,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AsyncRequestNotUsableException.class)
     public void handleClientGone(AsyncRequestNotUsableException e) {
         log.warn("Client aborted before response was written: {}", e.getMessage());
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<CommonResult<Void>> handleIntegrity(DataIntegrityViolationException e) {
+        log.warn("Data integrity: {}", e.getMostSpecificCause() == null ? e.getMessage() : e.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest()
+                .body(CommonResult.failed(ErrorCode.BAD_REQUEST, "仍有数据引用该记录，无法删除"));
     }
 
     @ExceptionHandler(Exception.class)

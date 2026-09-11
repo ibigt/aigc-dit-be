@@ -5,6 +5,8 @@ import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.mapper.CreationMapper;
+import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
 import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,11 +35,18 @@ class AdminModelServiceTest {
     @Mock
     private cn.aigc.dit.server.drama.text.OpenAiCompatChatClient chatClient;
 
+    @Mock
+    private cn.aigc.dit.server.drama.mapper.DramaSeriesMapper seriesMapper;
+    @Mock
+    private GenTaskMapper genTaskMapper;
+    @Mock
+    private CreationMapper creationMapper;
+
     private AdminModelService service;
 
     @BeforeEach
     void setUp() {
-        service = new AdminModelService(encryptor, chatClient);
+        service = new AdminModelService(encryptor, chatClient, seriesMapper, genTaskMapper, creationMapper);
         ReflectionTestUtils.setField(service, "baseMapper", modelMapper);
     }
 
@@ -72,6 +81,23 @@ class AdminModelServiceTest {
         assertEquals("gpt-image-2", resp.getAdapterKey());
         assertEquals("RunningHub", resp.getProvider());
 
+    }
+
+    @Test
+    void deleteUnbindsSeriesAndHistoryThenRemovesModel() {
+        AiModel model = new AiModel();
+        model.setId(11L);
+        when(modelMapper.selectById(11L)).thenReturn(model);
+        when(seriesMapper.update(org.mockito.ArgumentMatchers.isNull(), any())).thenReturn(1);
+        when(genTaskMapper.update(org.mockito.ArgumentMatchers.isNull(), any())).thenReturn(0);
+        when(creationMapper.update(org.mockito.ArgumentMatchers.isNull(), any())).thenReturn(0);
+        when(modelMapper.deleteById(11L)).thenReturn(1);
+
+        service.delete(11L);
+
+        org.mockito.Mockito.verify(seriesMapper, org.mockito.Mockito.times(3))
+                .update(org.mockito.ArgumentMatchers.isNull(), any());
+        org.mockito.Mockito.verify(modelMapper).deleteById(11L);
     }
 
     @Test

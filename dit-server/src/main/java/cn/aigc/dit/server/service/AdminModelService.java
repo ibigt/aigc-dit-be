@@ -6,17 +6,24 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
+import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.text.OpenAiCompatChatClient;
 import cn.aigc.dit.server.drama.text.TextAdapterCatalog;
 import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.Creation;
+import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.mapper.CreationMapper;
+import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
 import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import cn.aigc.dit.server.model.resp.AdminModelResp;
 import cn.aigc.dit.server.model.resp.AdminModelTestConnectionResp;
 import cn.aigc.dit.server.model.resp.ModelPublicResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -34,6 +41,9 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
 
     private final AesGcmEncryptor encryptor;
     private final OpenAiCompatChatClient chatClient;
+    private final DramaSeriesMapper seriesMapper;
+    private final GenTaskMapper genTaskMapper;
+    private final CreationMapper creationMapper;
 
     public List<AdminModelResp> listAdmin(String keyword, String category, String provider) {
         LambdaQueryWrapper<AiModel> wrapper = new LambdaQueryWrapper<AiModel>()
@@ -88,7 +98,32 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
     @Transactional
     public void delete(Long id) {
         requireModel(id);
-        removeById(id);
+        unbindReferences(id);
+        if (!removeById(id)) {
+            throw new BizException(ErrorCode.NOT_FOUND, "模型不存在");
+        }
+    }
+
+    /**
+     * {@code drama_series}/{@code gen_task}/{@code creation} 都外键指向 {@code ai_model}，
+     * 不先置空的话删除会被数据库拦住，管理端表现为点击删除无效果。
+     */
+    private void unbindReferences(Long modelId) {
+        seriesMapper.update(null, new UpdateWrapper<DramaSeries>()
+                .eq("text_model_id", modelId)
+                .set("text_model_id", null));
+        seriesMapper.update(null, new UpdateWrapper<DramaSeries>()
+                .eq("image_model_id", modelId)
+                .set("image_model_id", null));
+        seriesMapper.update(null, new UpdateWrapper<DramaSeries>()
+                .eq("video_model_id", modelId)
+                .set("video_model_id", null));
+        genTaskMapper.update(null, new UpdateWrapper<GenTask>()
+                .eq("model_id", modelId)
+                .set("model_id", null));
+        creationMapper.update(null, new UpdateWrapper<Creation>()
+                .eq("model_id", modelId)
+                .set("model_id", null));
     }
 
     public AdminModelTestConnectionResp testConnection(AdminModelTestConnectionReq req) {
