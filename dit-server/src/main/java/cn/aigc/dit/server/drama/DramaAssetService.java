@@ -154,6 +154,8 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "生图进行中，请稍后再删");
         }
         assetMapper.deleteById(asset.getId());
+        // 删除资产后同步解除分镜参考绑定，保留分镜文字中的道具描述。
+        storyboardService.detachAssetReference(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
     }
 

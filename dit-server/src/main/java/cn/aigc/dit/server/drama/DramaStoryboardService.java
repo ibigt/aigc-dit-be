@@ -319,6 +319,30 @@ public class DramaStoryboardService {
         }
     }
 
+    /**
+     * 资产删除后只解除分镜参考图绑定，并重新编译提示词，不让整个分镜过期。
+     * 分镜中的角色、场景和道具文字仍然保留，后续可继续依靠文字描述生成。
+     */
+    @Transactional
+    public void detachAssetReference(Long episodeId, Long assetId) {
+        if (episodeId == null || assetId == null) {
+            return;
+        }
+        Map<Long, DramaAsset> assets = assetsById(episodeId);
+        String prefix = stylePrefix(requireEpisode(episodeId).getSeriesId());
+        for (DramaShot shot : listShots(episodeId)) {
+            List<Long> references = idsOf(shot.getReferenceAssetIds());
+            if (!references.contains(assetId)) {
+                continue;
+            }
+            references.removeIf(id -> Objects.equals(id, assetId));
+            shot.setReferenceAssetIds(references);
+            // 只使用删除后仍存在的显式引用，避免自动绑定再次引入不必要的参考图。
+            rebindAndCompile(shot, assets, prefix, false, false);
+            shotMapper.updateById(shot);
+        }
+    }
+
     private void replaceStoryboard(DramaEpisode episode, ScriptDoc doc, boolean useLlm) {
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
