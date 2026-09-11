@@ -122,6 +122,7 @@ public class DramaService {
     public DramaSeriesResp updateSeries(Long id, DramaSeriesUpdateReq req) {
         DramaSeries series = requireSeries(id);
         String previousStyle = series.getStyleKey();
+        String previousRatio = series.getAspectRatio();
         if (StringUtils.hasText(req.getName())) {
             series.setName(req.getName().trim());
         }
@@ -144,7 +145,9 @@ public class DramaService {
             series.setTextModelId(requireEnabledTextModel(req.getTextModelId()).getId());
         }
         seriesMapper.updateById(series);
-        if (req.getStyleKey() != null && !java.util.Objects.equals(previousStyle, series.getStyleKey())) {
+        boolean styleChanged = req.getStyleKey() != null && !java.util.Objects.equals(previousStyle, series.getStyleKey());
+        boolean ratioChanged = req.getAspectRatio() != null && !java.util.Objects.equals(previousRatio, series.getAspectRatio());
+        if (styleChanged || ratioChanged) {
             storyboardService.expireCompiledBySeries(series.getId());
         }
         return getSeries(series.getId());

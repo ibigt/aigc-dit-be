@@ -31,6 +31,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -148,6 +149,30 @@ class DramaServiceTest {
         assertEquals(3, existing.getPlannedEpisodeCount());
         assertEquals("二次元漫画风", resp.getStyleName());
         verify(seriesMapper).updateById(existing);
+        verify(storyboardService, never()).expireCompiledBySeries(21L);
+    }
+
+    @Test
+    void updateSeriesExpiresCompiledWhenAspectRatioChanges() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setDefaultResolution("720P");
+        existing.setDefaultDurationSec(5);
+        existing.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+
+        DramaSeriesUpdateReq req = new DramaSeriesUpdateReq();
+        req.setAspectRatio("9:16");
+        service.updateSeries(21L, req);
+
+        assertEquals("9:16", existing.getAspectRatio());
+        verify(storyboardService).expireCompiledBySeries(21L);
     }
 
     @Test

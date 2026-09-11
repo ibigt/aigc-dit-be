@@ -10,7 +10,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * V1 已执行过的库不会重跑脚本。启动时幂等补 adapter_key 与漫剧表，避免 checksum 变更导致无法启动。
+ * V1 已执行过的库不会重跑脚本。启动时幂等补 adapter_key 与短剧表，避免 checksum 变更导致无法启动。
  */
 @Configuration
 public class FlywayConfig {
@@ -71,12 +71,12 @@ public class FlywayConfig {
                         """);
                 ensureDramaTables(statement);
             } catch (SQLException e) {
-                throw new IllegalStateException("补齐 ai_model.adapter_key / 漫剧表失败", e);
+                throw new IllegalStateException("补齐 ai_model.adapter_key / 短剧表失败", e);
             }
         };
     }
 
-    /** 已跑过旧 V1 的库不会重跑迁移，启动时幂等建漫剧表。 */
+    /** 已跑过旧 V1 的库不会重跑迁移，启动时幂等建短剧表（含 asset / chapter / shot）。 */
     static void ensureDramaTables(Statement statement) throws SQLException {
         statement.execute("""
                 CREATE TABLE IF NOT EXISTS drama_series (
@@ -90,6 +90,10 @@ public class FlywayConfig {
                     default_duration_sec    INTEGER      NOT NULL DEFAULT 5,
                     planned_episode_count   INTEGER      NOT NULL DEFAULT 1,
                     text_model_id           BIGINT       REFERENCES ai_model (id),
+                    image_model_id          BIGINT       REFERENCES ai_model (id),
+                    image_adapter_key       VARCHAR(64),
+                    video_model_id          BIGINT       REFERENCES ai_model (id),
+                    video_adapter_key       VARCHAR(64),
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
@@ -168,6 +172,136 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.script
                 IS '分场剧本文档 JSON（ScriptDoc）；阶段 3 由 DramaTextService 写入，乙未合入时可空'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS image_model_id BIGINT REFERENCES ai_model (id)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS image_adapter_key VARCHAR(64)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS video_model_id BIGINT REFERENCES ai_model (id)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS video_adapter_key VARCHAR(64)
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.image_model_id
+                IS '资产页全局图像模型（ai_model.id，category=image）；空则不可 t2i，仍可上传'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.image_adapter_key
+                IS '绑定图像模型当时的 adapter_key（不要只存 provider）'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.video_model_id
+                IS '出片页全局视频模型（ai_model.id，category=video）；阶段 6 再绑'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.video_adapter_key
+                IS '绑定视频模型当时的 adapter_key'
+                """);
+        statement.execute("""
+                CREATE TABLE IF NOT EXISTS drama_asset (
+                    id                      BIGSERIAL PRIMARY KEY,
+                    series_id               BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+                    episode_id              BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+                    user_id                 BIGINT       NOT NULL REFERENCES sys_user (id),
+                    name                    VARCHAR(128) NOT NULL,
+                    type                    VARCHAR(16)  NOT NULL,
+                    state_tag               VARCHAR(64)  NOT NULL DEFAULT 'base',
+                    description             TEXT,
+                    identity_invariants     TEXT,
+                    image_prompt            TEXT,
+                    voice_lock              VARCHAR(256),
+                    must_split              BOOLEAN      NOT NULL DEFAULT FALSE,
+                    needs_human             BOOLEAN      NOT NULL DEFAULT FALSE,
+                    status                  VARCHAR(16)  NOT NULL DEFAULT '未开始',
+                    identity_version        INTEGER      NOT NULL DEFAULT 0,
+                    image_storage_key       VARCHAR(512),
+                    image_asset_id          BIGINT       REFERENCES asset (id) ON DELETE SET NULL,
+                    gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
+                    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    CONSTRAINT ck_drama_asset_type CHECK (type IN ('角色', '场景', '道具')),
+                    CONSTRAINT ck_drama_asset_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
+                    CONSTRAINT ck_drama_asset_identity_version CHECK (identity_version >= 0)
+                )
+                """);
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_asset_episode ON drama_asset (episode_id, type, id)");
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_asset_series ON drama_asset (series_id, updated_at DESC)");
+        statement.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_drama_asset_episode_name_state
+                ON drama_asset (episode_id, type, name, state_tag)
+                """);
+        statement.execute("""
+                COMMENT ON TABLE drama_asset IS '短剧资产注册表：描述符 + 参考图 + 身份不变量 + 版本号；未锁定不能进分镜参考'
+                """);
+        statement.execute("""
+                CREATE TABLE IF NOT EXISTS drama_chapter (
+                    id              BIGSERIAL PRIMARY KEY,
+                    series_id       BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+                    episode_id      BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+                    user_id         BIGINT       NOT NULL REFERENCES sys_user (id),
+                    chapter_index   INTEGER      NOT NULL,
+                    name            VARCHAR(128) NOT NULL,
+                    scene_index     INTEGER      NOT NULL,
+                    body            TEXT,
+                    status          VARCHAR(16)  NOT NULL DEFAULT '待确认',
+                    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_drama_chapter_episode_index UNIQUE (episode_id, chapter_index),
+                    CONSTRAINT ck_drama_chapter_index CHECK (chapter_index >= 1),
+                    CONSTRAINT ck_drama_chapter_scene CHECK (scene_index >= 1),
+                    CONSTRAINT ck_drama_chapter_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+                )
+                """);
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_chapter_episode ON drama_chapter (episode_id, chapter_index)");
+        statement.execute("""
+                COMMENT ON TABLE drama_chapter IS '短剧章节（按场拆章）；正文来自分场剧本'
+                """);
+        statement.execute("""
+                CREATE TABLE IF NOT EXISTS drama_shot (
+                    id                      BIGSERIAL PRIMARY KEY,
+                    series_id               BIGINT       NOT NULL REFERENCES drama_series (id) ON DELETE CASCADE,
+                    episode_id              BIGINT       NOT NULL REFERENCES drama_episode (id) ON DELETE CASCADE,
+                    chapter_id              BIGINT       NOT NULL REFERENCES drama_chapter (id) ON DELETE CASCADE,
+                    user_id                 BIGINT       NOT NULL REFERENCES sys_user (id),
+                    shot_index              INTEGER      NOT NULL,
+                    title                   VARCHAR(128),
+                    duration_sec            INTEGER      NOT NULL DEFAULT 5,
+                    narrative_goal          TEXT,
+                    scene                   TEXT,
+                    dialogue                TEXT,
+                    continuity_in           VARCHAR(256),
+                    continuity_out          VARCHAR(256),
+                    reference_asset_ids     JSONB        NOT NULL DEFAULT '[]'::jsonb,
+                    character_names         JSONB        NOT NULL DEFAULT '[]'::jsonb,
+                    prop_names              JSONB        NOT NULL DEFAULT '[]'::jsonb,
+                    location_name           VARCHAR(128),
+                    cast_count              INTEGER      NOT NULL DEFAULT 0,
+                    compiled_prompt         TEXT,
+                    compiled_fingerprint    VARCHAR(128),
+                    status                  VARCHAR(16)  NOT NULL DEFAULT '待确认',
+                    gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
+                    video_key               VARCHAR(512),
+                    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
+                    CONSTRAINT ck_drama_shot_index CHECK (shot_index >= 1),
+                    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec IN (5, 10, 15)),
+                    CONSTRAINT ck_drama_shot_cast CHECK (cast_count >= 0),
+                    CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+                )
+                """);
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_shot_chapter ON drama_shot (chapter_id, shot_index)");
+        statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_shot_episode ON drama_shot (episode_id, shot_index)");
+        statement.execute("""
+                COMMENT ON TABLE drama_shot IS '短剧分镜；视频提示词由编译器注入 Style Prefix / 身份不变量 / Picture 序号，用户不手写长 prompt'
                 """);
     }
 }

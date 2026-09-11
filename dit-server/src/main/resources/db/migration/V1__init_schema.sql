@@ -425,7 +425,9 @@ COMMENT ON COLUMN drama_episode.inherited_from_episode_id IS '继承来源集ID�
 COMMENT ON COLUMN drama_episode.created_at IS '创建时间';
 COMMENT ON COLUMN drama_episode.updated_at IS '更新时间';
 
--- 已有库 CREATE IF NOT EXISTS 不会加列，这里幂等补齐
+-- 已有库 CREATE IF NOT EXISTS 不会加列，这里幂等补齐。
+-- 更旧的已执行 V1 不会重跑本脚本；启动时由 FlywayConfig.ensureDramaTables 再幂等建
+-- drama_asset / drama_chapter / drama_shot，并补 image_model_id / video_model_id。
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS text_model_id BIGINT REFERENCES ai_model (id);
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_model_id BIGINT REFERENCES ai_model (id);
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_adapter_key VARCHAR(64);
