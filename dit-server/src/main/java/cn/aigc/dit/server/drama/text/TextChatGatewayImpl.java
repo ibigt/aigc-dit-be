@@ -68,12 +68,16 @@ public class TextChatGatewayImpl implements TextChatGateway {
         return chatClient.chat(resolved.endpoint(), apiKey, resolved.chatModel(), req);
     }
 
-    static boolean usable(AiModel model) {
-        return model != null
-                && Boolean.TRUE.equals(model.getEnabled())
-                && ModelCategory.TEXT.equalsIgnoreCase(model.getCategory())
-                && StringUtils.hasText(model.getEndpoint())
-                && TextAdapterCatalog.find(model.getAdapterKey()) != null;
+    public static boolean usable(AiModel model) {
+        if (model == null
+                || !Boolean.TRUE.equals(model.getEnabled())
+                || !ModelCategory.TEXT.equalsIgnoreCase(model.getCategory())
+                || !StringUtils.hasText(model.getEndpoint())) {
+            return false;
+        }
+        // 允许 adapter_key 为空：按来源/模型名推断 agnes-text / openai-compat。
+        // 下拉只按 category+enabled 列出，过严认 key 会把已绑定的自定义模型判成「未绑定」。
+        return TextAdapterCatalog.resolveKey(model.getAdapterKey(), model.getProvider(), model.getModelKey()) != null;
     }
 
     static ResolvedTextModel toResolved(AiModel model) {

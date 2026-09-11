@@ -90,6 +90,13 @@ public class DramaController {
         return CommonResult.success(dramaService.updateSeries(id, req));
     }
 
+    @Operation(summary = "删除系列（级联剧集、资产、章节、分镜）")
+    @DeleteMapping("/series/{id}")
+    public CommonResult<Void> deleteSeries(@PathVariable Long id) {
+        dramaService.deleteSeries(id);
+        return CommonResult.success();
+    }
+
     @Operation(summary = "剧集详情")
     @GetMapping("/episodes/{id}")
     public CommonResult<DramaEpisodeResp> getEpisode(@PathVariable Long id) {

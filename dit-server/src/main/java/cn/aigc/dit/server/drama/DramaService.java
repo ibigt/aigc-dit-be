@@ -28,6 +28,7 @@ import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.drama.text.TextChatGateway;
+import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -147,6 +148,12 @@ public class DramaService {
             storyboardService.expireCompiledBySeries(series.getId());
         }
         return getSeries(series.getId());
+    }
+
+    @Transactional
+    public void deleteSeries(Long id) {
+        DramaSeries series = requireSeries(id);
+        seriesMapper.deleteById(series.getId());
     }
 
     public DramaEpisodeResp getEpisode(Long id) {
@@ -278,6 +285,7 @@ public class DramaService {
         if (series.getTextModelId() != null) {
             resp.setTextModelName(modelNames.get(series.getTextModelId()));
         }
+        resp.setTextModelUsable(textChatGateway.llmAvailable(series.getId()));
         resp.setImageModelId(series.getImageModelId());
         resp.setImageAdapterKey(series.getImageAdapterKey());
         if (series.getImageModelId() != null) {
@@ -478,6 +486,9 @@ public class DramaService {
         }
         if (!Boolean.TRUE.equals(model.getEnabled())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "所选文本模型已停用");
+        }
+        if (!TextChatGatewayImpl.usable(model)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选文本模型缺少 Base URL 或无法识别适配协议，请到管理端补全后重试");
         }
         return model;
     }

@@ -166,6 +166,10 @@ class DramaServiceTest {
         text.setName("Agnes 对话");
         text.setCategory("text");
         text.setEnabled(true);
+        text.setAdapterKey("agnes-text");
+        text.setProvider("官方API");
+        text.setEndpoint("https://api.agnes-ai.cn/v1");
+        text.setModelKey("agnes-2.5-flash");
         when(aiModelMapper.selectCount(any())).thenReturn(1L);
         when(aiModelMapper.selectById(88L)).thenReturn(text);
         when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(text));
@@ -189,6 +193,26 @@ class DramaServiceTest {
         ArgumentCaptor<DramaSeries> seriesCaptor = ArgumentCaptor.forClass(DramaSeries.class);
         verify(seriesMapper).insert(seriesCaptor.capture());
         assertEquals(88L, seriesCaptor.getValue().getTextModelId());
+    }
+
+    @Test
+    void deleteSeriesRemovesOwnedProject() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        service.deleteSeries(21L);
+        verify(seriesMapper).deleteById(21L);
+    }
+
+    @Test
+    void deleteSeriesHidesOtherUsersProjects() {
+        DramaSeries foreign = new DramaSeries();
+        foreign.setId(9L);
+        foreign.setUserId(99L);
+        when(seriesMapper.selectById(9L)).thenReturn(foreign);
+        BizException error = assertThrows(BizException.class, () -> service.deleteSeries(9L));
+        assertEquals("漫剧项目不存在", error.getMessage());
     }
 
     @Test

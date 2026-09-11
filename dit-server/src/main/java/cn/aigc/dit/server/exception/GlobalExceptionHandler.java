@@ -13,6 +13,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 import java.util.stream.Collectors;
 
@@ -51,11 +52,31 @@ public class GlobalExceptionHandler {
                 .body(CommonResult.failed(ErrorCode.FORBIDDEN, "无权限"));
     }
 
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public void handleClientGone(AsyncRequestNotUsableException e) {
+        log.warn("Client aborted before response was written: {}", e.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<CommonResult<Void>> handle(Exception e) {
+        if (isBrokenPipe(e)) {
+            log.warn("Client aborted before response was written: {}", e.getMessage());
+            return null;
+        }
         log.error("Unhandled error", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(CommonResult.failed(ErrorCode.INTERNAL, "服务器内部错误"));
+    }
+
+    private static boolean isBrokenPipe(Throwable e) {
+        for (Throwable current = e; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (current instanceof java.io.IOException && message != null
+                    && (message.contains("Broken pipe") || message.contains("Connection reset"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String formatField(FieldError error) {

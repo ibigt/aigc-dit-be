@@ -92,6 +92,23 @@ class TextChatGatewayImplTest {
     }
 
     @Test
+    void resolveInfersCustomAdapterWhenKeyBlank() {
+        AiModel model = textModel(11L, "deepseek v4 flash", true);
+        model.setAdapterKey("");
+        model.setProvider(TextAdapterCatalog.PROVIDER_CUSTOM);
+        model.setEndpoint("https://api.deepseek.com/v1");
+        model.setModelKey("deepseek-v4-flash");
+        when(seriesMapper.selectById(21L)).thenReturn(series(21L, 11L));
+        when(aiModelMapper.selectById(11L)).thenReturn(model);
+
+        Optional<ResolvedTextModel> resolved = gateway.resolve(21L);
+        assertTrue(resolved.isPresent());
+        assertTrue(gateway.llmAvailable(21L));
+        assertEquals(TextAdapterCatalog.OPENAI_COMPAT,
+                TextAdapterCatalog.resolveKey(model.getAdapterKey(), model.getProvider(), model.getModelKey()));
+    }
+
+    @Test
     void resolveAndChatAllowMissingApiKey() {
         AiModel model = textModel(11L, "本地网关", true);
         model.setApiKeyEnc(null);

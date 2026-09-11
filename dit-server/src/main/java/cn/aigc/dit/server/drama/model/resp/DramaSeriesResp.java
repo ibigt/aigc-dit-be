@@ -21,6 +21,8 @@ public class DramaSeriesResp {
     private Integer plannedEpisodeCount;
     private Long textModelId;
     private String textModelName;
+    @Schema(description = "绑定的文本模型当前是否可用于 LLM（有绑定且 Gateway 判定可用）")
+    private Boolean textModelUsable;
     private Long imageModelId;
     private String imageModelName;
     private String imageAdapterKey;
