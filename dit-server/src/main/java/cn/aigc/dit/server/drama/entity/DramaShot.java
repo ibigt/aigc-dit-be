@@ -55,6 +55,9 @@ public class DramaShot {
     private Long genTaskId;
     private String videoKey;
 
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String videoPosterKey;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

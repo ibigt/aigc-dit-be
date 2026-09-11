@@ -39,6 +39,10 @@ public class DramaShotResp {
     private Long genTaskId;
     private String videoKey;
     private String videoUrl;
+    @Schema(description = "成片首帧对象 key")
+    private String videoPosterKey;
+    @Schema(description = "成片首帧预览地址")
+    private String videoPosterUrl;
     @Schema(description = "是否正在出片")
     private Boolean generating;
     private String genTaskStatus;

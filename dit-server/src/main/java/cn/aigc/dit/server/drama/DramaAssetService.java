@@ -319,8 +319,14 @@ public class DramaAssetService {
         if (!StringUtils.hasText(current.getIdentityInvariants()) && StringUtils.hasText(draft.getIdentityInvariants())) {
             current.setIdentityInvariants(draft.getIdentityInvariants().trim());
         }
-        if (!StringUtils.hasText(current.getImagePrompt()) && StringUtils.hasText(draft.getImagePrompt())) {
+        if ((!StringUtils.hasText(current.getImagePrompt())
+                || DramaAssetDrafts.shouldReplaceImagePrompt(current.getImagePrompt()))
+                && StringUtils.hasText(draft.getImagePrompt())) {
             current.setImagePrompt(draft.getImagePrompt().trim());
+            if (!StringUtils.hasText(current.getDescription())
+                    || DramaAssetDrafts.shouldReplaceImagePrompt(current.getDescription())) {
+                current.setDescription(current.getImagePrompt());
+            }
         }
         if (!StringUtils.hasText(current.getVoiceLock()) && StringUtils.hasText(draft.getVoiceLock())) {
             current.setVoiceLock(draft.getVoiceLock().trim());
@@ -473,7 +479,7 @@ public class DramaAssetService {
 
     private AiModel requireBoundImageModel(DramaSeries series) {
         if (series.getImageModelId() == null) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先在资产页顶部选择图像模型");
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先选择图像模型");
         }
         AiModel model = aiModelMapper.selectById(series.getImageModelId());
         if (model == null || !ModelCategory.IMAGE.equalsIgnoreCase(model.getCategory())) {

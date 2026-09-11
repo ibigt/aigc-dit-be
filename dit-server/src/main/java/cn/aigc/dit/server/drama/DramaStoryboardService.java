@@ -796,6 +796,8 @@ public class DramaStoryboardService {
         resp.setGenTaskId(shot.getGenTaskId());
         resp.setVideoKey(shot.getVideoKey());
         resp.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
+        resp.setVideoPosterKey(shot.getVideoPosterKey());
+        resp.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
         if (task != null) {
             resp.setGenTaskStatus(task.getStatus());
             resp.setGenErrorMessage(task.getErrorMessage());
@@ -846,10 +848,18 @@ public class DramaStoryboardService {
             return;
         }
         String key = firstOutputKey(task);
-        if (!StringUtils.hasText(key) || key.equals(shot.getVideoKey())) {
+        String poster = blankToNull(task.getPosterKey());
+        boolean videoChanged = StringUtils.hasText(key) && !key.equals(shot.getVideoKey());
+        boolean posterChanged = StringUtils.hasText(poster) && !poster.equals(shot.getVideoPosterKey());
+        if (!videoChanged && !posterChanged) {
             return;
         }
-        shot.setVideoKey(key);
+        if (videoChanged) {
+            shot.setVideoKey(key);
+            shot.setVideoPosterKey(poster);
+        } else if (posterChanged) {
+            shot.setVideoPosterKey(poster);
+        }
         shotMapper.updateById(shot);
     }
 

@@ -56,12 +56,18 @@ public final class DramaAssetDrafts {
             if (draft == null || !StringUtils.hasText(draft.getName()) || !StringUtils.hasText(draft.getType())) {
                 continue;
             }
-            if (StringUtils.hasText(draft.getImagePrompt()) && !isLegacyOneLiner(draft.getImagePrompt())) {
-                continue;
-            }
             String stateTag = StringUtils.hasText(draft.getStateTag())
                     ? draft.getStateTag()
                     : inferStateTag(draft.getName());
+            if (!StringUtils.hasText(draft.getIdentityInvariants())) {
+                boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
+                draft.setIdentityInvariants(mustSplit
+                        ? "与主身份同一张脸和发型；禁止写成另一个人"
+                        : draft.getName().trim() + "的外貌、发型、服装和年龄必须保持一致");
+            }
+            if (StringUtils.hasText(draft.getImagePrompt()) && !shouldReplaceImagePrompt(draft.getImagePrompt())) {
+                continue;
+            }
             Context context = contexts.get(uniqueKey(draft.getType(), draft.getName().trim(), stateTag));
             draft.setImagePrompt(buildPrompt(draft.getType(), draft.getName().trim(), stateTag, style, context));
         }
@@ -124,25 +130,17 @@ public final class DramaAssetDrafts {
     private static String characterPrompt(String name, String stateTag, String styleLine, Context context) {
         StringBuilder text = new StringBuilder();
         text.append(name).append("角色设定图。");
-        text.append(name).append("，单独出场，写明年龄、身份和性格气质。");
-        text.append("发型、脸型、五官、肤色、身材比例等面部与外貌特征完整、可重复。");
-        text.append("服装款式、颜色、面料、纹理、配饰和鞋履细节清晰可见。");
+        text.append(name).append("单独站立，全身可见。");
+        text.append("发型、脸型、五官、肤色、身材比例完整、可重复。");
+        text.append("服装款式、颜色、面料、纹理、配饰和鞋履清晰。");
         if (DramaContract.STATE_TAG_DREAM.equals(stateTag)) {
             text.append("入梦/梦境独立状态，光影可抽离漂浮，仍是同一张脸和发型，禁止写成另一个人。");
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
-        } else {
-            text.append("符合剧情设定的核心动作和人物状态");
-            if (context != null && StringUtils.hasText(context.action())) {
-                text.append("：").append(clip(context.action(), 80));
-            }
-            text.append("。");
         }
-        if (context != null && StringUtils.hasText(context.heading())) {
-            text.append("首次出场：").append(clip(context.heading(), 40)).append("。");
-        }
-        text.append("正面、侧面、背面三视图；全身远景，完整展示人物与服装；角色设定表排版。");
-        text.append("纯白色干净背景。");
+        text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
+        text.append("浅灰或纯白干净背景。");
+        text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
         text.append(styleLine).append("。");
         text.append("同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。");
         return text.toString();
@@ -225,6 +223,18 @@ public final class DramaAssetDrafts {
             String key = uniqueKey(type, name, inferStateTag(name));
             contexts.putIfAbsent(key, bit);
         }
+    }
+
+    static boolean shouldReplaceImagePrompt(String prompt) {
+        if (!StringUtils.hasText(prompt)) {
+            return true;
+        }
+        if (isLegacyOneLiner(prompt)) {
+            return true;
+        }
+        return prompt.contains("角色设定表排版")
+                || prompt.contains("符合剧情设定的核心动作")
+                || prompt.contains("首次出场：");
     }
 
     private static boolean isLegacyOneLiner(String prompt) {

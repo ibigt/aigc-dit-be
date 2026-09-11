@@ -34,8 +34,12 @@ class DramaAssetDraftsTest {
         assertEquals(DramaContract.STATE_TAG_DREAM, dream.getStateTag());
         assertTrue(dream.getMustSplit());
         assertTrue(dream.getImagePrompt().contains("三视图"));
-        assertTrue(dream.getImagePrompt().contains("纯白色干净背景"));
+        assertTrue(dream.getImagePrompt().contains("浅灰或纯白干净背景"));
         assertTrue(dream.getImagePrompt().contains("二次元漫画风"));
+        assertTrue(dream.getImagePrompt().contains("不要剧情场面"));
+        assertTrue(!dream.getImagePrompt().contains("风扇"));
+        assertTrue(!dream.getImagePrompt().contains("首次出场"));
+        assertTrue(!dream.getImagePrompt().contains("角色设定表排版"));
         assertTrue(!dream.getImagePrompt().contains("写实电影质感"));
 
         AssetDraftList.AssetDraft office = list.getAssets().stream()
@@ -52,5 +56,19 @@ class DramaAssetDraftsTest {
                 .orElseThrow();
         assertTrue(watch.getImagePrompt().contains("道具设定图"));
         assertTrue(watch.getImagePrompt().contains("不要出现人物"));
+    }
+
+    @Test
+    void ensurePromptsFillsMissingPromptAndIdentity() {
+        AssetDraftList list = new AssetDraftList();
+        AssetDraftList.AssetDraft luobai = new AssetDraftList.AssetDraft();
+        luobai.setName("洛白");
+        luobai.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        list.setAssets(List.of(luobai));
+
+        DramaAssetDrafts.ensurePrompts(list, new ScriptDoc(), DramaStyles.require(DramaStyles.ANIME_COMIC));
+
+        assertTrue(luobai.getImagePrompt().contains("三视图"));
+        assertTrue(luobai.getIdentityInvariants().contains("洛白"));
     }
 }

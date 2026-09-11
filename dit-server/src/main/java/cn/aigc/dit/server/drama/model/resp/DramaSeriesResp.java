@@ -15,6 +15,10 @@ public class DramaSeriesResp {
     private String styleKey;
     private String styleName;
     private String styleCover;
+    @Schema(description = "主体页第一个已出图场景的对象 key；没有则为空")
+    private String coverKey;
+    @Schema(description = "项目列表封面，来自第一个已出图场景")
+    private String coverUrl;
     private String aspectRatio;
     private String defaultResolution;
     private Integer defaultDurationSec;

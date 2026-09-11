@@ -3,6 +3,7 @@ package cn.aigc.dit.server.drama;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
@@ -30,6 +31,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -61,6 +63,7 @@ class DramaServiceTest {
         service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(aiModelMapper.selectCount(any())).thenReturn(0L);
+        org.mockito.Mockito.lenient().when(assetMapper.selectList(any())).thenReturn(List.of());
     }
 
     @AfterEach
@@ -91,6 +94,7 @@ class DramaServiceTest {
         assertEquals(DramaStyles.ANIME_COMIC, resp.getStyleKey());
         assertEquals("二次元漫画风", resp.getStyleName());
         assertEquals("/drama/styles/anime-comic.jpg", resp.getStyleCover());
+        assertNull(resp.getCoverUrl());
         assertEquals("16:9", resp.getAspectRatio());
         assertEquals("720P", resp.getDefaultResolution());
         assertEquals(5, resp.getDefaultDurationSec());
@@ -219,6 +223,46 @@ class DramaServiceTest {
         ArgumentCaptor<DramaSeries> seriesCaptor = ArgumentCaptor.forClass(DramaSeries.class);
         verify(seriesMapper).insert(seriesCaptor.capture());
         assertEquals(88L, seriesCaptor.getValue().getTextModelId());
+    }
+
+    @Test
+    void listSeriesUsesFirstSceneImageAsCover() {
+        DramaSeries series = new DramaSeries();
+        series.setId(21L);
+        series.setUserId(7L);
+        series.setName("侦探社");
+        series.setStyleKey(DramaStyles.ANIME_COMIC);
+        series.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        series.setAspectRatio("16:9");
+        series.setDefaultResolution("720P");
+        series.setDefaultDurationSec(5);
+        series.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectList(any())).thenReturn(List.of(series));
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        DramaAsset character = new DramaAsset();
+        character.setId(1L);
+        character.setSeriesId(21L);
+        character.setEpisodeId(31L);
+        character.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        character.setImageStorageKey("users/7/drama/21/char.png");
+        DramaAsset firstScene = new DramaAsset();
+        firstScene.setId(2L);
+        firstScene.setSeriesId(21L);
+        firstScene.setEpisodeId(31L);
+        firstScene.setType(DramaContract.ASSET_TYPE_SCENE);
+        firstScene.setImageStorageKey("users/7/drama/21/office.png");
+        DramaAsset laterScene = new DramaAsset();
+        laterScene.setId(3L);
+        laterScene.setSeriesId(21L);
+        laterScene.setEpisodeId(31L);
+        laterScene.setType(DramaContract.ASSET_TYPE_SCENE);
+        laterScene.setImageStorageKey("users/7/drama/21/street.png");
+        when(assetMapper.selectList(any())).thenReturn(List.of(character, firstScene, laterScene));
+
+        List<DramaSeriesResp> list = service.listSeries();
+        assertEquals(1, list.size());
+        assertEquals("users/7/drama/21/office.png", list.get(0).getCoverKey());
+        assertEquals("/api/media?key=users%2F7%2Fdrama%2F21%2Foffice.png", list.get(0).getCoverUrl());
     }
 
     @Test

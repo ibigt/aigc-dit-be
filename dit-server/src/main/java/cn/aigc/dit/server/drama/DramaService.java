@@ -33,6 +33,7 @@ import cn.aigc.dit.server.drama.text.TextChatGateway;
 import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.media.MediaUrls;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -44,6 +45,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -79,8 +81,9 @@ public class DramaService {
                 .flatMap(item -> java.util.stream.Stream.of(
                         item.getTextModelId(), item.getImageModelId(), item.getVideoModelId()))
                 .toList());
+        Map<Long, String> sceneCovers = sceneCoverKeys(seriesIds);
         return series.stream()
-                .map(item -> toSeriesResp(item, bySeries.getOrDefault(item.getId(), List.of()), false, modelNames))
+                .map(item -> toSeriesResp(item, bySeries.getOrDefault(item.getId(), List.of()), false, modelNames, sceneCovers))
                 .toList();
     }
 
@@ -90,7 +93,8 @@ public class DramaService {
                 .eq(DramaEpisode::getSeriesId, series.getId())
                 .orderByAsc(DramaEpisode::getEpisodeNumber));
         return toSeriesResp(series, episodes, true, modelNames(idsOf(
-                series.getTextModelId(), series.getImageModelId(), series.getVideoModelId())));
+                series.getTextModelId(), series.getImageModelId(), series.getVideoModelId())),
+                sceneCoverKeys(List.of(series.getId())));
     }
 
     @Transactional
@@ -117,7 +121,7 @@ public class DramaService {
         episode.setStatus(DramaContract.STATUS_NOT_STARTED);
         episode.setEngine(DramaContract.ENGINE_PENDING);
         episodeMapper.insert(episode);
-        return toSeriesResp(series, List.of(episode), true, modelNames(idsOf(series.getTextModelId())));
+        return toSeriesResp(series, List.of(episode), true, modelNames(idsOf(series.getTextModelId())), Map.of());
     }
 
     @Transactional
@@ -270,7 +274,7 @@ public class DramaService {
     }
 
     private DramaSeriesResp toSeriesResp(DramaSeries series, List<DramaEpisode> episodes, boolean withEpisodes,
-                                         Map<Long, String> modelNames) {
+                                         Map<Long, String> modelNames, Map<Long, String> sceneCovers) {
         List<DramaEpisode> ordered = episodes.stream()
                 .sorted(Comparator.comparing(DramaEpisode::getEpisodeNumber))
                 .toList();
@@ -282,6 +286,9 @@ public class DramaService {
         resp.setStyleKey(style.key());
         resp.setStyleName(style.name());
         resp.setStyleCover(style.cover());
+        String coverKey = sceneCovers == null ? null : sceneCovers.get(series.getId());
+        resp.setCoverKey(coverKey);
+        resp.setCoverUrl(MediaUrls.of(coverKey));
         resp.setAspectRatio(series.getAspectRatio());
         resp.setDefaultResolution(series.getDefaultResolution());
         resp.setDefaultDurationSec(series.getDefaultDurationSec());
@@ -311,6 +318,28 @@ public class DramaService {
             resp.setEpisodes(ordered.stream().map(item -> toEpisodeResp(item, true)).toList());
         }
         return resp;
+    }
+
+    /** 每个项目取「第一个已出图的场景」作列表封面；没有场景图则不设封面。 */
+    private Map<Long, String> sceneCoverKeys(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
+            return Map.of();
+        }
+        List<DramaAsset> scenes = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .in(DramaAsset::getSeriesId, seriesIds)
+                .eq(DramaAsset::getType, DramaContract.ASSET_TYPE_SCENE)
+                .orderByAsc(DramaAsset::getEpisodeId)
+                .orderByAsc(DramaAsset::getId));
+        Map<Long, String> covers = new LinkedHashMap<>();
+        for (DramaAsset asset : scenes) {
+            if (asset.getSeriesId() == null
+                    || !DramaContract.ASSET_TYPE_SCENE.equals(asset.getType())
+                    || !StringUtils.hasText(asset.getImageStorageKey())) {
+                continue;
+            }
+            covers.putIfAbsent(asset.getSeriesId(), asset.getImageStorageKey());
+        }
+        return covers;
     }
 
     private DramaEpisodeResp toEpisodeResp(DramaEpisode episode, boolean withBody) {

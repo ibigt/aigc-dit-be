@@ -115,7 +115,9 @@ class DramaAssetServiceTest {
                 "洛白".equals(item.getName())
                         && item.getImagePrompt() != null
                         && item.getImagePrompt().contains("三视图")
-                        && item.getImagePrompt().contains("二次元漫画风")));
+                        && item.getImagePrompt().contains("二次元漫画风")
+                        && item.getImagePrompt().contains("不要剧情场面")
+                        && !item.getImagePrompt().contains("首次出场")));
         assertTrue(captor.getAllValues().stream().anyMatch(item ->
                 "幻梦侦探社".equals(item.getName())
                         && item.getImagePrompt() != null
@@ -154,7 +156,7 @@ class DramaAssetServiceTest {
         when(seriesMapper.selectById(21L)).thenReturn(series);
 
         BizException error = assertThrows(BizException.class, () -> service.generateImage(9L));
-        assertEquals("请先在资产页顶部选择图像模型", error.getMessage());
+        assertEquals("请先选择图像模型", error.getMessage());
         verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 

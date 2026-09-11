@@ -320,11 +320,14 @@ class DramaStoryboardServiceTest {
         task.setStatus("SUCCEEDED");
         task.setOutputStorageKey("users/7/gen/shot.mp4");
         task.setOutputKeys(List.of("users/7/gen/shot.mp4"));
+        task.setPosterKey("users/7/gen/shot-poster.webp");
         when(generateService.getMine(500L)).thenReturn(task);
 
         DramaShotGenerateResp resp = service.getGenerateTask(201L, 500L);
         assertEquals("users/7/gen/shot.mp4", shot.getVideoKey());
+        assertEquals("users/7/gen/shot-poster.webp", shot.getVideoPosterKey());
         assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot.mp4", resp.getShot().getVideoUrl());
+        assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot-poster.webp", resp.getShot().getVideoPosterUrl());
         assertFalse(Boolean.TRUE.equals(resp.getShot().getGenerating()));
     }
 

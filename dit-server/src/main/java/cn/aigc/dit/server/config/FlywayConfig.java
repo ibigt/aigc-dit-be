@@ -289,6 +289,7 @@ public class FlywayConfig {
                     status                  VARCHAR(16)  NOT NULL DEFAULT '待确认',
                     gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
                     video_key               VARCHAR(512),
+                    video_poster_key        VARCHAR(512),
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
@@ -302,6 +303,14 @@ public class FlywayConfig {
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_shot_episode ON drama_shot (episode_id, shot_index)");
         statement.execute("""
                 COMMENT ON TABLE drama_shot IS '短剧分镜；视频提示词由编译器注入 Style Prefix / 身份不变量 / Picture 序号，用户不手写长 prompt'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS video_poster_key VARCHAR(512)
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.video_poster_key
+                IS '成片首帧（ffmpeg 抽出的 poster.webp）；底片条预览用，未出片为空'
                 """);
     }
 }

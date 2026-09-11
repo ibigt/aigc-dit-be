@@ -56,7 +56,7 @@ public final class DramaTextPrompts {
                   "state_tag": "base|dream|costume",
                   "description": "完整人物/场景/道具描述，永不缩写",
                   "identity_invariants": "青年男性；清冷骨相；黑碎盖；修长；立领长风衣轮廓；锐利眼神",
-                  "image_prompt": "中性纯色背景全身参考图，……",
+                  "image_prompt": "浅灰或纯白背景的角色三视图：正面全身、侧面半身、面部特写",
                   "voice_lock": "洛白固定声音，没有就留空",
                   "must_split": false
                 }
@@ -68,6 +68,8 @@ public final class DramaTextPrompts {
               state_tag 给 dream 或 costume，must_split 给 true，
               identity_invariants 写明「与本体同一张脸和发型；禁止写成另一个人」。
             - 状态条目绝不能并进本体 description，本体 description 里不得出现入梦/湿身字样。
+            - image_prompt 必须是「中性浅灰或纯白背景的角色三视图参考图」：正面全身、侧面半身、面部特写；
+              不要写剧情动作、首次出场、分镜格子、设定表排版或其它人物。
             - description 与 identity_invariants 不得互相引用，不得写「同上」。
             """;
 
