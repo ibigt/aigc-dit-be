@@ -17,6 +17,7 @@ import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
@@ -26,6 +27,9 @@ import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaVideoModelResp;
+import cn.aigc.dit.server.drama.model.resp.DramaScriptAnalyzeResp;
+import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
@@ -36,6 +40,7 @@ import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -62,6 +67,8 @@ public class DramaService {
     private final ObjectProvider<DramaTextService> textService;
     private final TextChatGateway textChatGateway;
     private final DramaStoryboardService storyboardService;
+    @Autowired
+    private DramaAssetService assetService;
 
     public List<DramaSeriesResp> listSeries() {
         Long userId = UserContext.requireUserId();
@@ -213,6 +220,53 @@ public class DramaService {
         episodeMapper.updateById(episode);
         touchSeries(episode.getSeriesId());
         return toEpisodeResp(episode, true);
+    }
+
+    /**
+     * 剧本页的一键分析闭环。各阶段仍复用现有服务，便于单独重跑和人工编辑。
+     */
+    @Transactional
+    public DramaScriptAnalyzeResp analyzeScript(Long id, DramaScriptAnalyzeReq req) {
+        DramaEpisode episode = requireEpisode(id);
+        String raw = req.getSourceText().trim();
+        DramaScriptImportReq importReq = new DramaScriptImportReq();
+        importReq.setSourceText(raw);
+
+        // import 会优先使用已配置的文本模型，失败时由文本服务回落到规则分场。
+        importSource(id, importReq);
+        lockScript(id);
+        // 一键分析只调用一次文本模型；资产和分镜先走本地规则，避免串行三次 LLM 请求超时。
+        List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
+        DramaStoryboardResp storyboard = storyboardService.draft(id, false);
+
+        DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();
+        result.setEpisode(getEpisode(id));
+        result.setAssets(assets);
+        result.setStoryboard(storyboard);
+        result.setRequestedEpisodeCount(req.getEpisodeCount() == null ? 1 : req.getEpisodeCount());
+        result.setRequestedDurationSec(req.getEpisodeDurationSec() == null ? 15 : req.getEpisodeDurationSec());
+        result.setRequestedShots(req.getShotsPerEpisode() == null ? 8 : req.getShotsPerEpisode());
+        result.setEngine(result.getEpisode().getEngine());
+        result.getWarnings().add("本次分析的资产和分镜使用规则引擎生成，可在对应页面单独进行 AI 增强。");
+        ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
+                ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
+        int sceneCount = analyzedDoc == null || analyzedDoc.getScenes() == null
+                ? 0 : analyzedDoc.getScenes().size();
+        int shotCount = storyboard.getChapters().stream()
+                .mapToInt(chapter -> chapter.getShots() == null ? 0 : chapter.getShots().size()).sum();
+        result.setActualSceneCount(sceneCount);
+        result.setActualShotCount(shotCount);
+        if (result.getRequestedEpisodeCount() > 1) {
+            result.getWarnings().add("当前接口先完成第 1 集分析，多集拆分将在剧集编排阶段接入。");
+        }
+        if (shotCount != result.getRequestedShots()) {
+            result.getWarnings().add("实际生成 " + shotCount + " 个分镜，目标为 " + result.getRequestedShots()
+                    + " 个，可在分镜页继续调整。");
+        }
+        if (StringUtils.hasText(req.getRequirements())) {
+            result.getWarnings().add("补充要求已记录在本次请求中；当前解析器暂不覆盖已有结构化字段。");
+        }
+        return result;
     }
 
     /**

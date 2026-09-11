@@ -6,19 +6,19 @@ spring:
   application:
     name: dit-server
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dit}
+    url: jdbc:postgresql://${POSTGRES_HOST:172.171.113.250}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dit}
     username: ${POSTGRES_USER:fnii}
     password: ${POSTGRES_PASSWORD:Fnii@123}
     hikari:
       maximum-pool-size: 10
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
+      host: ${REDIS_HOST:172.171.113.250}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       timeout: 15s
   flyway:
-    enabled: true
+    enabled: ${SPRING_FLYWAY_ENABLED:false}
     locations: classpath:db/migration
     baseline-on-migrate: true
     # V1 内容调整后忽略旧 checksum；若曾执行过已删除的 V2，忽略 missing
@@ -125,10 +125,10 @@ dit:
       download-timeout-seconds: ${AGNES_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${AGNES_DOWNLOAD_RETRIES:3}
   s3:
-    endpoint: ${S3_ENDPOINT:}
+    endpoint: ${S3_ENDPOINT:http://172.171.113.250:9000}
     bucket: ${S3_BUCKET:dit}
-    access-key: ${S3_ACCESS_KEY:}
-    secret-key: ${S3_SECRET_KEY:}
+    access-key: ${S3_ACCESS_KEY:ditminio}
+    secret-key: ${S3_SECRET_KEY:DitMinio123}
     region: ${S3_REGION:us-east-1}
     path-style: true
 

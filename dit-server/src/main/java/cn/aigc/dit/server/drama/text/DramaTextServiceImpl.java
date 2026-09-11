@@ -79,7 +79,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         try {
             drafts = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
                     DramaTextPrompts.assetUser(toJson(script)),
-                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList");
+                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 4096);
         } catch (RuntimeException e) {
             swallowUnlessUnbound(seriesId, "资产抽取", e);
         }
@@ -96,7 +96,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
                     DramaTextPrompts.shotUser(toJson(script), String.join("、", safe(assetNames))),
                     content -> normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
-                    "ShotDraftList");
+                    "ShotDraftList", 4096);
         } catch (RuntimeException e) {
             swallowUnlessUnbound(seriesId, "分镜草稿", e);
         }
@@ -114,7 +114,7 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     private ScriptDoc llmParse(long seriesId, String raw) {
         return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), DramaTextPrompts.scriptUser(raw),
-                DramaTextServiceImpl::readScript, "ScriptDoc");
+                DramaTextServiceImpl::readScript, "ScriptDoc", 8192);
     }
 
     /** 供三条 LLM 路径共用：换绑提示原样上抛，其余吞掉并由调用方回落规则。 */
@@ -126,8 +126,8 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     private <T> T attemptJson(long seriesId, String system, String user,
-                              java.util.function.Function<String, T> reader, String what) {
-        TextChatRequest req = new TextChatRequest(system, user, true);
+                              java.util.function.Function<String, T> reader, String what, int maxTokens) {
+        TextChatRequest req = new TextChatRequest(system, user, true, maxTokens);
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
             T value = reader.apply(gateway.chat(seriesId, req).getContent());
             if (value != null) {

@@ -89,6 +89,14 @@ public class DramaStoryboardService {
 
     @Transactional
     public DramaStoryboardResp draft(Long episodeId) {
+        return draft(episodeId, true);
+    }
+
+    /**
+     * 拆章节并生成分镜草稿。分析闭环可关闭 LLM，快速生成规则草稿。
+     */
+    @Transactional
+    public DramaStoryboardResp draft(Long episodeId, boolean useLlm) {
         DramaEpisode episode = requireEpisode(episodeId);
         if (!DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定分场剧本再拆章节");
@@ -101,7 +109,7 @@ public class DramaStoryboardService {
         if (existing.stream().anyMatch(item -> DramaContract.STATUS_LOCKED.equals(item.getStatus()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "已有确认分镜，锁定剧本变更过期后再重新拆镜");
         }
-        replaceStoryboard(episode, doc);
+        replaceStoryboard(episode, doc, useLlm);
         return getStoryboard(episode.getId());
     }
 
@@ -311,7 +319,7 @@ public class DramaStoryboardService {
         }
     }
 
-    private void replaceStoryboard(DramaEpisode episode, ScriptDoc doc) {
+    private void replaceStoryboard(DramaEpisode episode, ScriptDoc doc, boolean useLlm) {
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
         int duration = DramaService.normalizeDuration(series.getDefaultDurationSec());
@@ -320,7 +328,7 @@ public class DramaStoryboardService {
                 .map(DramaAsset::getName)
                 .filter(StringUtils::hasText)
                 .toList();
-        ShotDraftList drafts = resolveDrafts(episode.getSeriesId(), doc, assetNames, duration);
+        ShotDraftList drafts = resolveDrafts(episode.getSeriesId(), doc, assetNames, duration, useLlm);
 
         for (DramaShot shot : listShots(episode.getId())) {
             shotMapper.deleteById(shot.getId());
@@ -413,10 +421,10 @@ public class DramaStoryboardService {
         touchSeries(episode.getSeriesId());
     }
 
-    private ShotDraftList resolveDrafts(long seriesId, ScriptDoc doc, List<String> assetNames, int duration) {
+    private ShotDraftList resolveDrafts(long seriesId, ScriptDoc doc, List<String> assetNames, int duration, boolean useLlm) {
         DramaTextService svc = textService.getIfAvailable();
         ShotDraftList drafts = null;
-        if (svc != null) {
+        if (useLlm && svc != null) {
             drafts = svc.draftShots(seriesId, doc, assetNames);
         }
         if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {

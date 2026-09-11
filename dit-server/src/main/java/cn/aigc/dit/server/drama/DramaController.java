@@ -6,6 +6,7 @@ import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
@@ -22,6 +23,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaVideoModelResp;
+import cn.aigc.dit.server.drama.model.resp.DramaScriptAnalyzeResp;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -134,6 +136,14 @@ public class DramaController {
             @PathVariable Long id,
             @Valid @RequestBody DramaScriptImportReq req) {
         return CommonResult.success(dramaService.generateScript(id, req));
+    }
+
+    @Operation(summary = "一键分析剧本：分场、抽取资产并生成分镜草稿")
+    @PostMapping("/episodes/{id}/script/analyze")
+    public CommonResult<DramaScriptAnalyzeResp> analyzeScript(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaScriptAnalyzeReq req) {
+        return CommonResult.success(dramaService.analyzeScript(id, req));
     }
 
     @Operation(summary = "保存分场剧本；已锁定后再改会使本集回到待确认、下游过期")

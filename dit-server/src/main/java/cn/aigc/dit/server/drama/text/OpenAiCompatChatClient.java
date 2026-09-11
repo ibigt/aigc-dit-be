@@ -28,7 +28,8 @@ import java.time.Duration;
 public class OpenAiCompatChatClient {
 
     static final Duration PING_TIMEOUT = Duration.ofSeconds(10);
-    static final Duration CHAT_TIMEOUT = Duration.ofSeconds(60);
+    /** 结构化剧本请求包含完整剧本和严格 JSON 输出，复杂剧本允许模型最多运行 3 分钟。 */
+    static final Duration CHAT_TIMEOUT = Duration.ofSeconds(180);
     private static final String USER_AGENT = "Mozilla/5.0 (compatible; aigc-dit/1.0; +https://www.agnes-ai.cn)";
 
     private final ObjectMapper objectMapper;
@@ -73,6 +74,12 @@ public class OpenAiCompatChatClient {
         user.put("content", req.getUser());
         if (req.jsonMode()) {
             body.putObject("response_format").put("type", "json_object");
+            // DeepSeek-V4 默认会输出较长 reasoning，剧本阶段只需要合同内 JSON。
+            // vLLM 的 chat template 支持关闭思考，可避免 60s 客户端超时和 content 为空。
+            if (isDeepSeek(model)) {
+                body.putObject("chat_template_kwargs").put("enable_thinking", false);
+                body.put("max_tokens", req.getMaxTokens() == null ? 8192 : req.getMaxTokens());
+            }
         }
         JsonNode root = post(endpoint, apiKey, body, CHAT_TIMEOUT, false);
         JsonNode choice = root.path("choices").path(0);
@@ -82,6 +89,10 @@ public class OpenAiCompatChatClient {
         }
         return TextChatResult.of(content, root.path("model").asText(model),
                 choice.path("finish_reason").asText(null));
+    }
+
+    private static boolean isDeepSeek(String model) {
+        return model != null && model.toLowerCase(java.util.Locale.ROOT).contains("deepseek");
     }
 
     private JsonNode post(String endpoint, String apiKey, ObjectNode body, Duration timeout, boolean ping) {

@@ -75,6 +75,14 @@ public class DramaAssetService {
 
     @Transactional
     public List<DramaAssetResp> extractFromScript(Long episodeId) {
+        return extractFromScript(episodeId, true);
+    }
+
+    /**
+     * 抽取剧本资产。分析闭环可关闭 LLM，使用确定性的本地规则快速完成首屏结果。
+     */
+    @Transactional
+    public List<DramaAssetResp> extractFromScript(Long episodeId, boolean useLlm) {
         DramaEpisode episode = requireEpisode(episodeId);
         if (!DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定分场剧本再提取资产");
@@ -86,7 +94,7 @@ public class DramaAssetService {
         DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(episode.getSeriesId()).getStyleKey());
         AssetDraftList drafts;
         DramaTextService svc = textService.getIfAvailable();
-        if (svc != null) {
+        if (useLlm && svc != null) {
             drafts = svc.extractAssets(episode.getSeriesId(), doc);
             DramaAssetDrafts.ensurePrompts(drafts, doc, style);
         } else {

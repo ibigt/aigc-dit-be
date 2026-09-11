@@ -11,6 +11,8 @@ public class TextChatRequest {
     private String system;
     private String user;
     private Boolean jsonMode;
+    /** 结构化阶段可按输出规模单独限制，避免资产/分镜阶段生成无关长文本。 */
+    private Integer maxTokens;
 
     public TextChatRequest() {
     }
@@ -19,6 +21,11 @@ public class TextChatRequest {
         this.system = system;
         this.user = user;
         this.jsonMode = jsonMode;
+    }
+
+    public TextChatRequest(String system, String user, Boolean jsonMode, Integer maxTokens) {
+        this(system, user, jsonMode);
+        this.maxTokens = maxTokens;
     }
 
     public boolean jsonMode() {
