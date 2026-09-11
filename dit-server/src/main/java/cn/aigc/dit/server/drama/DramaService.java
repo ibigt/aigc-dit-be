@@ -13,6 +13,7 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
@@ -24,6 +25,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
+import cn.aigc.dit.server.drama.model.resp.DramaVideoModelResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
@@ -458,6 +460,30 @@ public class DramaService {
         return getSeries(series.getId());
     }
 
+    public List<DramaVideoModelResp> listEnabledVideoModels() {
+        UserContext.requireUserId();
+        return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
+                        .eq(AiModel::getCategory, ModelCategory.VIDEO)
+                        .eq(AiModel::getEnabled, true)
+                        .orderByAsc(AiModel::getId))
+                .stream()
+                .filter(model -> GenerateRequests.supportsMode(
+                        model.getCapabilities(), ModelCategory.VIDEO, GenerateMode.R2V))
+                .map(DramaService::toVideoModelResp)
+                .toList();
+    }
+
+    @Transactional
+    public DramaSeriesResp bindVideoModel(Long seriesId, DramaVideoModelBindReq req) {
+        DramaSeries series = requireSeries(seriesId);
+        AiModel model = requireEnabledVideoModel(req.getVideoModelId());
+        series.setVideoModelId(model.getId());
+        series.setVideoAdapterKey(AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
+        seriesMapper.updateById(series);
+        return getSeries(series.getId());
+    }
+
     public List<DramaTextModelResp> listEnabledTextModels() {
         UserContext.requireUserId();
         return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
@@ -545,6 +571,29 @@ public class DramaService {
         }
         if (!GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.IMAGE, GenerateMode.T2I)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "所选图像模型不支持文生图");
+        }
+        return model;
+    }
+
+    private static DramaVideoModelResp toVideoModelResp(AiModel model) {
+        DramaVideoModelResp resp = new DramaVideoModelResp();
+        resp.setId(model.getId());
+        resp.setName(model.getName());
+        resp.setProvider(model.getProvider());
+        resp.setAdapterKey(model.getAdapterKey());
+        return resp;
+    }
+
+    private AiModel requireEnabledVideoModel(Long id) {
+        AiModel model = aiModelMapper.selectById(id);
+        if (model == null || !ModelCategory.VIDEO.equalsIgnoreCase(model.getCategory())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "视频模型不存在");
+        }
+        if (!Boolean.TRUE.equals(model.getEnabled())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选视频模型已停用");
+        }
+        if (!GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.VIDEO, GenerateMode.R2V)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选视频模型不支持参考生视频");
         }
         return model;
     }

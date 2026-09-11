@@ -34,6 +34,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -207,7 +208,24 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void regeneratingUnlockedAssetReplacesLibraryImage() {
+    void uploadImageStoresWithoutLibraryRow() {
+        DramaAsset asset = ownedAsset();
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(libraryAssetService.putOwnedFile(any(), any())).thenReturn("users/7/drama/21/x.png");
+        org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
+                "file", "luobai.png", "image/png", new byte[] {1, 2, 3});
+
+        DramaAssetResp resp = service.uploadImage(9L, file);
+
+        verify(libraryAssetService, never()).upload(any());
+        verify(libraryAssetService).putOwnedFile(file, "drama/21");
+        assertNull(asset.getImageAssetId());
+        assertEquals("users/7/drama/21/x.png", asset.getImageStorageKey());
+        assertEquals("users/7/drama/21/x.png", resp.getImageStorageKey());
+    }
+
+    @Test
+    void regeneratingUnlockedAssetStoresKeyWithoutLibrary() {
         DramaAsset asset = ownedAsset();
         asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         asset.setImageAssetId(41L);
@@ -220,20 +238,17 @@ class DramaAssetServiceTest {
         task.setOutputStorageKey("users/7/gen/new.png");
         task.setOutputKeys(List.of("users/7/gen/new.png"));
         when(generateService.getMine(100L)).thenReturn(task);
-        cn.aigc.dit.server.model.resp.AssetResp imported = new cn.aigc.dit.server.model.resp.AssetResp();
-        imported.setId(42L);
-        imported.setStorageKey("users/7/gen/new.png");
-        when(libraryAssetService.importFromStorage(any(), any(), any(), any(), any())).thenReturn(imported);
 
         service.getGenerateTask(9L, 100L);
 
+        verify(libraryAssetService, never()).importFromStorage(any(), any(), any(), any(), any());
         verify(libraryAssetService).deleteMine(41L);
-        assertEquals(42L, asset.getImageAssetId());
+        assertNull(asset.getImageAssetId());
         assertEquals("users/7/gen/new.png", asset.getImageStorageKey());
     }
 
     @Test
-    void regeneratingLockedAssetKeepsPreviousLibraryImage() {
+    void regeneratingLockedAssetDoesNotIndexLibrary() {
         DramaAsset asset = ownedAsset();
         asset.setStatus(DramaContract.STATUS_LOCKED);
         asset.setImageAssetId(41L);
@@ -246,15 +261,13 @@ class DramaAssetServiceTest {
         task.setOutputStorageKey("users/7/gen/new.png");
         task.setOutputKeys(List.of("users/7/gen/new.png"));
         when(generateService.getMine(100L)).thenReturn(task);
-        cn.aigc.dit.server.model.resp.AssetResp imported = new cn.aigc.dit.server.model.resp.AssetResp();
-        imported.setId(42L);
-        imported.setStorageKey("users/7/gen/new.png");
-        when(libraryAssetService.importFromStorage(any(), any(), any(), any(), any())).thenReturn(imported);
 
         service.getGenerateTask(9L, 100L);
 
+        verify(libraryAssetService, never()).importFromStorage(any(), any(), any(), any(), any());
         verify(libraryAssetService, never()).deleteMine(any());
-        assertEquals(42L, asset.getImageAssetId());
+        assertNull(asset.getImageAssetId());
+        assertEquals("users/7/gen/new.png", asset.getImageStorageKey());
     }
 
     private static DramaEpisode ownedEpisode() {

@@ -79,7 +79,7 @@ public class AesGcmEncryptor {
         } catch (BizException e) {
             throw e;
         } catch (IllegalArgumentException | GeneralSecurityException e) {
-            throw new BizException(ErrorCode.INTERNAL, "密钥解密失败");
+            throw new BizException(ErrorCode.INTERNAL, "密钥解密失败，请确认 dit.crypto.secret 与入库加密时一致");
         }
     }
 

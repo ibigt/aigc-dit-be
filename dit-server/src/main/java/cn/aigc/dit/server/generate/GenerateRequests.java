@@ -208,8 +208,8 @@ public final class GenerateRequests {
                 key = asset.getStorageKey();
                 type = asset.getKind();
             } else if (StringUtils.hasText(key)) {
-                Asset asset = assetService.requireOwnedKey(key);
-                type = StringUtils.hasText(type) ? type : asset.getKind();
+                assetService.assertOwnedStorageKey(key);
+                type = StringUtils.hasText(type) ? type : AssetKind.IMAGE;
             } else {
                 throw new BizException(ErrorCode.BAD_REQUEST, "参考素材缺少 storageKey");
             }

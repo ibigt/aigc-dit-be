@@ -20,6 +20,9 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -81,6 +84,26 @@ class GenerateRequestsTest {
                 GenerateRequests.unsupportedModeMessage(GenerateMode.I2I));
         assertEquals("当前模型不支持参考生视频，请移除参考素材后再创作",
                 GenerateRequests.unsupportedModeMessage(GenerateMode.R2V));
+    }
+
+    @Test
+    void storageKeyReferenceDoesNotRequireLibraryRow() {
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(4L);
+        req.setPrompt("参考图出片");
+        req.setCategory("video");
+        req.setDurationSec(5);
+        GenerateSubmitReq.ReferenceInput ref = new GenerateSubmitReq.ReferenceInput();
+        ref.setStorageKey("users/1/gen/char.png");
+        ref.setType("image");
+        req.setReferences(List.of(ref));
+
+        GenerateRequest request = GenerateRequests.fromSubmit(1L, "mock-video", req, assetService);
+        assertEquals(GenerateMode.R2V, request.getMode());
+        assertEquals("users/1/gen/char.png", request.getReferences().get(0).getStorageKey());
+        verify(assetService).assertOwnedStorageKey("users/1/gen/char.png");
+        verify(assetService, never()).requireOwnedKey(any());
+        verify(assetService, never()).requireOwned(any());
     }
 
     @Test

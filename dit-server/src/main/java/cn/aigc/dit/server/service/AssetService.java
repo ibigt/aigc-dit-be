@@ -45,21 +45,10 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
 
     @Transactional
     public AssetResp upload(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请选择文件");
-        }
-        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
-        if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持图片或视频");
-        }
         Long userId = UserContext.requireUserId();
-        String ext = extension(file.getOriginalFilename(), mime);
-        String key = "users/" + userId + "/assets/" + UUID.randomUUID() + ext;
-        try {
-            objectStorage.put(key, file.getBytes(), mime);
-        } catch (IOException e) {
-            throw new BizException(ErrorCode.INTERNAL, "读取上传文件失败");
-        }
+        String mime = file == null || file.getContentType() == null
+                ? "" : file.getContentType().toLowerCase(Locale.ROOT);
+        String key = putOwnedFile(file, "assets");
         String kind = AssetKind.fromMime(mime);
         String posterKey = AssetKind.VIDEO.equals(kind) ? posterExtractor.extract(key) : key;
         Asset asset = new Asset();
@@ -72,6 +61,39 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         asset.setSizeBytes(file.getSize());
         save(asset);
         return toResp(asset);
+    }
+
+    /**
+     * 把文件写入当前用户目录，不创建素材库记录。短剧参考图走这条路径。
+     */
+    public String putOwnedFile(MultipartFile file, String folder) {
+        if (file == null || file.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择文件");
+        }
+        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
+        if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持图片或视频");
+        }
+        Long userId = UserContext.requireUserId();
+        String ext = extension(file.getOriginalFilename(), mime);
+        String key = "users/" + userId + "/" + sanitizeFolder(folder) + "/" + UUID.randomUUID() + ext;
+        try {
+            objectStorage.put(key, file.getBytes(), mime);
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.INTERNAL, "读取上传文件失败");
+        }
+        return key;
+    }
+
+    /** 对象属于当前用户目录即可，不必已入素材库。 */
+    public void assertOwnedStorageKey(String storageKey) {
+        if (!StringUtils.hasText(storageKey) || storageKey.contains("..")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "非法对象路径");
+        }
+        Long userId = UserContext.requireUserId();
+        if (!storageKey.startsWith("users/" + userId + "/")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考素材不属于当前用户");
+        }
     }
 
     public Asset requireOwned(Long assetId) {
@@ -172,5 +194,16 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
             return ".webp";
         }
         return ".png";
+    }
+
+    static String sanitizeFolder(String folder) {
+        if (!StringUtils.hasText(folder)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "存储目录无效");
+        }
+        String value = folder.trim().replace('\\', '/');
+        if (value.startsWith("/") || value.contains("..") || value.contains("//")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "存储目录无效");
+        }
+        return value;
     }
 }

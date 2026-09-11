@@ -10,15 +10,18 @@ import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
 import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
+import cn.aigc.dit.server.drama.model.resp.DramaVideoModelResp;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -62,6 +65,12 @@ public class DramaController {
     @GetMapping("/image-models")
     public CommonResult<List<DramaImageModelResp>> listImageModels() {
         return CommonResult.success(dramaService.listEnabledImageModels());
+    }
+
+    @Operation(summary = "已启用视频模型（分镜页全局绑定；仅 r2v；不含密钥）")
+    @GetMapping("/video-models")
+    public CommonResult<List<DramaVideoModelResp>> listVideoModels() {
+        return CommonResult.success(dramaService.listEnabledVideoModels());
     }
 
     @Operation(summary = "系列列表")
@@ -147,6 +156,14 @@ public class DramaController {
             @PathVariable Long id,
             @Valid @RequestBody DramaImageModelBindReq req) {
         return CommonResult.success(dramaService.bindImageModel(id, req));
+    }
+
+    @Operation(summary = "分镜页全局绑定视频模型（本页所有 r2v 都用这一条）")
+    @PutMapping("/series/{id}/video-model")
+    public CommonResult<DramaSeriesResp> bindVideoModel(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaVideoModelBindReq req) {
+        return CommonResult.success(dramaService.bindVideoModel(id, req));
     }
 
     @Operation(summary = "剧集资产列表")
@@ -251,5 +268,19 @@ public class DramaController {
     @PostMapping("/shots/{id}/confirm")
     public CommonResult<DramaShotResp> confirmShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.confirmShot(id));
+    }
+
+    @Operation(summary = "单镜出片；默认 r2v（锁定主体参考图 + compiled_prompt），不附首尾帧")
+    @PostMapping("/shots/{id}/generate")
+    public CommonResult<DramaShotGenerateResp> generateShot(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.generateShot(id));
+    }
+
+    @Operation(summary = "查询分镜出片任务；成功后写入 video_key")
+    @GetMapping("/shots/{id}/generate/tasks/{taskId}")
+    public CommonResult<DramaShotGenerateResp> getShotGenerateTask(
+            @PathVariable Long id,
+            @PathVariable Long taskId) {
+        return CommonResult.success(dramaStoryboardService.getGenerateTask(id, taskId));
     }
 }

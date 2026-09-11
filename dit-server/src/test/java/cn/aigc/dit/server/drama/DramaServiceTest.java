@@ -12,6 +12,7 @@ import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.TextChatGateway;
@@ -300,5 +301,61 @@ class DramaServiceTest {
         assertEquals("gpt-image-2", existing.getImageAdapterKey());
         assertEquals("GPT Image 2", resp.getImageModelName());
         verify(seriesMapper).updateById(existing);
+    }
+
+    @Test
+    void bindVideoModelWritesIdAndAdapterKey() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setDefaultResolution("720P");
+        existing.setDefaultDurationSec(5);
+        existing.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        AiModel video = new AiModel();
+        video.setId(88L);
+        video.setName("MiniMax-H3");
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setAdapterKey("minimax-h3");
+        video.setProvider("ComfyUI");
+        video.setModelKey("minimax-h3");
+        video.setCapabilities(List.of("video", "t2v", "r2v", "i2v"));
+        when(aiModelMapper.selectById(88L)).thenReturn(video);
+        when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(video));
+
+        DramaVideoModelBindReq req = new DramaVideoModelBindReq();
+        req.setVideoModelId(88L);
+        DramaSeriesResp resp = service.bindVideoModel(21L, req);
+        assertEquals(88L, existing.getVideoModelId());
+        assertEquals("minimax-h3", existing.getVideoAdapterKey());
+        assertEquals("MiniMax-H3", resp.getVideoModelName());
+        verify(seriesMapper).updateById(existing);
+    }
+
+    @Test
+    void bindVideoModelRejectsWithoutR2v() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        AiModel video = new AiModel();
+        video.setId(89L);
+        video.setName("仅文生视频");
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setCapabilities(List.of("video", "t2v"));
+        when(aiModelMapper.selectById(89L)).thenReturn(video);
+
+        DramaVideoModelBindReq req = new DramaVideoModelBindReq();
+        req.setVideoModelId(89L);
+        BizException error = assertThrows(BizException.class, () -> service.bindVideoModel(21L, req));
+        assertEquals("所选视频模型不支持参考生视频", error.getMessage());
+        verify(seriesMapper, never()).updateById(existing);
     }
 }

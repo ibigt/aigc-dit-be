@@ -1,6 +1,5 @@
 package cn.aigc.dit.server.drama;
 
-import cn.aigc.dit.common.constant.AssetKind;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
@@ -28,7 +27,6 @@ import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
-import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.GenerateService;
@@ -161,15 +159,15 @@ public class DramaAssetService {
         if (!mime.startsWith("image/")) {
             throw new BizException(ErrorCode.BAD_REQUEST, "资产参考图仅支持图片");
         }
-        AssetResp uploaded = assetService.upload(file);
+        String key = assetService.putOwnedFile(file, "drama/" + asset.getSeriesId());
         Long previousLibraryId = replaceableLibraryId(asset);
-        attachImage(asset, uploaded.getId(), uploaded.getStorageKey());
+        attachImage(asset, null, key);
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
-        deleteReplacedLibrary(previousLibraryId, uploaded.getId());
+        deleteReplacedLibrary(previousLibraryId);
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
@@ -424,24 +422,17 @@ public class DramaAssetService {
         if (!StringUtils.hasText(key) || key.equals(asset.getImageStorageKey())) {
             return;
         }
-        String poster = StringUtils.hasText(task.getPosterKey()) ? task.getPosterKey() : key;
         Long previousLibraryId = replaceableLibraryId(asset);
-        AssetResp imported = assetService.importFromStorage(
-                UserContext.requireUserId(),
-                asset.getName(),
-                AssetKind.IMAGE,
-                key,
-                poster);
-        attachImage(asset, imported.getId(), key);
+        attachImage(asset, null, key);
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
-        deleteReplacedLibrary(previousLibraryId, imported.getId());
+        deleteReplacedLibrary(previousLibraryId);
     }
 
-    /** 未锁定草稿被换图时，旧素材库记录可以删；已锁定图留给身份版本，不跟着清。 */
+    /** 未锁定草稿被换图时，历史素材库记录可以删；已锁定图不跟着清。新图一律不入素材库。 */
     private Long replaceableLibraryId(DramaAsset asset) {
         if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())
                 || DramaContract.STATUS_EXPIRED.equals(asset.getStatus())) {
@@ -450,8 +441,8 @@ public class DramaAssetService {
         return asset.getImageAssetId();
     }
 
-    private void deleteReplacedLibrary(Long previousId, Long nextId) {
-        if (previousId == null || previousId.equals(nextId)) {
+    private void deleteReplacedLibrary(Long previousId) {
+        if (previousId == null) {
             return;
         }
         try {

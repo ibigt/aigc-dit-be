@@ -38,6 +38,11 @@ public class DramaShotResp {
     private String status;
     private Long genTaskId;
     private String videoKey;
+    private String videoUrl;
+    @Schema(description = "是否正在出片")
+    private Boolean generating;
+    private String genTaskStatus;
+    private String genErrorMessage;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 }

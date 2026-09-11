@@ -13,11 +13,19 @@ import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
+import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
+import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.mapper.GenTaskMapper;
+import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+import cn.aigc.dit.server.model.resp.GenerateTaskResp;
+import cn.aigc.dit.server.service.GenerateService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,6 +62,12 @@ class DramaStoryboardServiceTest {
     @Mock
     private DramaShotMapper shotMapper;
     @Mock
+    private AiModelMapper aiModelMapper;
+    @Mock
+    private GenTaskMapper genTaskMapper;
+    @Mock
+    private GenerateService generateService;
+    @Mock
     private ObjectProvider<DramaTextService> textService;
 
     private DramaStoryboardService service;
@@ -63,7 +78,8 @@ class DramaStoryboardServiceTest {
     @BeforeEach
     void setUp() {
         service = new DramaStoryboardService(
-                seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper, textService);
+                seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper,
+                aiModelMapper, genTaskMapper, generateService, textService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         storedChapters.clear();
         storedShots.clear();
@@ -181,6 +197,137 @@ class DramaStoryboardServiceTest {
         verify(shotMapper, org.mockito.Mockito.atLeastOnce()).updateById(any(DramaShot.class));
     }
 
+    @Test
+    void generateRequiresBoundVideoModel() {
+        DramaShot shot = pendingShot();
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+
+        BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
+        assertEquals("请先在分镜页选择视频模型", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void generateSubmitsR2vWithLockedRefsAndNoFrames() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setAspectRatio("16:9");
+        series.setDefaultResolution("720P");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel model = r2vModel();
+        when(aiModelMapper.selectById(88L)).thenReturn(model);
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        DramaShotGenerateResp resp = service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
+        GenerateSubmitReq req = reqCaptor.getValue();
+        assertEquals(88L, req.getModelId());
+        assertEquals("video", req.getCategory());
+        assertEquals(5, req.getDurationSec());
+        assertEquals("16:9", req.getRatio());
+        assertTrue(req.getPrompt().contains("<Picture"));
+        assertTrue(req.getReferences() != null && !req.getReferences().isEmpty());
+        org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
+        org.junit.jupiter.api.Assertions.assertNull(req.getReferences().get(0).getAssetId());
+        assertEquals("users/7/assets/1.png", req.getReferences().get(0).getStorageKey());
+        assertEquals(GenerateRequests.SOURCE_DRAMA, extraCaptor.getValue().get("source"));
+        assertEquals(201L, extraCaptor.getValue().get("shotId"));
+        assertEquals(500L, shot.getGenTaskId());
+        assertTrue(Boolean.TRUE.equals(resp.getShot().getGenerating()));
+        assertEquals(500L, resp.getTask().getId());
+        assertEquals(List.of(1L, 5L), shot.getReferenceAssetIds());
+        assertEquals(2, resp.getShot().getReferences().size());
+        assertEquals(1, resp.getShot().getReferences().get(0).getPictureIndex());
+        assertEquals("洛白", resp.getShot().getReferences().get(0).getName());
+        assertEquals("幻梦侦探社", resp.getShot().getReferences().get(1).getName());
+    }
+
+    @Test
+    void generateRebindsNamedPicturesEvenIfManualRefsStale() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setReferenceAssetIds(List.of(5L));
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(501L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        assertEquals(2, reqCaptor.getValue().getReferences().size());
+        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/5.png", reqCaptor.getValue().getReferences().get(1).getStorageKey());
+        assertEquals(List.of(1L, 5L), shot.getReferenceAssetIds());
+    }
+
+    @Test
+    void generateRejectsUnlockedNamedAssets() {
+        DramaShot shot = pendingShot();
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                pendingAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+
+        BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
+        assertTrue(error.getMessage().contains("尚未锁定") || error.getMessage().contains("请先锁定主体参考图"));
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void getGenerateTaskWritesVideoKey() {
+        DramaShot shot = pendingShot();
+        shot.setGenTaskId(500L);
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/shot.mp4");
+        task.setOutputKeys(List.of("users/7/gen/shot.mp4"));
+        when(generateService.getMine(500L)).thenReturn(task);
+
+        DramaShotGenerateResp resp = service.getGenerateTask(201L, 500L);
+        assertEquals("users/7/gen/shot.mp4", shot.getVideoKey());
+        assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot.mp4", resp.getShot().getVideoUrl());
+        assertFalse(Boolean.TRUE.equals(resp.getShot().getGenerating()));
+    }
+
     private static DramaEpisode ownedEpisode() {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);
@@ -277,5 +424,18 @@ class DramaStoryboardServiceTest {
         scene.setDialogue(List.of(line));
         doc.setScenes(List.of(scene));
         return doc;
+    }
+
+    private static AiModel r2vModel() {
+        AiModel model = new AiModel();
+        model.setId(88L);
+        model.setName("MiniMax-H3");
+        model.setCategory("video");
+        model.setEnabled(true);
+        model.setAdapterKey("minimax-h3");
+        model.setProvider("ComfyUI");
+        model.setModelKey("minimax-h3");
+        model.setCapabilities(List.of("video", "t2v", "r2v", "i2v"));
+        return model;
     }
 }

@@ -46,6 +46,8 @@ public final class DramaContract {
 
     /** 资产页同时进行的 t2i 上限。 */
     public static final int MAX_ASSET_GENERATE = 4;
+    /** 分镜页同时进行的 r2v 上限。 */
+    public static final int MAX_SHOT_GENERATE = 2;
 
     /** 单场分镜下限（乙/规则草稿）。 */
     public static final int MIN_SHOTS_PER_CHAPTER = 2;

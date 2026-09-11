@@ -1,8 +1,12 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.common.constant.AssetKind;
+import cn.aigc.dit.common.constant.ModelCategory;
+import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -15,6 +19,7 @@ import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaChapterResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotReferenceResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
@@ -22,7 +27,15 @@ import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.drama.text.ShotDraftList;
+import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.GenTask;
+import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
+import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+import cn.aigc.dit.server.model.resp.GenerateTaskResp;
+import cn.aigc.dit.server.service.GenerateService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -33,10 +46,12 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -47,6 +62,9 @@ public class DramaStoryboardService {
     private final DramaAssetMapper assetMapper;
     private final DramaChapterMapper chapterMapper;
     private final DramaShotMapper shotMapper;
+    private final AiModelMapper aiModelMapper;
+    private final GenTaskMapper genTaskMapper;
+    private final GenerateService generateService;
     private final ObjectProvider<DramaTextService> textService;
 
     @Transactional
@@ -62,6 +80,7 @@ public class DramaStoryboardService {
                 dirty = true;
             }
         }
+        applySucceededQuietly(shots);
         if (dirty) {
             refreshChapterStatuses(chapters, shots);
         }
@@ -94,7 +113,7 @@ public class DramaStoryboardService {
         }
         applySave(shot, req);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
-        boolean autoBind = req.getReferenceAssetIds() == null;
+        boolean autoBind = req.getReferenceAssetIds() == null || req.getReferenceAssetIds().isEmpty();
         rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, autoBind);
         if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())
                 || DramaContract.STATUS_NOT_STARTED.equals(shot.getStatus())) {
@@ -102,7 +121,7 @@ public class DramaStoryboardService {
         }
         shotMapper.updateById(shot);
         touchSeries(shot.getSeriesId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()));
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
     }
 
     @Transactional
@@ -115,7 +134,7 @@ public class DramaStoryboardService {
         }
         shotMapper.updateById(shot);
         touchSeries(shot.getSeriesId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()));
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
     }
 
     @Transactional
@@ -154,7 +173,81 @@ public class DramaStoryboardService {
         shotMapper.updateById(shot);
         refreshChapterStatuses(listChapters(shot.getEpisodeId()), listShots(shot.getEpisodeId()));
         touchSeries(shot.getSeriesId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix);
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix, loadTask(shot.getGenTaskId()));
+    }
+
+    @Transactional
+    public DramaShotGenerateResp generateShot(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        DramaSeries series = requireOwnedSeries(shot.getSeriesId());
+        AiModel model = requireBoundVideoModel(series);
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        String prefix = stylePrefixOf(series);
+        rebindAndCompile(shot, assets, prefix, true, true);
+        List<DramaAsset> refs = resolveReferences(shot, assets, true, true);
+        if (refs.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定主体参考图再出片");
+        }
+        if (!StringUtils.hasText(shot.getCompiledPrompt())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
+        }
+        shotMapper.updateById(shot);
+
+        if (shot.getGenTaskId() != null) {
+            try {
+                GenerateTaskResp existing = generateService.getMine(shot.getGenTaskId());
+                if (isGeneratingStatus(existing.getStatus())) {
+                    return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, existing);
+                }
+            } catch (BizException ignored) {
+                // 旧任务已不可见：继续提交新任务
+            }
+        }
+
+        assertGenerateCapacity(shot.getEpisodeId());
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(model.getId());
+        req.setCategory(ModelCategory.VIDEO);
+        req.setPrompt(shot.getCompiledPrompt());
+        req.setRatio(series.getAspectRatio());
+        req.setResolution(series.getDefaultResolution());
+        req.setDurationSec(shot.getDurationSec() == null ? DramaContract.DEFAULT_DURATION_SEC : shot.getDurationSec());
+        req.setCopies(1);
+        List<GenerateSubmitReq.ReferenceInput> inputs = new ArrayList<>();
+        for (DramaAsset asset : refs) {
+            GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
+            input.setType(AssetKind.IMAGE);
+            if (StringUtils.hasText(asset.getImageStorageKey())) {
+                input.setStorageKey(asset.getImageStorageKey());
+            } else if (asset.getImageAssetId() != null) {
+                input.setAssetId(asset.getImageAssetId());
+            }
+            inputs.add(input);
+        }
+        req.setReferences(inputs);
+
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("source", GenerateRequests.SOURCE_DRAMA);
+        extra.put("seriesId", series.getId());
+        extra.put("episodeId", shot.getEpisodeId());
+        extra.put("shotId", shot.getId());
+        GenerateTaskResp task = generateService.submit(req, extra);
+        shot.setGenTaskId(task.getId());
+        shotMapper.updateById(shot);
+        touchSeries(series.getId());
+        return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, task);
+    }
+
+    @Transactional
+    public DramaShotGenerateResp getGenerateTask(Long shotId, Long taskId) {
+        DramaShot shot = requireShot(shotId);
+        if (shot.getGenTaskId() == null || !shot.getGenTaskId().equals(taskId)) {
+            throw new BizException(ErrorCode.NOT_FOUND, "生成任务不存在");
+        }
+        GenerateTaskResp task = generateService.getMine(taskId);
+        applyTaskResult(shot, task);
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), task);
     }
 
     @Transactional
@@ -399,7 +492,7 @@ public class DramaStoryboardService {
         boolean dream = isDreamContext(shot);
         LinkedHashMap<Long, DramaAsset> ordered = new LinkedHashMap<>();
         List<Long> explicit = idsOf(shot.getReferenceAssetIds());
-        if (!explicit.isEmpty() || !autoBindIfEmpty) {
+        if (!autoBindIfEmpty) {
             for (Long id : explicit) {
                 DramaAsset asset = assets.get(id);
                 if (asset == null) {
@@ -587,12 +680,14 @@ public class DramaStoryboardService {
                 .sorted(Comparator.comparing(DramaAsset::getType).thenComparing(DramaAsset::getId))
                 .toList();
         int stale = 0;
+        Map<Long, GenTask> tasks = loadTasks(shots);
         List<DramaChapterResp> chapterResps = new ArrayList<>();
         for (DramaChapter chapter : chapters) {
             DramaChapterResp resp = toChapterResp(chapter);
             List<DramaShotResp> shotResps = new ArrayList<>();
             for (DramaShot shot : byChapter.getOrDefault(chapter.getId(), List.of())) {
-                DramaShotResp item = toShotResp(shot, chapter, assets, prefix);
+                DramaShotResp item = toShotResp(shot, chapter, assets, prefix,
+                        shot.getGenTaskId() == null ? null : tasks.get(shot.getGenTaskId()));
                 if (Boolean.TRUE.equals(item.getCompiledStale())) {
                     stale++;
                 }
@@ -653,7 +748,7 @@ public class DramaStoryboardService {
     }
 
     private DramaShotResp toShotResp(
-            DramaShot shot, DramaChapter chapter, Map<Long, DramaAsset> assets, String stylePrefix) {
+            DramaShot shot, DramaChapter chapter, Map<Long, DramaAsset> assets, String stylePrefix, GenTask task) {
         DramaShotResp resp = new DramaShotResp();
         resp.setId(shot.getId());
         resp.setSeriesId(shot.getSeriesId());
@@ -671,15 +766,12 @@ public class DramaStoryboardService {
         resp.setDialogue(shot.getDialogue());
         resp.setContinuityIn(shot.getContinuityIn());
         resp.setContinuityOut(shot.getContinuityOut());
-        List<Long> ids = idsOf(shot.getReferenceAssetIds());
+        List<DramaAsset> bound = resolveReferences(shot, assets, false, true);
+        List<Long> ids = bound.stream().map(DramaAsset::getId).toList();
         resp.setReferenceAssetIds(ids);
         List<DramaShotReferenceResp> refs = new ArrayList<>();
         int picture = 1;
-        for (Long id : ids) {
-            DramaAsset asset = assets.get(id);
-            if (asset == null) {
-                continue;
-            }
+        for (DramaAsset asset : bound) {
             DramaShotReferenceResp ref = new DramaShotReferenceResp();
             ref.setPictureIndex(picture++);
             ref.setAssetId(asset.getId());
@@ -703,9 +795,128 @@ public class DramaStoryboardService {
         resp.setStatus(shot.getStatus());
         resp.setGenTaskId(shot.getGenTaskId());
         resp.setVideoKey(shot.getVideoKey());
+        resp.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
+        if (task != null) {
+            resp.setGenTaskStatus(task.getStatus());
+            resp.setGenErrorMessage(task.getErrorMessage());
+            resp.setGenerating(isGeneratingStatus(task.getStatus()));
+        } else {
+            resp.setGenerating(false);
+        }
         resp.setCreatedAt(shot.getCreatedAt());
         resp.setUpdatedAt(shot.getUpdatedAt());
         return resp;
+    }
+
+    private DramaShotGenerateResp toGenerateResp(
+            DramaShot shot, DramaChapter chapter, Map<Long, DramaAsset> assets, String prefix, GenerateTaskResp task) {
+        DramaShotGenerateResp resp = new DramaShotGenerateResp();
+        GenTask snapshot = new GenTask();
+        if (task != null) {
+            snapshot.setStatus(task.getStatus());
+            snapshot.setErrorMessage(task.getErrorMessage());
+        }
+        resp.setShot(toShotResp(shot, chapter, assets, prefix, task == null ? null : snapshot));
+        if (resp.getShot() != null && task != null) {
+            resp.getShot().setGenerating(isGeneratingStatus(task.getStatus()));
+            resp.getShot().setGenTaskStatus(task.getStatus());
+            resp.getShot().setGenErrorMessage(task.getErrorMessage());
+            resp.getShot().setGenTaskId(shot.getGenTaskId());
+        }
+        resp.setTask(task);
+        return resp;
+    }
+
+    private void applySucceededQuietly(List<DramaShot> shots) {
+        for (DramaShot shot : shots) {
+            if (shot.getGenTaskId() == null) {
+                continue;
+            }
+            try {
+                GenerateTaskResp task = generateService.getMine(shot.getGenTaskId());
+                applyTaskResult(shot, task);
+            } catch (BizException ignored) {
+                // 任务不属于当前用户或已删：列表仍返回分镜本身
+            }
+        }
+    }
+
+    private void applyTaskResult(DramaShot shot, GenerateTaskResp task) {
+        if (task == null || !TaskStatus.SUCCEEDED.equals(task.getStatus())) {
+            return;
+        }
+        String key = firstOutputKey(task);
+        if (!StringUtils.hasText(key) || key.equals(shot.getVideoKey())) {
+            return;
+        }
+        shot.setVideoKey(key);
+        shotMapper.updateById(shot);
+    }
+
+    private void assertGenerateCapacity(Long episodeId) {
+        Long running = genTaskMapper.selectCount(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getUserId, UserContext.requireUserId())
+                .in(GenTask::getStatus, TaskStatus.PENDING, TaskStatus.RUNNING)
+                .apply("params->>'source' = {0}", GenerateRequests.SOURCE_DRAMA)
+                .apply("params->>'episodeId' = {0}", String.valueOf(episodeId))
+                .apply("params->>'shotId' is not null"));
+        if (running != null && running >= DramaContract.MAX_SHOT_GENERATE) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "同时出片不能超过 " + DramaContract.MAX_SHOT_GENERATE + " 条，请稍后再试");
+        }
+    }
+
+    private AiModel requireBoundVideoModel(DramaSeries series) {
+        if (series.getVideoModelId() == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先在分镜页选择视频模型");
+        }
+        AiModel model = aiModelMapper.selectById(series.getVideoModelId());
+        if (model == null || !ModelCategory.VIDEO.equalsIgnoreCase(model.getCategory())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "项目绑定的视频模型不存在");
+        }
+        if (!Boolean.TRUE.equals(model.getEnabled())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "项目绑定的视频模型已停用，请在分镜页更换");
+        }
+        if (!GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.VIDEO, GenerateMode.R2V)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型不支持参考生视频");
+        }
+        return model;
+    }
+
+    private Map<Long, GenTask> loadTasks(List<DramaShot> shots) {
+        Set<Long> ids = new HashSet<>();
+        for (DramaShot shot : shots) {
+            if (shot.getGenTaskId() != null) {
+                ids.add(shot.getGenTaskId());
+            }
+        }
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, GenTask> tasks = new HashMap<>();
+        for (GenTask task : genTaskMapper.selectBatchIds(ids)) {
+            tasks.put(task.getId(), task);
+        }
+        return tasks;
+    }
+
+    private GenTask loadTask(Long taskId) {
+        return taskId == null ? null : genTaskMapper.selectById(taskId);
+    }
+
+    static String firstOutputKey(GenerateTaskResp task) {
+        if (task.getOutputKeys() != null) {
+            for (String key : task.getOutputKeys()) {
+                if (StringUtils.hasText(key)) {
+                    return key;
+                }
+            }
+        }
+        return task.getOutputStorageKey();
+    }
+
+    static boolean isGeneratingStatus(String status) {
+        return TaskStatus.PENDING.equals(status) || TaskStatus.RUNNING.equals(status);
     }
 
     private cn.aigc.dit.server.drama.model.resp.DramaAssetResp toLockedAsset(DramaAsset asset) {
