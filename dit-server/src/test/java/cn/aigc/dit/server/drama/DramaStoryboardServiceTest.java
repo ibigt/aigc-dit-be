@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -329,6 +330,89 @@ class DramaStoryboardServiceTest {
         assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot.mp4", resp.getShot().getVideoUrl());
         assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot-poster.webp", resp.getShot().getVideoPosterUrl());
         assertFalse(Boolean.TRUE.equals(resp.getShot().getGenerating()));
+    }
+
+    @Test
+    void createShotAppendsToLastChapterAndInheritsCast() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        storedChapters.add(pendingChapter());
+        storedShots.add(pendingShot());
+
+        var resp = service.createShot(31L, null);
+
+        assertEquals(2, storedShots.size());
+        DramaShot created = storedShots.get(1);
+        assertEquals(2, created.getShotIndex());
+        assertEquals(90L, created.getChapterId());
+        assertEquals("分镜 2", created.getTitle());
+        assertEquals(5, created.getDurationSec());
+        assertEquals(DramaContract.STATUS_PENDING_CONFIRM, created.getStatus());
+        assertEquals(List.of("洛白"), created.getCharacterNames());
+        assertEquals(1, created.getCastCount());
+        assertEquals("幻梦侦探社", created.getLocationName());
+        assertEquals(resp.getId(), created.getId());
+    }
+
+    @Test
+    void createShotRejectsWhenChapterIsFull() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        for (int i = 1; i <= DramaContract.MAX_SHOTS_PER_CHAPTER; i++) {
+            DramaShot shot = pendingShot();
+            shot.setId(200L + i);
+            shot.setShotIndex(i);
+            storedShots.add(shot);
+        }
+
+        BizException error = assertThrows(BizException.class, () -> service.createShot(31L, null));
+        assertTrue(error.getMessage().contains("单场最多"));
+    }
+
+    @Test
+    void deleteShotRemovesAndRenumbersRemaining() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        storedChapters.add(pendingChapter());
+        for (int i = 1; i <= 3; i++) {
+            DramaShot shot = pendingShot();
+            shot.setId(200L + i);
+            shot.setShotIndex(i);
+            shot.setTitle("镜 " + i);
+            storedShots.add(shot);
+        }
+
+        DramaStoryboardResp board = service.deleteShot(201L);
+
+        assertNotNull(board);
+        List<Integer> indexes = storedShots.stream()
+                .filter(item -> !Long.valueOf(201L).equals(item.getId()))
+                .map(DramaShot::getShotIndex)
+                .toList();
+        assertEquals(List.of(1, 2), indexes);
+    }
+
+    @Test
+    void deleteShotRejectsGeneratedConfirmedAndLast() {
+        storedChapters.add(pendingChapter());
+
+        DramaShot generated = pendingShot();
+        generated.setVideoKey("users/7/videos/1.mp4");
+        storedShots.add(generated);
+        assertEquals("该镜已出片，删除会让成片缺一段",
+                assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
+        storedShots.clear();
+
+        DramaShot confirmed = pendingShot();
+        confirmed.setStatus(DramaContract.STATUS_LOCKED);
+        storedShots.add(confirmed);
+        assertEquals("已确认分镜不能删除",
+                assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
+        storedShots.clear();
+
+        storedShots.add(pendingShot());
+        assertEquals("至少保留一个分镜",
+                assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
     }
 
     private static DramaEpisode ownedEpisode() {

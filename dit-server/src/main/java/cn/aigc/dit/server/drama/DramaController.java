@@ -9,6 +9,7 @@ import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
@@ -258,6 +259,20 @@ public class DramaController {
     @PostMapping("/episodes/{id}/storyboard/compile")
     public CommonResult<DramaStoryboardResp> compileStoryboard(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.compileEpisode(id));
+    }
+
+    @Operation(summary = "新增一镜；缺省挂到最后一场，人物/道具/地点沿用同场")
+    @PostMapping("/episodes/{id}/shots")
+    public CommonResult<DramaShotResp> createShot(
+            @PathVariable Long id,
+            @RequestBody(required = false) DramaShotCreateReq req) {
+        return CommonResult.success(dramaStoryboardService.createShot(id, req));
+    }
+
+    @Operation(summary = "删除分镜并重排序号；已出片 / 生成中 / 已确认 / 最后一镜拒绝")
+    @DeleteMapping("/shots/{id}")
+    public CommonResult<DramaStoryboardResp> deleteShot(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.deleteShot(id));
     }
 
     @Operation(summary = "更新分镜台词/时长/衔接/参考资产；视频 prompt 由编译器重算")

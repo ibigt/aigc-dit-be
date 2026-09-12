@@ -17,6 +17,7 @@ import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
+import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaChapterResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
@@ -162,6 +163,105 @@ public class DramaStoryboardService {
         }
         touchSeries(episode.getSeriesId());
         return getStoryboard(episode.getId());
+    }
+
+    /**
+     * 手工补一镜。挂到指定章节（缺省最后一场），人物 / 道具 / 地点沿用同场已有分镜，
+     * 避免新镜一进来就是空镜编不出 prompt。
+     */
+    @Transactional
+    public DramaShotResp createShot(Long episodeId, DramaShotCreateReq req) {
+        DramaEpisode episode = requireEpisode(episodeId);
+        DramaSeries series = requireOwnedSeries(episode.getSeriesId());
+        List<DramaChapter> chapters = listChapters(episodeId);
+        if (chapters.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先生成分镜草稿再增删分镜");
+        }
+        DramaChapter chapter = pickChapter(chapters, req == null ? null : req.getChapterId());
+        List<DramaShot> shots = listShots(episodeId);
+        List<DramaShot> siblings = shots.stream()
+                .filter(item -> chapter.getId().equals(item.getChapterId()))
+                .toList();
+        if (siblings.size() >= DramaContract.MAX_SHOTS_PER_CHAPTER) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "单场最多 " + DramaContract.MAX_SHOTS_PER_CHAPTER + " 镜");
+        }
+        int index = shots.stream()
+                .mapToInt(item -> item.getShotIndex() == null ? 0 : item.getShotIndex())
+                .max().orElse(0) + 1;
+
+        DramaShot shot = new DramaShot();
+        shot.setSeriesId(episode.getSeriesId());
+        shot.setEpisodeId(episodeId);
+        shot.setChapterId(chapter.getId());
+        shot.setUserId(UserContext.requireUserId());
+        shot.setShotIndex(index);
+        shot.setTitle(req != null && StringUtils.hasText(req.getTitle()) ? req.getTitle().trim() : "分镜 " + index);
+        shot.setDurationSec(DramaService.normalizeDuration(series.getDefaultDurationSec()));
+        shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        shot.setReferenceAssetIds(new ArrayList<>());
+        DramaShot last = siblings.isEmpty() ? null : siblings.get(siblings.size() - 1);
+        shot.setCharacterNames(last == null ? new ArrayList<>() : new ArrayList<>(last.getCharacterNames()));
+        shot.setPropNames(last == null ? new ArrayList<>() : new ArrayList<>(last.getPropNames()));
+        shot.setLocationName(last == null ? null : last.getLocationName());
+        shot.setCastCount(shot.getCharacterNames().size());
+
+        Map<Long, DramaAsset> assets = assetsById(episodeId);
+        String prefix = stylePrefix(episode.getSeriesId());
+        rebindAndCompile(shot, assets, prefix, false, true);
+        shotMapper.insert(shot);
+        refreshChapterStatuses(chapters, listShots(episodeId));
+        touchSeries(episode.getSeriesId());
+        return toShotResp(shot, chapter, assets, prefix, null);
+    }
+
+    /**
+     * 删除分镜。已出片 / 生成中 / 已确认 / 全集最后一镜都拒绝，避免拼接成片时缺段或删光。
+     */
+    @Transactional
+    public DramaStoryboardResp deleteShot(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        if (StringUtils.hasText(shot.getVideoKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "该镜已出片，删除会让成片缺一段");
+        }
+        GenTask task = loadTask(shot.getGenTaskId());
+        if (task != null && !"FAILED".equals(task.getStatus()) && !"CANCELLED".equals(task.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "该镜正在生成，请等任务结束再删除");
+        }
+        if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "已确认分镜不能删除");
+        }
+        List<DramaShot> all = listShots(shot.getEpisodeId());
+        if (all.size() <= 1) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "至少保留一个分镜");
+        }
+        Long episodeId = shot.getEpisodeId();
+        Long seriesId = shot.getSeriesId();
+        shotMapper.deleteById(shotId);
+
+        List<DramaShot> rest = listShots(episodeId).stream()
+                .filter(item -> !shotId.equals(item.getId()))
+                .toList();
+        for (int i = 0; i < rest.size(); i++) {
+            DramaShot item = rest.get(i);
+            if (item.getShotIndex() == null || item.getShotIndex() != i + 1) {
+                item.setShotIndex(i + 1);
+                shotMapper.updateById(item);
+            }
+        }
+        refreshChapterStatuses(listChapters(episodeId), listShots(episodeId));
+        touchSeries(seriesId);
+        return getStoryboard(episodeId);
+    }
+
+    private DramaChapter pickChapter(List<DramaChapter> chapters, Long chapterId) {
+        if (chapterId == null) {
+            return chapters.get(chapters.size() - 1);
+        }
+        return chapters.stream()
+                .filter(item -> chapterId.equals(item.getId()))
+                .findFirst()
+                .orElseThrow(() -> new BizException(ErrorCode.NOT_FOUND, "章节不属于本剧集"));
     }
 
     @Transactional
