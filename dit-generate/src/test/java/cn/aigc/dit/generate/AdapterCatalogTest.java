@@ -23,6 +23,11 @@ class AdapterCatalogTest {
         assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2-0-fast-260128"));
         assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2.0-fast"));
         assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("火山方舟", "video", "doubao-seedance-2-0-260128"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0,
+                AdapterCatalog.infer("官方API（token plan）", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2, AdapterCatalog.infer("RunningHub", "video", "seedance-2.0"));
+        assertTrue(AdapterCatalog.looksLikeOfficialSeedance("doubao-seedance-2.0-fast"));
+        assertFalse(AdapterCatalog.looksLikeOfficialSeedance("seedance-2.0"));
         assertEquals(null, AdapterCatalog.infer("官方API", "video", ""));
         assertEquals(null, AdapterCatalog.infer("官方API", "video", "unknown-official-video"));
         assertEquals(AdapterCatalog.GPT_IMAGE_2, AdapterCatalog.infer("RunningHub", "image", "gpt-image-2"));
@@ -42,6 +47,14 @@ class AdapterCatalogTest {
         assertEquals(AdapterCatalog.TRANSPORT_RUNNINGHUB, AdapterCatalog.transport("seedance-2", "RunningHub"));
         assertThrows(BizException.class,
                 () -> AdapterCatalog.resolveKey("not-a-real-adapter", "官方API", "video", "agnes-video-2.5-flash"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0,
+                AdapterCatalog.resolveKeyForGenerate("agnes-video-2.5", "官方API", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0,
+                AdapterCatalog.resolveKeyForGenerate(null, "官方API", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2,
+                AdapterCatalog.resolveKeyForGenerate("seedance-2", "RunningHub", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.officialSeedanceAdapter("doubao-seedance-2.0-fast"));
+        assertEquals(null, AdapterCatalog.officialSeedanceAdapter("seedance-2.0"));
     }
 
     @Test

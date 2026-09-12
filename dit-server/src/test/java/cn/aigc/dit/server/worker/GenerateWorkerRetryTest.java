@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.worker;
 
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.drama.DramaContract;
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +23,18 @@ class GenerateWorkerRetryTest {
     void mapsQueueFullToFriendlyMessage() {
         assertEquals("Agnes 视频队列繁忙，请稍后重试",
                 GenerateWorker.friendlyBusyMessage("Agnes HTTP 503: video queue is full, please retry later"));
+    }
+
+    @Test
+    void ignoresAgnesPollErrorOnOfficialSeedance() {
+        assertTrue(GenerateWorker.isForeignProviderError(
+                AdapterCatalog.SEEDANCE_2_0, "Agnes 查询 HTTP 404"));
+        assertTrue(GenerateWorker.isForeignProviderError(
+                AdapterCatalog.SEEDANCE_2_0, "Agnes 任务不存在"));
+        assertFalse(GenerateWorker.isForeignProviderError(
+                AdapterCatalog.SEEDANCE_2_0, "Seedance 查询 HTTP 404"));
+        assertFalse(GenerateWorker.isForeignProviderError(
+                AdapterCatalog.AGNES_VIDEO_2_5, "Agnes 查询 HTTP 404"));
     }
 
     @Test

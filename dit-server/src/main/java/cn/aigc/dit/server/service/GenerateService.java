@@ -25,9 +25,12 @@ import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
+import cn.aigc.dit.server.worker.GenerateWorker;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -35,6 +38,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 @Service
 @RequiredArgsConstructor
@@ -46,6 +50,9 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
     private final AssetService assetService;
     private final CreditService creditService;
     private final GenerateTaskPublisher publisher;
+    private final ObjectProvider<GenerateWorker> generateWorker;
+    @Qualifier("generateKickExecutor")
+    private final Executor generateKickExecutor;
 
     @Transactional
     public GenerateTaskResp submit(GenerateSubmitReq req) {
@@ -65,7 +72,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (!GenerateRequests.supportsMode(model.getCapabilities(), request.getCategory(), request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
-        String adapterKey = AdapterCatalog.resolveKey(
+        String adapterKey = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         request.setAdapterKey(adapterKey);
         if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
@@ -118,7 +125,13 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         request.setTaskId(task.getId());
         creditService.change(userId, -cost, CreditReason.GENERATE, String.valueOf(task.getId()),
                 model.getName() + " · " + (ModelCategory.VIDEO.equals(request.getCategory()) ? "视频生成" : "图片生成"));
-        afterCommit(() -> publisher.publish(task.getId()));
+        afterCommit(() -> {
+            publisher.publish(task.getId());
+            GenerateWorker worker = generateWorker.getIfAvailable();
+            if (worker != null) {
+                generateKickExecutor.execute(() -> worker.kick(task.getId()));
+            }
+        });
         return creationService.toTaskResp(task, List.of(), model.getName());
     }
 

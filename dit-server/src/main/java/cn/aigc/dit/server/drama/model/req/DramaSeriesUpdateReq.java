@@ -12,7 +12,7 @@ public class DramaSeriesUpdateReq {
     private String name;
 
     @Size(max = 64)
-    @Schema(description = "风格键，当前仅 anime-comic")
+    @Schema(description = "风格键：anime-comic / live-realism / live-wuxia")
     private String styleKey;
 
     @Schema(description = "画幅：16:9 / 9:16 / 1:1")

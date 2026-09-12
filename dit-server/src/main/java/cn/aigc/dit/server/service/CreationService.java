@@ -9,6 +9,7 @@ import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.generate.GenerateTaskViews;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.CreationSessionMapper;
@@ -169,9 +170,9 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         resp.setModelId(task.getModelId());
         resp.setModelName(modelName);
         resp.setCategory(task.getCategory());
-        resp.setStatus(task.getStatus());
+        resp.setStatus(GenerateTaskViews.publicStatus(task));
         resp.setProgress(task.getProgress());
-        resp.setErrorMessage(task.getErrorMessage());
+        resp.setErrorMessage(GenerateTaskViews.publicError(task));
         resp.setPrompt(task.getPrompt());
         resp.setParams(task.getParams());
         resp.setCopies(task.getCopies());
@@ -180,7 +181,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         resp.setPosterKey(task.getPosterKey());
         resp.setOutputKeys(task.getOutputKeys());
         resp.setCreatedAt(task.getCreatedAt());
-        resp.setFinishedAt(task.getFinishedAt());
+        resp.setFinishedAt(GenerateTaskViews.shouldKeepPolling(task) ? null : task.getFinishedAt());
         if (task.getParams() != null && task.getParams().get("mode") != null) {
             resp.setMode(String.valueOf(task.getParams().get("mode")));
         }

@@ -372,7 +372,7 @@ COMMENT ON TABLE drama_series IS '漫剧系列（项目容器）；与快速创�
 COMMENT ON COLUMN drama_series.id IS '主键ID';
 COMMENT ON COLUMN drama_series.user_id IS '所属用户ID（关联 sys_user.id）';
 COMMENT ON COLUMN drama_series.name IS '系列名称（如 侦探社）';
-COMMENT ON COLUMN drama_series.style_key IS '风格键（如 anime-comic）；UI 用图例卡片选择，不展示前缀文本';
+COMMENT ON COLUMN drama_series.style_key IS '风格键（anime-comic / live-realism / live-wuxia）；UI 用图例卡片选择，不展示前缀文本';
 COMMENT ON COLUMN drama_series.style_prefix IS '风格前缀（仅分镜编译注入，由 style_key 在服务端解析，不暴露编辑）';
 COMMENT ON COLUMN drama_series.aspect_ratio IS '画幅（16:9 / 9:16 / 1:1）';
 COMMENT ON COLUMN drama_series.default_resolution IS '默认清晰度（480P / 720P）；验收默认 720P';

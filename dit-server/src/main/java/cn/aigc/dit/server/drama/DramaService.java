@@ -136,6 +136,7 @@ public class DramaService {
     public DramaSeriesResp updateSeries(Long id, DramaSeriesUpdateReq req) {
         DramaSeries series = requireSeries(id);
         String previousStyle = series.getStyleKey();
+        String previousPrefix = series.getStylePrefix();
         String previousRatio = series.getAspectRatio();
         if (StringUtils.hasText(req.getName())) {
             series.setName(req.getName().trim());
@@ -161,6 +162,9 @@ public class DramaService {
         seriesMapper.updateById(series);
         boolean styleChanged = req.getStyleKey() != null && !java.util.Objects.equals(previousStyle, series.getStyleKey());
         boolean ratioChanged = req.getAspectRatio() != null && !java.util.Objects.equals(previousRatio, series.getAspectRatio());
+        if (styleChanged) {
+            rewriteUnlockedAssetStyle(series.getId(), previousPrefix, series.getStylePrefix());
+        }
         if (styleChanged || ratioChanged) {
             storyboardService.expireCompiledBySeries(series.getId());
         }
@@ -572,7 +576,7 @@ public class DramaService {
         DramaSeries series = requireSeries(seriesId);
         AiModel model = requireEnabledVideoModel(req.getVideoModelId());
         series.setVideoModelId(model.getId());
-        series.setVideoAdapterKey(AdapterCatalog.resolveKey(
+        series.setVideoAdapterKey(AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
         seriesMapper.updateById(series);
         return getSeries(series.getId());
@@ -706,5 +710,57 @@ public class DramaService {
         DramaStyles.Spec spec = DramaStyles.require(styleKey);
         series.setStyleKey(spec.key());
         series.setStylePrefix(spec.prefix());
+    }
+
+    /**
+     * 未锁定资产的提示词里替换风格句，避免分析后改风格只改了系列字段。
+     */
+    void rewriteUnlockedAssetStyle(Long seriesId, String previousPrefix, String nextPrefix) {
+        if (seriesId == null || !StringUtils.hasText(nextPrefix)
+                || java.util.Objects.equals(previousPrefix, nextPrefix)) {
+            return;
+        }
+        List<DramaAsset> assets = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getSeriesId, seriesId));
+        for (DramaAsset asset : assets) {
+            if (asset == null || DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
+                continue;
+            }
+            boolean changed = false;
+            String prompt = replaceStylePrefix(asset.getImagePrompt(), previousPrefix, nextPrefix);
+            if (!java.util.Objects.equals(prompt, asset.getImagePrompt())) {
+                asset.setImagePrompt(prompt);
+                changed = true;
+            }
+            String description = replaceStylePrefix(asset.getDescription(), previousPrefix, nextPrefix);
+            if (!java.util.Objects.equals(description, asset.getDescription())) {
+                asset.setDescription(description);
+                changed = true;
+            }
+            if (!changed) {
+                continue;
+            }
+            if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())
+                    || DramaContract.STATUS_EXPIRED.equals(asset.getStatus())) {
+                asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+            }
+            assetMapper.updateById(asset);
+        }
+    }
+
+    static String replaceStylePrefix(String text, String previousPrefix, String nextPrefix) {
+        if (!StringUtils.hasText(text) || !StringUtils.hasText(nextPrefix)) {
+            return text;
+        }
+        String next = text;
+        if (StringUtils.hasText(previousPrefix) && next.contains(previousPrefix)) {
+            next = next.replace(previousPrefix, nextPrefix);
+        }
+        for (DramaStyles.Spec spec : DramaStyles.all()) {
+            if (!nextPrefix.equals(spec.prefix()) && next.contains(spec.prefix())) {
+                next = next.replace(spec.prefix(), nextPrefix);
+            }
+        }
+        return next;
     }
 }

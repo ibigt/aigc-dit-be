@@ -6,6 +6,7 @@ import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
@@ -31,6 +32,7 @@ import cn.aigc.dit.server.drama.text.ShotDraftList;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.generate.GenerateTaskViews;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
@@ -39,6 +41,7 @@ import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.GenerateService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,6 +59,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DramaStoryboardService {
@@ -338,6 +342,10 @@ public class DramaStoryboardService {
         extra.put("seriesId", series.getId());
         extra.put("episodeId", shot.getEpisodeId());
         extra.put("shotId", shot.getId());
+        extra.put("adapterKey", AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
+        log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={}",
+                shot.getId(), series.getId(), model.getId(), extra.get("adapterKey"), model.getModelKey());
         GenerateTaskResp task = generateService.submit(req, extra);
         shot.setGenTaskId(task.getId());
         shotMapper.updateById(shot);
@@ -924,9 +932,10 @@ public class DramaStoryboardService {
         resp.setVideoPosterKey(shot.getVideoPosterKey());
         resp.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
         if (task != null) {
-            resp.setGenTaskStatus(task.getStatus());
-            resp.setGenErrorMessage(task.getErrorMessage());
-            resp.setGenerating(isGeneratingStatus(task.getStatus()));
+            String status = GenerateTaskViews.publicStatus(task);
+            resp.setGenTaskStatus(status);
+            resp.setGenErrorMessage(GenerateTaskViews.publicError(task));
+            resp.setGenerating(isGeneratingStatus(status));
         } else {
             resp.setGenerating(false);
         }
@@ -1113,8 +1122,8 @@ public class DramaStoryboardService {
 
     static boolean isActiveGenerateTask(GenTask task) {
         return task != null
-                && !TaskStatus.FAILED.equals(task.getStatus())
-                && !TaskStatus.CANCELLED.equals(task.getStatus());
+                && !TaskStatus.CANCELLED.equals(task.getStatus())
+                && (!TaskStatus.FAILED.equals(task.getStatus()) || GenerateTaskViews.shouldKeepPolling(task));
     }
 
     private cn.aigc.dit.server.drama.model.resp.DramaAssetResp toLockedAsset(DramaAsset asset) {

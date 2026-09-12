@@ -17,7 +17,7 @@ COPY dit-storage dit-storage
 COPY dit-generate dit-generate
 COPY dit-server dit-server
 
-RUN mvn -B -pl dit-server -am package -DskipTests
+RUN mvn -B -pl dit-server -am package -Dmaven.test.skip=true
 
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app

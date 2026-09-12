@@ -12,7 +12,7 @@ import java.util.Map;
 
 /**
  * 乙未合入时的规则草稿，以及资产页自动提示词模板。
- * 风格句来自项目 {@code style_key}（当前仅二次元漫画风），规格按类型固定：角色三视图设定表、场景无人概念图。
+ * 风格句来自项目 {@code style_key}（二次元漫画风 / 真人写实风 / 真人武侠风），规格按类型固定：角色三视图设定表、场景无人概念图。
  */
 public final class DramaAssetDrafts {
 
@@ -86,7 +86,7 @@ public final class DramaAssetDrafts {
         if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
             return propPrompt(name, styleLine, context);
         }
-        return characterPrompt(name, stateTag, styleLine, context);
+        return characterPrompt(name, stateTag, spec, context);
     }
 
     private static void addNames(Map<String, AssetDraftList.AssetDraft> unique, List<String> names, String type,
@@ -127,12 +127,17 @@ public final class DramaAssetDrafts {
         unique.put(key, draft);
     }
 
-    private static String characterPrompt(String name, String stateTag, String styleLine, Context context) {
+    private static String characterPrompt(String name, String stateTag, DramaStyles.Spec spec, Context context) {
         StringBuilder text = new StringBuilder();
         text.append(name).append("角色设定图。");
         text.append(name).append("单独站立，全身可见。");
         text.append("发型、脸型、五官、肤色、身材比例完整、可重复。");
         text.append("服装款式、颜色、面料、纹理、配饰和鞋履清晰。");
+        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+            text.append("当代都市人物，穿现代常服，不要古装汉服广袖，不要武侠仙侠造型。");
+        } else if (DramaStyles.LIVE_WUXIA.equals(spec.key())) {
+            text.append("古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。");
+        }
         if (DramaContract.STATE_TAG_DREAM.equals(stateTag)) {
             text.append("入梦/梦境独立状态，光影可抽离漂浮，仍是同一张脸和发型，禁止写成另一个人。");
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
@@ -141,7 +146,7 @@ public final class DramaAssetDrafts {
         text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
         text.append("浅灰或纯白干净背景。");
         text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
-        text.append(styleLine).append("。");
+        text.append(spec.prefix()).append("。");
         text.append("同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。");
         return text.toString();
     }

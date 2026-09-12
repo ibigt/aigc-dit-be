@@ -5,6 +5,8 @@ import cn.aigc.dit.generate.AdapterCatalog;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 火山方舟 Seedance 官方地址：创建/查询都在 {@code /contents/generations/tasks}。
@@ -46,6 +48,41 @@ public final class ArkUrls {
 
     public static String queryTask(String v3Base, String taskId) {
         return createTask(v3Base) + "/" + encode(taskId);
+    }
+
+    /**
+     * token plan 创建在 {@code /api/plan/v3}，部分账号查询只认 {@code /api/v3}。
+     * 官方按量不回退到 plan。
+     */
+    public static List<String> queryUrls(String v3Base, String taskId) {
+        List<String> urls = new ArrayList<>();
+        urls.add(queryTask(v3Base, taskId));
+        String other = otherV3Base(v3Base);
+        if (other != null) {
+            String alt = queryTask(other, taskId);
+            if (!alt.equalsIgnoreCase(urls.get(0))) {
+                urls.add(alt);
+            }
+        }
+        return urls;
+    }
+
+    public static String baseOfQueryUrl(String queryUrl) {
+        String raw = stripTrailingSlash(blankTo(queryUrl, ""));
+        int marker = indexOfIgnoreCase(raw, TASKS_PATH);
+        if (marker > 0) {
+            return raw.substring(0, marker);
+        }
+        return raw;
+    }
+
+    static String otherV3Base(String v3Base) {
+        String raw = stripTrailingSlash(blankTo(v3Base, DEFAULT_BASE));
+        int plan = indexOfIgnoreCase(raw, "/api/plan/v3");
+        if (plan >= 0) {
+            return raw.substring(0, plan) + "/api/v3";
+        }
+        return null;
     }
 
     public static URI toUri(String url) {

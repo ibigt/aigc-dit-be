@@ -20,10 +20,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -50,13 +52,25 @@ class GenerateServiceTextModelTest {
     @Mock
     private GenerateTaskPublisher publisher;
     @Mock
+    private ObjectProvider<cn.aigc.dit.server.worker.GenerateWorker> generateWorker;
+    @Mock
+    private Executor generateKickExecutor;
+    @Mock
     private GenTaskMapper genTaskMapper;
 
     private GenerateService service;
 
     @BeforeEach
     void setUp() {
-        service = new GenerateService(aiModelMapper, creationMapper, creationService, assetService, creditService, publisher);
+        service = new GenerateService(
+                aiModelMapper,
+                creationMapper,
+                creationService,
+                assetService,
+                creditService,
+                publisher,
+                generateWorker,
+                generateKickExecutor);
         ReflectionTestUtils.setField(service, "baseMapper", genTaskMapper);
         UserContext.set(new LoginUser(1L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
     }

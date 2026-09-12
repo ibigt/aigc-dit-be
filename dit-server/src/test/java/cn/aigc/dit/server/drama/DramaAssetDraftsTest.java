@@ -71,4 +71,13 @@ class DramaAssetDraftsTest {
         assertTrue(luobai.getImagePrompt().contains("三视图"));
         assertTrue(luobai.getIdentityInvariants().contains("洛白"));
     }
+
+    @Test
+    void liveRealismCharacterPromptLocksModernClothes() {
+        String prompt = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_CHARACTER, "洛白", DramaStyles.require(DramaStyles.LIVE_REALISM));
+        assertTrue(prompt.contains("当代都市人物"));
+        assertTrue(prompt.contains("不要古装"));
+        assertTrue(prompt.contains("不要武侠仙侠"));
+    }
 }

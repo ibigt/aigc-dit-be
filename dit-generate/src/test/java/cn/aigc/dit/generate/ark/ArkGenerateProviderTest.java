@@ -121,6 +121,38 @@ class ArkGenerateProviderTest {
     }
 
     @Test
+    void pollPlan404FallsBackToPaygV3() {
+        http.postBody = """
+                {"id":"cgt-fb","status":"queued"}
+                """;
+        http.pollErrorForHostPath = "/api/plan/v3/";
+        http.pollError = new BizException(ErrorCode.BAD_REQUEST, "Seedance 查询 HTTP 404");
+        http.getBody = """
+                {"id":"cgt-fb","status":"running"}
+                """;
+
+        SubmitResult submitted = provider.submit(video("t2v")
+                .setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3"));
+        PollResult result = provider.poll(submitted.getJobId());
+        assertEquals(PollResult.RUNNING, result.getStatus());
+        assertEquals(2, http.pollCount);
+        assertTrue(http.lastPollUri.toString().contains("/api/v3/contents/generations/tasks/cgt-fb"));
+    }
+
+    @Test
+    void poll404KeepsRunningInsteadOfFailing() {
+        http.postBody = """
+                {"id":"cgt-404","status":"queued"}
+                """;
+        http.pollError = new BizException(ErrorCode.BAD_REQUEST, "Seedance 查询 HTTP 404");
+
+        SubmitResult submitted = provider.submit(video("t2v"));
+        PollResult result = provider.poll(submitted.getJobId());
+        assertEquals(PollResult.RUNNING, result.getStatus());
+        assertEquals(1, http.pollCount);
+    }
+
+    @Test
     void pollRateLimitSkipsImmediateSecondHttp() {
         properties.getArk().setRateLimitBackoffSeconds(60);
         http.postBody = """
@@ -164,6 +196,7 @@ class ArkGenerateProviderTest {
         private String lastJson;
         private int pollCount;
         private BizException pollError;
+        private String pollErrorForHostPath;
 
         @Override
         public String postJson(URI uri, String bearerToken, String jsonBody) {
@@ -177,7 +210,7 @@ class ArkGenerateProviderTest {
             lastGetUri = uri;
             lastPollUri = uri;
             pollCount++;
-            if (pollError != null) {
+            if (pollError != null && (pollErrorForHostPath == null || uri.toString().contains(pollErrorForHostPath))) {
                 throw pollError;
             }
             return getBody;

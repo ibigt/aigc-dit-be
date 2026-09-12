@@ -113,6 +113,19 @@ public final class AdapterCatalog {
         return infer(provider, category, modelKey);
     }
 
+    /**
+     * 出片选路：官方 Seedance 模型标识若被配成 Agnes / 空协议，强制回到 Ark。
+     * RunningHub 的 {@code seedance-2} 不改。
+     */
+    public static String resolveKeyForGenerate(String adapterKey, String provider, String category, String modelKey) {
+        String resolved = resolveKey(adapterKey, provider, category, modelKey);
+        String official = officialSeedanceAdapter(modelKey);
+        if (official != null && !isArk(resolved) && !isRunningHub(resolved)) {
+            return official;
+        }
+        return resolved;
+    }
+
     public static String infer(String provider, String category, String modelKey) {
         String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
         String prov = provider == null ? "" : provider.toLowerCase(Locale.ROOT);
@@ -124,6 +137,10 @@ public final class AdapterCatalog {
             return SEEDANCE_2_5;
         }
         if (isArk20Model(key) || (isArkProvider(prov) && ModelCategory.VIDEO.equals(cat))) {
+            return SEEDANCE_2_0;
+        }
+        if (isOfficialTokenPlan(provider) && ModelCategory.VIDEO.equals(cat)
+                && (key.contains("doubao-seedance") || key.contains("seedance-2.0") || key.contains("seedance-2-0"))) {
             return SEEDANCE_2_0;
         }
         if (key.contains("agnes")) {
@@ -180,6 +197,23 @@ public final class AdapterCatalog {
     public static boolean isArk(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && TRANSPORT_ARK.equals(spec.transport());
+    }
+
+    /** 模型标识是火山官方 Seedance，不能再落到 Agnes / RunningHub。 */
+    public static boolean looksLikeOfficialSeedance(String modelKey) {
+        String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
+        return isArk20Model(key) || isArk25Model(key);
+    }
+
+    public static String officialSeedanceAdapter(String modelKey) {
+        String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
+        if (isArk25Model(key)) {
+            return SEEDANCE_2_5;
+        }
+        if (isArk20Model(key)) {
+            return SEEDANCE_2_0;
+        }
+        return null;
     }
 
     public static boolean isOfficialTokenPlan(String provider) {

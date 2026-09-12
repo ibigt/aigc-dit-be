@@ -239,6 +239,37 @@ class AgnesGenerateProviderTest {
     }
 
     @Test
+    void refusesOfficialSeedanceInsteadOfHttp() {
+        GenerateRequest request = video("t2v")
+                .setAdapterKey(null)
+                .setModelKey("doubao-seedance-2.0-fast");
+        BizException ex = assertThrows(BizException.class, () -> provider.submit(request));
+        assertEquals(ErrorCode.BAD_REQUEST, ex.getCode());
+        assertTrue(ex.getMessage().contains("不能走 Agnes"));
+        assertEquals(null, http.lastUri);
+    }
+
+    @Test
+    void refusesToPollArkJobId() {
+        PollResult result = provider.poll("cgt-20260912190239-nwnfq");
+        assertEquals(PollResult.FAILED, result.getStatus());
+        assertTrue(result.getErrorMessage().contains("不能走 Agnes"));
+        assertEquals(null, http.lastGetUri);
+    }
+
+    @Test
+    void rememberSkipsOfficialSeedanceAndPollDoesNotHttp() {
+        GenerateRequest request = video("t2v")
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("doubao-seedance-2.0-fast");
+        provider.remember("cgt-ark-job", request, "https://api.agnes-ai.cn/v1", "test-key");
+        PollResult result = provider.poll("cgt-ark-job");
+        assertEquals(PollResult.FAILED, result.getStatus());
+        assertTrue(result.getErrorMessage().contains("不能走 Agnes"));
+        assertEquals(null, http.lastGetUri);
+    }
+
+    @Test
     void rememberAllowsVideoPollAfterRestart() throws Exception {
         http.getBody = """
                 {"video_id":"video_recover","status":"completed","metadata":{"url":"https://cdn.example/out.mp4"}}

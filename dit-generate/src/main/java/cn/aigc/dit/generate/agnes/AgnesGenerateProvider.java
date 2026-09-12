@@ -78,15 +78,27 @@ public class AgnesGenerateProvider implements GenerateProvider {
         if (!StringUtils.hasText(jobId) || request == null) {
             return;
         }
+        if (isOfficialSeedance(request)) {
+            log.warn("Agnes skip remember official seedance jobId={} modelKey={}", jobId, request.getModelKey());
+            return;
+        }
         String base = AgnesUrls.v1Base(v1Base, properties.getBaseUrl());
         jobs.computeIfAbsent(jobId, id -> new Job(request, base, apiKey, AgnesRequestMapper.modelName(request), id));
     }
 
     @Override
     public PollResult poll(String jobId) {
+        if (jobId != null && jobId.toLowerCase(Locale.ROOT).startsWith("cgt-")) {
+            log.warn("Agnes refuse to poll Ark jobId={}", jobId);
+            return PollResult.failed(jobId,
+                    "Seedance 官方模型不能走 Agnes，请使用适配协议 seedance-2.0 / seedance-2.5");
+        }
         Job job = jobs.get(jobId);
         if (job == null) {
             return PollResult.failed(jobId, "Agnes 任务不存在");
+        }
+        if (isOfficialSeedance(job.request)) {
+            return PollResult.failed(jobId, "Seedance 官方模型不能走 Agnes，请使用适配协议 seedance-2.0 / seedance-2.5");
         }
         if (job.outputKeys != null) {
             return PollResult.succeeded(jobId, job.outputKeys);
@@ -336,6 +348,10 @@ public class AgnesGenerateProvider implements GenerateProvider {
     private void assertSupported(GenerateRequest request) {
         if (request.getPrompt() == null || request.getPrompt().isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
+        }
+        if (isOfficialSeedance(request)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "Seedance 官方模型不能走 Agnes，请使用适配协议 seedance-2.0 / seedance-2.5");
         }
         String adapterKey = AdapterCatalog.resolveKey(
                 request.getAdapterKey(), KEY, request.getCategory(), request.getModelKey());
@@ -592,6 +608,14 @@ public class AgnesGenerateProvider implements GenerateProvider {
             return second.trim();
         }
         return third == null ? "" : third.trim();
+    }
+
+    private static boolean isOfficialSeedance(GenerateRequest request) {
+        if (request == null) {
+            return false;
+        }
+        return AdapterCatalog.isArk(request.getAdapterKey())
+                || AdapterCatalog.looksLikeOfficialSeedance(request.getModelKey());
     }
 
     private static String safe(String value) {

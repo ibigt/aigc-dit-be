@@ -33,6 +33,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -180,6 +181,44 @@ class DramaServiceTest {
         service.updateSeries(21L, req);
 
         assertEquals("9:16", existing.getAspectRatio());
+        verify(storyboardService).expireCompiledBySeries(21L);
+    }
+
+    @Test
+    void updateSeriesRewritesUnlockedAssetStylePrefix() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setDefaultResolution("720P");
+        existing.setDefaultDurationSec(5);
+        existing.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        DramaAsset unlocked = new DramaAsset();
+        unlocked.setId(9L);
+        unlocked.setSeriesId(21L);
+        unlocked.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        unlocked.setImagePrompt("洛白角色设定图。" + DramaStyles.require(DramaStyles.ANIME_COMIC).prefix() + "。");
+        DramaAsset locked = new DramaAsset();
+        locked.setId(10L);
+        locked.setSeriesId(21L);
+        locked.setStatus(DramaContract.STATUS_LOCKED);
+        locked.setImagePrompt("夏安角色设定图。" + DramaStyles.require(DramaStyles.ANIME_COMIC).prefix() + "。");
+        when(assetMapper.selectList(any())).thenReturn(List.of(unlocked, locked));
+
+        DramaSeriesUpdateReq req = new DramaSeriesUpdateReq();
+        req.setStyleKey(DramaStyles.LIVE_REALISM);
+        service.updateSeries(21L, req);
+
+        assertEquals(DramaStyles.LIVE_REALISM, existing.getStyleKey());
+        assertTrue(unlocked.getImagePrompt().contains(DramaStyles.require(DramaStyles.LIVE_REALISM).prefix()));
+        assertTrue(locked.getImagePrompt().contains(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix()));
+        verify(assetMapper).updateById(unlocked);
+        verify(assetMapper, never()).updateById(locked);
         verify(storyboardService).expireCompiledBySeries(21L);
     }
 

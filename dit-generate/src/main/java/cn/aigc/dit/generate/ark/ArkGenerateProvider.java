@@ -139,9 +139,35 @@ public class ArkGenerateProvider implements GenerateProvider {
         log.info("Seedance cancel jobId={} (remote cancel not implemented)", jobId);
     }
 
+    private JsonNode queryWithFallback(Job job, String jobId) {
+        java.util.List<String> urls = ArkUrls.queryUrls(job.v3Base, jobId);
+        BizException last = null;
+        for (int i = 0; i < urls.size(); i++) {
+            String queryUrl = urls.get(i);
+            try {
+                log.info("Seedance poll jobId={} url={}", jobId, queryUrl);
+                JsonNode response = getJson(ArkUrls.toUri(queryUrl), job.apiKey);
+                String nextBase = ArkUrls.baseOfQueryUrl(queryUrl);
+                if (StringUtils.hasText(nextBase) && !nextBase.equalsIgnoreCase(job.v3Base)) {
+                    log.info("Seedance poll switched base {} -> {}", job.v3Base, nextBase);
+                    job.v3Base = nextBase;
+                }
+                return response;
+            } catch (BizException e) {
+                last = e;
+                if (i + 1 < urls.size() && e.getMessage() != null && e.getMessage().contains("404")) {
+                    log.warn("Seedance poll {} failed, try alternate: {}", queryUrl, e.getMessage());
+                    continue;
+                }
+                throw e;
+            }
+        }
+        throw last == null ? new BizException(ErrorCode.INTERNAL, "Seedance 查询失败") : last;
+    }
+
     private PollResult pollVideo(Job job, String jobId) {
         try {
-            JsonNode response = getJson(ArkUrls.toUri(ArkUrls.queryTask(job.v3Base, jobId)), job.apiKey);
+            JsonNode response = queryWithFallback(job, jobId);
             String status = ArkResponses.status(response);
             job.consecutive429 = 0;
             if (ArkResponses.queued(status)) {
@@ -365,7 +391,10 @@ public class ArkGenerateProvider implements GenerateProvider {
 
     private static boolean transientPollError(BizException error) {
         String message = error.getMessage() == null ? "" : error.getMessage();
-        return message.contains("429") || message.contains("超时") || message.contains("HTTP 5");
+        return message.contains("429")
+                || message.contains("404")
+                || message.contains("超时")
+                || message.contains("HTTP 5");
     }
 
     private static boolean rateLimited(BizException error) {
@@ -414,7 +443,7 @@ public class ArkGenerateProvider implements GenerateProvider {
 
     private static final class Job {
         private final GenerateRequest request;
-        private final String v3Base;
+        private volatile String v3Base;
         private final String apiKey;
         private volatile List<String> outputKeys;
         private volatile long nextPollAtMillis;

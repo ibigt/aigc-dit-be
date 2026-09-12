@@ -24,6 +24,7 @@ import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.generate.GenerateRequests;
+import cn.aigc.dit.server.generate.GenerateTaskViews;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
@@ -36,9 +37,13 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessage;
+import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.connection.stream.StreamReadOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -49,9 +54,9 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -124,7 +129,7 @@ public class GenerateWorker {
         }
     }
 
-    @Scheduled(fixedDelay = 15000)
+    @Scheduled(fixedDelay = 5000)
     public void resumeStaleJobs() {
         OffsetDateTime staleBefore = OffsetDateTime.now().minusSeconds(20);
         List<GenTask> runningTasks = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
@@ -144,8 +149,21 @@ public class GenerateWorker {
                         .or().like(GenTask::getErrorMessage, "成片为空")
                         .or().like(GenTask::getErrorMessage, "成片 URL"))
                 .last("LIMIT 10"));
+        List<GenTask> foreignFailed = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.FAILED)
+                .isNotNull(GenTask::getProviderJobId)
+                .gt(GenTask::getCreatedAt, OffsetDateTime.now().minusHours(4))
+                .like(GenTask::getErrorMessage, "Agnes")
+                .last("LIMIT 10"));
         List<GenTask> toResume = new ArrayList<>(runningTasks);
         toResume.addAll(timedOut);
+        for (GenTask task : foreignFailed) {
+            if (isOfficialSeedanceTask(task)) {
+                log.warn("recover official seedance task {} killed by foreign Agnes error: {}",
+                        task.getId(), task.getErrorMessage());
+                toResume.add(task);
+            }
+        }
         for (GenTask task : toResume) {
             try {
                 resumeOne(task);
@@ -158,10 +176,12 @@ public class GenerateWorker {
     private void loop() {
         String stream = generateProperties.getWorker().getStream();
         String group = generateProperties.getWorker().getGroup();
-        String consumerName = "worker-" + UUID.randomUUID();
+        String consumerName = "dit-generate-0";
         ensureGroup(stream, group);
+        log.info("GenerateWorker consuming stream {} group {} as {}", stream, group, consumerName);
         while (running.get()) {
             try {
+                claimIdlePending(stream, group, consumerName);
                 List<MapRecord<String, Object, Object>> records = readStream(stream, group, consumerName);
                 if (records == null || records.isEmpty()) {
                     continue;
@@ -202,6 +222,17 @@ public class GenerateWorker {
                 consumer,
                 StreamReadOptions.empty().count(10).block(Duration.ofSeconds(5)),
                 StreamOffset.create(stream, ReadOffset.lastConsumed()));
+    }
+
+    public void kick(Long taskId) {
+        if (taskId == null) {
+            return;
+        }
+        try {
+            process(Map.of("taskId", String.valueOf(taskId)));
+        } catch (Exception e) {
+            log.warn("kick generate task {} failed: {}", taskId, e.getMessage());
+        }
     }
 
     private void process(Map<Object, Object> payload) {
@@ -291,16 +322,21 @@ public class GenerateWorker {
                 genTaskMapper.updateById(latest);
             }
             PollResult result = provider.poll(latest.getProviderJobId());
+            log.info("resume generate task {} poll status={} error={}",
+                    latest.getId(), result.getStatus(), result.getErrorMessage());
             if (result.isSucceeded()) {
-                log.info("recovered generate task {} from RunningHub job {}", latest.getId(), latest.getProviderJobId());
+                log.info("recovered generate task {} from provider job {}", latest.getId(), latest.getProviderJobId());
                 finishSuccess(latest, request, result);
                 return;
             }
-            if (result.isTerminal() && !isRecoverableIngestError(result.getErrorMessage())) {
+            if (result.isTerminal()
+                    && !isRecoverableIngestError(result.getErrorMessage())
+                    && !isForeignProviderError(request.getAdapterKey(), result.getErrorMessage())) {
                 finishFailed(latest, result.getErrorMessage() == null ? "生成失败" : result.getErrorMessage());
                 return;
             }
             updateProgress(latest.getProviderJobId(), result);
+            keepAliveIfStillRunning(latest, result);
             if (latest.getCreatedAt() != null && latest.getCreatedAt().isBefore(OffsetDateTime.now().minusHours(4))) {
                 finishFailed(latest, "生成超时");
             }
@@ -310,7 +346,9 @@ public class GenerateWorker {
     private void applyPollResult(GenTask task, GenerateRequest request, PollResult result) {
         if (result.isSucceeded()) {
             finishSuccess(task, request, result);
-        } else if (result.isTerminal() && !isRecoverableIngestError(result.getErrorMessage())) {
+        } else if (result.isTerminal()
+                && !isRecoverableIngestError(result.getErrorMessage())
+                && !isForeignProviderError(request.getAdapterKey(), result.getErrorMessage())) {
             finishFailed(task, result.getErrorMessage() == null ? "生成失败" : result.getErrorMessage());
         } else {
             log.info("generate task {} still running on provider job {}, will resume later",
@@ -322,12 +360,43 @@ public class GenerateWorker {
         GenTask task = genTaskMapper.selectOne(new LambdaQueryWrapper<GenTask>()
                 .eq(GenTask::getProviderJobId, jobId)
                 .last("LIMIT 1"));
-        if (task == null || TaskStatus.SUCCEEDED.equals(task.getStatus()) || TaskStatus.FAILED.equals(task.getStatus())) {
+        if (task == null || TaskStatus.SUCCEEDED.equals(task.getStatus()) || TaskStatus.CANCELLED.equals(task.getStatus())) {
+            return;
+        }
+        if (TaskStatus.FAILED.equals(task.getStatus()) && !GenerateTaskViews.shouldKeepPolling(task)) {
             return;
         }
         task.setProgress(Math.max(task.getProgress() == null ? 0 : task.getProgress(), result.getProgress()));
         task.setStatus(TaskStatus.RUNNING);
+        task.setFinishedAt(null);
+        if (GenerateTaskViews.isForeignAgnesError(task.getErrorMessage())) {
+            task.setErrorMessage(null);
+        }
         genTaskMapper.updateById(task);
+    }
+
+    private void keepAliveIfStillRunning(GenTask task, PollResult result) {
+        if (result == null || result.isTerminal() || result.isSucceeded()) {
+            return;
+        }
+        GenTask latest = genTaskMapper.selectById(task.getId());
+        if (latest == null
+                || TaskStatus.SUCCEEDED.equals(latest.getStatus())
+                || TaskStatus.CANCELLED.equals(latest.getStatus())) {
+            return;
+        }
+        if (TaskStatus.FAILED.equals(latest.getStatus()) && !GenerateTaskViews.shouldKeepPolling(latest)) {
+            return;
+        }
+        latest.setStatus(TaskStatus.RUNNING);
+        latest.setFinishedAt(null);
+        if (GenerateTaskViews.isForeignAgnesError(latest.getErrorMessage())) {
+            latest.setErrorMessage(null);
+        }
+        if (result.getProgress() > 0) {
+            latest.setProgress(Math.max(latest.getProgress() == null ? 0 : latest.getProgress(), result.getProgress()));
+        }
+        genTaskMapper.updateById(latest);
     }
 
     private void finishSuccess(GenTask task, GenerateRequest request, PollResult result) {
@@ -400,15 +469,28 @@ public class GenerateWorker {
         boolean releaseDramaSlot = false;
         synchronized (lockFor(task.getId())) {
             GenTask latest = genTaskMapper.selectById(task.getId());
-            if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || TaskStatus.FAILED.equals(latest.getStatus())) {
+            if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || TaskStatus.CANCELLED.equals(latest.getStatus())) {
                 return;
             }
+            if (shouldIgnoreForeignFailure(latest, message)) {
+                log.warn("ignore foreign provider error on generate task {}: {}", latest.getId(), message);
+                return;
+            }
+            String mapped = GenerateTaskViews.friendlySeedanceError(message);
+            boolean alreadyFailed = TaskStatus.FAILED.equals(latest.getStatus());
+            if (alreadyFailed) {
+                if (!GenerateTaskViews.isForeignAgnesError(latest.getErrorMessage())) {
+                    return;
+                }
+                log.warn("replace foreign Agnes error on generate task {} with official error", latest.getId());
+            }
+            storeOfficialError(latest, mapped);
             latest.setStatus(TaskStatus.FAILED);
-            latest.setErrorMessage(message);
+            latest.setErrorMessage(mapped);
             latest.setFinishedAt(OffsetDateTime.now());
             genTaskMapper.updateById(latest);
             releaseDramaSlot = GenerateRequests.isDramaShot(latest.getParams());
-            if (latest.getCreditCost() != null && latest.getCreditCost() > 0) {
+            if (!alreadyFailed && latest.getCreditCost() != null && latest.getCreditCost() > 0) {
                 try {
                     creditService.change(latest.getUserId(), latest.getCreditCost(), CreditReason.REFUND,
                             String.valueOf(latest.getId()), "生成失败退还积分");
@@ -525,6 +607,62 @@ public class GenerateWorker {
         return taskLocks.computeIfAbsent(taskId, id -> new Object());
     }
 
+    private boolean isOfficialSeedanceTask(GenTask task) {
+        AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
+        String adapter = null;
+        if (task.getParams() != null && task.getParams().get("adapterKey") != null) {
+            adapter = String.valueOf(task.getParams().get("adapterKey"));
+        }
+        adapter = AdapterCatalog.resolveKeyForGenerate(
+                firstNonBlank(adapter, model == null ? null : model.getAdapterKey()),
+                model == null ? null : model.getProvider(),
+                model == null ? null : model.getCategory(),
+                model == null ? null : model.getModelKey());
+        return AdapterCatalog.isArk(adapter);
+    }
+
+    private boolean shouldIgnoreForeignFailure(GenTask task, String message) {
+        String adapter = null;
+        if (task.getParams() != null && task.getParams().get("adapterKey") != null) {
+            adapter = String.valueOf(task.getParams().get("adapterKey"));
+        }
+        if (!AdapterCatalog.isArk(adapter) && task.getModelId() != null) {
+            AiModel model = aiModelMapper.selectById(task.getModelId());
+            if (model != null) {
+                adapter = AdapterCatalog.resolveKeyForGenerate(
+                        firstNonBlank(adapter, model.getAdapterKey()),
+                        model.getProvider(),
+                        model.getCategory(),
+                        model.getModelKey());
+            }
+        }
+        return isForeignProviderError(adapter, message);
+    }
+
+    private void storeOfficialError(GenTask task, String message) {
+        if (!StringUtils.hasText(message) || GenerateTaskViews.isForeignAgnesError(message)) {
+            return;
+        }
+        Map<String, Object> params = task.getParams() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(task.getParams());
+        params.put(GenerateTaskViews.OFFICIAL_ERROR_KEY, message);
+        task.setParams(params);
+    }
+
+    static boolean isForeignProviderError(String adapterKey, String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        if (AdapterCatalog.isArk(adapterKey)) {
+            return message.contains("Agnes ") || message.startsWith("Agnes");
+        }
+        if (AdapterCatalog.isAgnes(adapterKey)) {
+            return message.contains("Seedance ") || message.startsWith("Seedance");
+        }
+        return false;
+    }
+
     static boolean isRecoverableIngestError(String message) {
         if (message == null || message.isBlank()) {
             return false;
@@ -583,6 +721,31 @@ public class GenerateWorker {
         return message == null || message.isBlank() ? "生成失败" : message;
     }
 
+    private void claimIdlePending(String stream, String group, String consumerName) {
+        try {
+            PendingMessages pending = stringRedisTemplate.opsForStream()
+                    .pending(stream, group, Range.unbounded(), 20L);
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+            List<RecordId> idle = new ArrayList<>();
+            for (PendingMessage message : pending) {
+                Duration elapsed = message.getElapsedTimeSinceLastDelivery();
+                if (elapsed != null && elapsed.compareTo(Duration.ofSeconds(15)) >= 0) {
+                    idle.add(message.getId());
+                }
+            }
+            if (idle.isEmpty()) {
+                return;
+            }
+            stringRedisTemplate.opsForStream().claim(
+                    stream, group, consumerName, Duration.ofSeconds(15), idle.toArray(RecordId[]::new));
+            log.info("claimed {} idle generate stream messages", idle.size());
+        } catch (Exception e) {
+            log.debug("claim idle generate stream: {}", e.getMessage());
+        }
+    }
+
     private void ensureGroup(String stream, String group) {
         try {
             stringRedisTemplate.opsForStream().createGroup(stream, ReadOffset.from("0-0"), group);
@@ -595,11 +758,18 @@ public class GenerateWorker {
     }
 
     private GenerateProvider bindAndResolve(GenTask task, AiModel model, GenerateRequest request) {
-        String adapterKey = AdapterCatalog.resolveKey(
-                firstNonBlank(request.getAdapterKey(), model == null ? null : model.getAdapterKey()),
+        String modelKey = model == null ? request.getModelKey() : model.getModelKey();
+        String requestedAdapter = firstNonBlank(request.getAdapterKey(), model == null ? null : model.getAdapterKey());
+        String adapterKey = AdapterCatalog.resolveKeyForGenerate(
+                requestedAdapter,
                 model == null ? null : model.getProvider(),
                 model == null ? null : model.getCategory(),
-                model == null ? null : model.getModelKey());
+                modelKey);
+        if (requestedAdapter != null && !requestedAdapter.isBlank()
+                && adapterKey != null && !adapterKey.equalsIgnoreCase(requestedAdapter.trim())) {
+            log.warn("generate task {} official seedance forced adapter {} -> {} modelKey={}",
+                    task.getId(), requestedAdapter, adapterKey, modelKey);
+        }
         request.setAdapterKey(adapterKey);
         if (model != null) {
             if (AdapterCatalog.isArk(adapterKey)) {
@@ -612,8 +782,13 @@ public class GenerateWorker {
             request.setApiKey(resolveApiKey(model, adapterKey));
         }
         GenerateProvider provider = providerRegistry.resolveByAdapter(adapterKey, null, null, null);
-        log.info("generate task {} routed adapter={} transport={} modelKey={}",
-                task.getId(), adapterKey, provider.providerKey(), request.getModelKey());
+        log.info("generate task {} routed adapter={} transport={} modelId={} modelKey={} provider={}",
+                task.getId(),
+                adapterKey,
+                provider.providerKey(),
+                model == null ? null : model.getId(),
+                request.getModelKey(),
+                model == null ? null : model.getProvider());
         return provider;
     }
 
