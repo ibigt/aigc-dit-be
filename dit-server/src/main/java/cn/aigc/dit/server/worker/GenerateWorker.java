@@ -12,6 +12,9 @@ import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.generate.agnes.AgnesGenerateProvider;
 import cn.aigc.dit.generate.agnes.AgnesUrls;
+import cn.aigc.dit.generate.ark.ArkGenerateProvider;
+import cn.aigc.dit.generate.ark.ArkKeys;
+import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
@@ -19,6 +22,7 @@ import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
+import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -73,6 +77,7 @@ public class GenerateWorker {
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final ConcurrentHashMap<Long, Object> taskLocks = new ConcurrentHashMap<>();
+    private final Object dramaShotSlots = new Object();
     private Thread workerThread;
 
     @PostConstruct
@@ -91,20 +96,30 @@ public class GenerateWorker {
         }
     }
 
-    @Scheduled(fixedDelay = 15000)
+    @Scheduled(fixedDelay = 5000)
     public void enqueuePending() {
-        List<GenTask> pending = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+        OffsetDateTime since = OffsetDateTime.now().minusHours(24);
+        OffsetDateTime staleBefore = OffsetDateTime.now().minusSeconds(30);
+        List<GenTask> pending = new ArrayList<>(genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
                 .eq(GenTask::getStatus, TaskStatus.PENDING)
                 .isNull(GenTask::getProviderJobId)
-                .lt(GenTask::getCreatedAt, OffsetDateTime.now().minusSeconds(8))
-                .last("LIMIT 20"));
+                .gt(GenTask::getCreatedAt, since)
+                .orderByAsc(GenTask::getCreatedAt)
+                .last("LIMIT 50")));
+        pending.addAll(genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.RUNNING)
+                .isNull(GenTask::getProviderJobId)
+                .gt(GenTask::getCreatedAt, since)
+                .lt(GenTask::getUpdatedAt, staleBefore)
+                .last("LIMIT 20")));
+        if (!pending.isEmpty()) {
+            log.info("submit pending generate tasks: {}", pending.stream().map(GenTask::getId).toList());
+        }
         for (GenTask task : pending) {
             try {
-                stringRedisTemplate.opsForStream().add(
-                        generateProperties.getWorker().getStream(),
-                        Map.of("taskId", String.valueOf(task.getId())));
+                process(Map.of("taskId", String.valueOf(task.getId())));
             } catch (Exception e) {
-                log.warn("re-enqueue pending task {} failed: {}", task.getId(), e.getMessage());
+                log.warn("submit pending task {} failed: {}", task.getId(), e.getMessage());
             }
         }
     }
@@ -147,10 +162,7 @@ public class GenerateWorker {
         ensureGroup(stream, group);
         while (running.get()) {
             try {
-                List<MapRecord<String, Object, Object>> records = stringRedisTemplate.opsForStream().read(
-                        Consumer.from(group, consumerName),
-                        StreamReadOptions.empty().count(1).block(Duration.ofSeconds(5)),
-                        StreamOffset.create(stream, ReadOffset.lastConsumed()));
+                List<MapRecord<String, Object, Object>> records = readStream(stream, group, consumerName);
                 if (records == null || records.isEmpty()) {
                     continue;
                 }
@@ -177,33 +189,59 @@ public class GenerateWorker {
         }
     }
 
+    private List<MapRecord<String, Object, Object>> readStream(String stream, String group, String consumerName) {
+        Consumer consumer = Consumer.from(group, consumerName);
+        List<MapRecord<String, Object, Object>> pending = stringRedisTemplate.opsForStream().read(
+                consumer,
+                StreamReadOptions.empty().count(10),
+                StreamOffset.create(stream, ReadOffset.from("0")));
+        if (pending != null && !pending.isEmpty()) {
+            return pending;
+        }
+        return stringRedisTemplate.opsForStream().read(
+                consumer,
+                StreamReadOptions.empty().count(10).block(Duration.ofSeconds(5)),
+                StreamOffset.create(stream, ReadOffset.lastConsumed()));
+    }
+
     private void process(Map<Object, Object> payload) {
-        Object rawId = payload.get("taskId");
-        if (rawId == null) {
+        Long taskId = taskIdOf(payload);
+        if (taskId == null) {
+            log.warn("generate stream payload missing taskId: {}", payload == null ? null : payload.keySet());
             return;
         }
-        Long taskId = Long.valueOf(String.valueOf(rawId));
+        synchronized (lockFor(taskId)) {
+            processLocked(taskId);
+        }
+    }
+
+    private void processLocked(Long taskId) {
         GenTask task = genTaskMapper.selectById(taskId);
         if (task == null) {
+            log.warn("generate task {} not found", taskId);
             return;
         }
+        log.info("processing generate task {} status={} modelId={}", taskId, task.getStatus(), task.getModelId());
         if (TaskStatus.SUCCEEDED.equals(task.getStatus())
                 || TaskStatus.FAILED.equals(task.getStatus())
                 || TaskStatus.CANCELLED.equals(task.getStatus())) {
             return;
         }
-        if (TaskStatus.RUNNING.equals(task.getStatus()) && task.getProviderJobId() != null) {
+        if (StringUtils.hasText(task.getProviderJobId())) {
+            return;
+        }
+        if (TaskStatus.RUNNING.equals(task.getStatus())
+                && task.getUpdatedAt() != null
+                && task.getUpdatedAt().isAfter(OffsetDateTime.now().minusSeconds(30))) {
+            return;
+        }
+        if (!tryAcquireDramaShotSlot(task)) {
             return;
         }
         AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
         String modelKey = model == null ? null : model.getModelKey();
         GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
-        bindProvider(request, model);
-        GenerateProvider provider = providerRegistry.resolveByAdapter(
-                model == null ? null : model.getAdapterKey(),
-                model == null ? null : model.getProvider(),
-                model == null ? null : model.getCategory(),
-                modelKey);
+        GenerateProvider provider = bindAndResolve(task, model, request);
         task.setStatus(TaskStatus.RUNNING);
         task.setProgress(5);
         genTaskMapper.updateById(task);
@@ -211,7 +249,8 @@ public class GenerateWorker {
             SubmitResult submitted = provider.submit(request);
             task.setProviderJobId(submitted.getJobId());
             genTaskMapper.updateById(task);
-            PollResult result = pollUntilDone(provider, submitted.getJobId());
+            PollResult result = provider.poll(submitted.getJobId());
+            updateProgress(submitted.getJobId(), result);
             applyPollResult(task, request, result);
         } catch (Exception e) {
             String message = e.getMessage() == null ? "生成失败" : e.getMessage();
@@ -241,13 +280,9 @@ public class GenerateWorker {
             AiModel model = latest.getModelId() == null ? null : aiModelMapper.selectById(latest.getModelId());
             String modelKey = model == null ? null : model.getModelKey();
             GenerateRequest request = GenerateRequests.fromTask(latest, modelKey);
-            bindProvider(request, model);
-            GenerateProvider provider = providerRegistry.resolveByAdapter(
-                    model == null ? null : model.getAdapterKey(),
-                    model == null ? null : model.getProvider(),
-                    model == null ? null : model.getCategory(),
-                    modelKey);
+            GenerateProvider provider = bindAndResolve(latest, model, request);
             rememberProviderJob(provider, latest, request, model);
+            log.info("resume generate task {} via {} job {}", latest.getId(), provider.providerKey(), latest.getProviderJobId());
             if (recoverableFail) {
                 latest.setStatus(TaskStatus.RUNNING);
                 latest.setErrorMessage(null);
@@ -283,28 +318,6 @@ public class GenerateWorker {
         }
     }
 
-    private PollResult pollUntilDone(GenerateProvider provider, String jobId) throws InterruptedException {
-        int timeoutMs = generateProperties.getWorker().getTimeoutSeconds() * 1000;
-        int interval = Math.max(200, generateProperties.getWorker().getPollIntervalMs());
-        long start = System.currentTimeMillis();
-        PollResult last = PollResult.running(jobId, 10);
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            last = provider.poll(jobId);
-            updateProgress(jobId, last);
-            if (last.isTerminal()) {
-                return last;
-            }
-            Thread.sleep(interval);
-        }
-        last = provider.poll(jobId);
-        updateProgress(jobId, last);
-        if (last.isTerminal()) {
-            return last;
-        }
-        log.warn("generate job {} still running after {}s, leave task open for resume", jobId, timeoutMs / 1000);
-        return last;
-    }
-
     private void updateProgress(String jobId, PollResult result) {
         GenTask task = genTaskMapper.selectOne(new LambdaQueryWrapper<GenTask>()
                 .eq(GenTask::getProviderJobId, jobId)
@@ -318,6 +331,7 @@ public class GenerateWorker {
     }
 
     private void finishSuccess(GenTask task, GenerateRequest request, PollResult result) {
+        boolean releaseDramaSlot = false;
         synchronized (lockFor(task.getId())) {
             GenTask latest = genTaskMapper.selectById(task.getId());
             if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || hasCreations(latest.getId())) {
@@ -375,10 +389,15 @@ public class GenerateWorker {
             latest.setFinishedAt(OffsetDateTime.now());
             latest.setErrorMessage(null);
             genTaskMapper.updateById(latest);
+            releaseDramaSlot = GenerateRequests.isDramaShot(latest.getParams());
+        }
+        if (releaseDramaSlot) {
+            kickDramaShotQueue();
         }
     }
 
     private void finishFailed(GenTask task, String message) {
+        boolean releaseDramaSlot = false;
         synchronized (lockFor(task.getId())) {
             GenTask latest = genTaskMapper.selectById(task.getId());
             if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || TaskStatus.FAILED.equals(latest.getStatus())) {
@@ -388,6 +407,7 @@ public class GenerateWorker {
             latest.setErrorMessage(message);
             latest.setFinishedAt(OffsetDateTime.now());
             genTaskMapper.updateById(latest);
+            releaseDramaSlot = GenerateRequests.isDramaShot(latest.getParams());
             if (latest.getCreditCost() != null && latest.getCreditCost() > 0) {
                 try {
                     creditService.change(latest.getUserId(), latest.getCreditCost(), CreditReason.REFUND,
@@ -397,6 +417,55 @@ public class GenerateWorker {
                 }
             }
         }
+        if (releaseDramaSlot) {
+            kickDramaShotQueue();
+        }
+    }
+
+    private boolean tryAcquireDramaShotSlot(GenTask task) {
+        if (!GenerateRequests.isDramaShot(task.getParams())) {
+            return true;
+        }
+        synchronized (dramaShotSlots) {
+            long running = countActiveDramaShotTasks();
+            if (running >= DramaContract.MAX_SHOT_GENERATE) {
+                if (!TaskStatus.PENDING.equals(task.getStatus()) || StringUtils.hasText(task.getProviderJobId())) {
+                    task.setStatus(TaskStatus.PENDING);
+                    task.setProviderJobId(null);
+                    genTaskMapper.updateById(task);
+                }
+                log.info("generate task {} queued, {}/{} drama shots running",
+                        task.getId(), running, DramaContract.MAX_SHOT_GENERATE);
+                return false;
+            }
+            return true;
+        }
+    }
+
+    private long countActiveDramaShotTasks() {
+        Long count = genTaskMapper.selectCount(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.RUNNING)
+                .apply("params->>'source' = {0}", GenerateRequests.SOURCE_DRAMA)
+                .apply("params->>'shotId' is not null"));
+        return count == null ? 0 : count;
+    }
+
+    private void kickDramaShotQueue() {
+        List<GenTask> next = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
+                .eq(GenTask::getStatus, TaskStatus.PENDING)
+                .isNull(GenTask::getProviderJobId)
+                .apply("params->>'source' = {0}", GenerateRequests.SOURCE_DRAMA)
+                .apply("params->>'shotId' is not null")
+                .orderByAsc(GenTask::getCreatedAt)
+                .last("LIMIT 1"));
+        if (next.isEmpty()) {
+            return;
+        }
+        try {
+            process(Map.of("taskId", String.valueOf(next.get(0).getId())));
+        } catch (Exception e) {
+            log.warn("kick drama shot queue {} failed: {}", next.get(0).getId(), e.getMessage());
+        }
     }
 
     private void rememberProviderJob(GenerateProvider provider, GenTask task, GenerateRequest request, AiModel model) {
@@ -405,7 +474,7 @@ public class GenerateWorker {
         }
         if (provider instanceof RunningHubGenerateProvider runningHub) {
             String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), generateProperties.getRunninghub().getBaseUrl());
-            runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model));
+            runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model, request.getAdapterKey()));
             return;
         }
         if (provider instanceof ComfyUiGenerateProvider comfyUi) {
@@ -414,12 +483,42 @@ public class GenerateWorker {
         }
         if (provider instanceof AgnesGenerateProvider agnes) {
             String v1Base = AgnesUrls.v1Base(request.getEndpoint(), generateProperties.getAgnes().getBaseUrl());
-            agnes.remember(task.getProviderJobId(), request, v1Base, resolveApiKey(model));
+            agnes.remember(task.getProviderJobId(), request, v1Base, resolveApiKey(model, request.getAdapterKey()));
+            return;
+        }
+        if (provider instanceof ArkGenerateProvider ark) {
+            String v3Base = ArkUrls.v3Base(
+                    request.getEndpoint(), generateProperties.getArk().getBaseUrl(),
+                    model == null ? null : model.getProvider());
+            ark.remember(task.getProviderJobId(), request, v3Base, resolveApiKey(model, request.getAdapterKey()));
         }
     }
 
     private boolean hasCreations(Long taskId) {
         return creationMapper.selectCount(new LambdaQueryWrapper<Creation>().eq(Creation::getTaskId, taskId)) > 0;
+    }
+
+    private static Long taskIdOf(Map<Object, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return null;
+        }
+        Object raw = payload.get("taskId");
+        if (raw == null) {
+            for (Map.Entry<Object, Object> entry : payload.entrySet()) {
+                if (entry.getKey() != null && "taskId".equalsIgnoreCase(String.valueOf(entry.getKey()))) {
+                    raw = entry.getValue();
+                    break;
+                }
+            }
+        }
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Long.valueOf(String.valueOf(raw).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private Object lockFor(Long taskId) {
@@ -432,11 +531,16 @@ public class GenerateWorker {
         }
         return message.contains("下载 RunningHub")
                 || message.contains("下载 Agnes")
+                || message.contains("下载 Seedance")
                 || message.contains("下载 ComfyUI")
                 || message.contains("ComfyUI 成片")
                 || message.contains("成片回收")
                 || message.contains("成片为空")
                 || message.contains("成片 URL");
+    }
+
+    static boolean dramaShotSlotsFull(long running) {
+        return running >= DramaContract.MAX_SHOT_GENERATE;
     }
 
     static boolean isRetryableSubmitError(String message) {
@@ -490,34 +594,64 @@ public class GenerateWorker {
         }
     }
 
-    private void bindProvider(GenerateRequest request, AiModel model) {
-        if (model == null) {
-            return;
-        }
+    private GenerateProvider bindAndResolve(GenTask task, AiModel model, GenerateRequest request) {
         String adapterKey = AdapterCatalog.resolveKey(
-                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+                firstNonBlank(request.getAdapterKey(), model == null ? null : model.getAdapterKey()),
+                model == null ? null : model.getProvider(),
+                model == null ? null : model.getCategory(),
+                model == null ? null : model.getModelKey());
         request.setAdapterKey(adapterKey);
-        request.setEndpoint(model.getEndpoint());
-        request.setAdapterConfig(model.getAdapterConfig());
-        request.setApiKey(resolveApiKey(model));
+        if (model != null) {
+            if (AdapterCatalog.isArk(adapterKey)) {
+                request.setEndpoint(ArkUrls.v3Base(
+                        model.getEndpoint(), generateProperties.getArk().getBaseUrl(), model.getProvider()));
+            } else {
+                request.setEndpoint(model.getEndpoint());
+            }
+            request.setAdapterConfig(model.getAdapterConfig());
+            request.setApiKey(resolveApiKey(model, adapterKey));
+        }
+        GenerateProvider provider = providerRegistry.resolveByAdapter(adapterKey, null, null, null);
+        log.info("generate task {} routed adapter={} transport={} modelKey={}",
+                task.getId(), adapterKey, provider.providerKey(), request.getModelKey());
+        return provider;
     }
 
-    private String resolveApiKey(AiModel model) {
+    private String resolveApiKey(AiModel model, String adapterKey) {
         if (model != null && StringUtils.hasText(model.getApiKeyEnc())) {
             String decrypted = encryptor.decrypt(model.getApiKeyEnc());
             if (StringUtils.hasText(decrypted)) {
-                return decrypted.trim();
+                String normalized = ArkKeys.normalize(decrypted);
+                if (StringUtils.hasText(normalized)) {
+                    return normalized;
+                }
             }
         }
-        String adapterKey = model == null ? null : AdapterCatalog.resolveKey(
-                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
-        if (AdapterCatalog.isAgnes(adapterKey)) {
+        String resolved = adapterKey;
+        if (resolved == null && model != null) {
+            resolved = AdapterCatalog.resolveKey(
+                    model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        }
+        if (AdapterCatalog.isAgnes(resolved)) {
             return generateProperties.getAgnes().getApiKey();
         }
-        if (AdapterCatalog.isRunningHub(adapterKey)
+        if (AdapterCatalog.isArk(resolved)) {
+            return generateProperties.getArk().getApiKey();
+        }
+        if (AdapterCatalog.isRunningHub(resolved)
                 || (model != null && model.getProvider() != null
                 && RunningHubGenerateProvider.KEY.equalsIgnoreCase(model.getProvider()))) {
             return generateProperties.getRunninghub().getApiKey();
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (StringUtils.hasText(first)) {
+            return first.trim();
+        }
+        if (StringUtils.hasText(second)) {
+            return second.trim();
         }
         return null;
     }

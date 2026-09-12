@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.worker;
 
+import cn.aigc.dit.server.drama.DramaContract;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -21,5 +22,12 @@ class GenerateWorkerRetryTest {
     void mapsQueueFullToFriendlyMessage() {
         assertEquals("Agnes 视频队列繁忙，请稍后重试",
                 GenerateWorker.friendlyBusyMessage("Agnes HTTP 503: video queue is full, please retry later"));
+    }
+
+    @Test
+    void dramaShotQueueStartsAfterEightRunning() {
+        assertFalse(GenerateWorker.dramaShotSlotsFull(DramaContract.MAX_SHOT_GENERATE - 1));
+        assertTrue(GenerateWorker.dramaShotSlotsFull(DramaContract.MAX_SHOT_GENERATE));
+        assertTrue(GenerateWorker.dramaShotSlotsFull(DramaContract.MAX_SHOT_GENERATE + 3));
     }
 }

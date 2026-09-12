@@ -1,0 +1,73 @@
+package cn.aigc.dit.server.drama;
+
+import cn.aigc.dit.server.drama.entity.DramaEpisode;
+import cn.aigc.dit.server.drama.entity.DramaShot;
+import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class DramaFilmsTest {
+
+    @Test
+    void fingerprintFollowsShotIndexNotInsertOrder() {
+        DramaShot second = clip(22L, 2, "users/7/b.mp4");
+        DramaShot first = clip(11L, 1, "users/7/a.mp4");
+        assertEquals(DramaFilms.fingerprint(List.of(first, second)), DramaFilms.fingerprint(List.of(second, first)));
+        assertEquals(List.of(11L, 22L), DramaFilms.clips(List.of(second, first)).stream().map(DramaShot::getId).toList());
+    }
+
+    @Test
+    void fingerprintChangeMarksAssembledFilmStale() {
+        DramaEpisode episode = new DramaEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        List<DramaShot> shots = List.of(clip(11L, 1, "users/7/a.mp4"), clip(22L, 2, "users/7/b.mp4"));
+        episode.setFilmFingerprint(DramaFilms.fingerprint(shots));
+        assertFalse(DramaFilms.stale(episode, shots));
+
+        shots.get(1).setVideoKey("users/7/b-new.mp4");
+        assertTrue(DramaFilms.stale(episode, shots));
+    }
+
+    @Test
+    void durationChangeMarksAssembledFilmStale() {
+        DramaEpisode episode = new DramaEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        DramaShot shot = clip(11L, 1, "users/7/a.mp4");
+        shot.setDurationSec(5);
+        episode.setFilmFingerprint(DramaFilms.fingerprint(List.of(shot)));
+        assertFalse(DramaFilms.stale(episode, List.of(shot)));
+        shot.setDurationSec(10);
+        assertTrue(DramaFilms.stale(episode, List.of(shot)));
+    }
+
+    @Test
+    void describeReportsMissingShotsAndIncomplete() {
+        DramaEpisode episode = new DramaEpisode();
+        episode.setId(31L);
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        List<DramaShot> shots = List.of(clip(11L, 1, "users/7/a.mp4"), clip(22L, 2, null));
+        episode.setFilmFingerprint(DramaFilms.fingerprint(shots));
+
+        DramaFilmResp resp = DramaFilms.describe(episode, shots);
+        assertEquals(31L, resp.getEpisodeId());
+        assertEquals("/api/media?key=users%2F7%2Fdrama%2F31%2Ffilm.mp4", resp.getFilmUrl());
+        assertFalse(resp.getComplete());
+        assertEquals(List.of(2), resp.getMissingShotIndexes());
+        assertEquals(2, resp.getShotCount());
+        assertEquals(1, resp.getReadyShotCount());
+        assertFalse(resp.getStale());
+    }
+
+    private static DramaShot clip(Long id, int index, String videoKey) {
+        DramaShot shot = new DramaShot();
+        shot.setId(id);
+        shot.setShotIndex(index);
+        shot.setVideoKey(videoKey);
+        return shot;
+    }
+}

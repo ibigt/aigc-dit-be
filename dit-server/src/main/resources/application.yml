@@ -124,6 +124,19 @@ dit:
       rate-limit-backoff-seconds: ${AGNES_RATE_LIMIT_BACKOFF_SECONDS:8}
       download-timeout-seconds: ${AGNES_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${AGNES_DOWNLOAD_RETRIES:3}
+    ark:
+      base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+      api-key: ${ARK_API_KEY:}
+      connect-timeout-seconds: 15
+      request-timeout-seconds: ${ARK_REQUEST_TIMEOUT_SECONDS:120}
+      poll-timeout-seconds: 30
+      poll-interval-seconds: ${ARK_POLL_INTERVAL_SECONDS:5}
+      rate-limit-backoff-seconds: ${ARK_RATE_LIMIT_BACKOFF_SECONDS:8}
+      download-timeout-seconds: ${ARK_DOWNLOAD_TIMEOUT_SECONDS:600}
+      download-retries: ${ARK_DOWNLOAD_RETRIES:3}
+    ffmpeg:
+      concat-copy-timeout-seconds: ${FFMPEG_CONCAT_COPY_TIMEOUT_SECONDS:180}
+      concat-encode-timeout-seconds: ${FFMPEG_CONCAT_ENCODE_TIMEOUT_SECONDS:900}
   s3:
     endpoint: ${S3_ENDPOINT:http://172.171.113.250:9000}
     bucket: ${S3_BUCKET:dit}

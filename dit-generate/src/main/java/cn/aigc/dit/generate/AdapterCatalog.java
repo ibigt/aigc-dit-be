@@ -17,6 +17,8 @@ public final class AdapterCatalog {
 
     public static final String GPT_IMAGE_2 = "gpt-image-2";
     public static final String SEEDANCE_2 = "seedance-2";
+    public static final String SEEDANCE_2_0 = "seedance-2.0";
+    public static final String SEEDANCE_2_5 = "seedance-2.5";
     public static final String MINIMAX_H3 = "minimax-h3";
     public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
     public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
@@ -25,12 +27,17 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_RUNNINGHUB = "runninghub";
     public static final String TRANSPORT_COMFYUI = "comfyui";
     public static final String TRANSPORT_AGNES = "agnes";
+    public static final String TRANSPORT_ARK = "ark";
     public static final String TRANSPORT_MOCK = "mock";
 
     public static final String PROVIDER_OFFICIAL = "官方API";
+    public static final String PROVIDER_OFFICIAL_TOKEN_PLAN = "官方API（token plan）";
     public static final String AGNES_DEFAULT_ENDPOINT = "https://api.agnes-ai.cn/v1";
     public static final String AGNES_IMAGE_MODEL = "agnes-image-2.5-flash";
     public static final String AGNES_VIDEO_MODEL = "agnes-video-2.5-flash";
+    public static final String ARK_DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3";
+    public static final String SEEDANCE_2_0_MODEL = "doubao-seedance-2-0-260128";
+    public static final String SEEDANCE_2_5_MODEL = "doubao-seedance-2-5-260628";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
@@ -41,6 +48,12 @@ public final class AdapterCatalog {
                     Map.of(
                             "t2vPath", "rhart-video/sparkvideo-2.0/text-to-video",
                             "r2vPath", "rhart-video/sparkvideo-2.0/multimodal-video"), true),
+            new Spec(SEEDANCE_2_0, "Seedance 2.0", ModelCategory.VIDEO, TRANSPORT_ARK, PROVIDER_OFFICIAL,
+                    ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+                    Map.of(), true),
+            new Spec(SEEDANCE_2_5, "Seedance 2.5", ModelCategory.VIDEO, TRANSPORT_ARK, PROVIDER_OFFICIAL,
+                    ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+                    Map.of(), true),
             new Spec(MINIMAX_H3, "MiniMax-H3", ModelCategory.VIDEO, TRANSPORT_COMFYUI, "ComfyUI",
                     "http://127.0.0.1:8188", List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
@@ -90,8 +103,11 @@ public final class AdapterCatalog {
     }
 
     public static String resolveKey(String adapterKey, String provider, String category, String modelKey) {
-        Spec spec = find(adapterKey);
-        if (spec != null) {
+        if (adapterKey != null && !adapterKey.isBlank()) {
+            Spec spec = find(adapterKey);
+            if (spec == null) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "未知或不支持的适配协议: " + adapterKey);
+            }
             return spec.key();
         }
         return infer(provider, category, modelKey);
@@ -101,10 +117,16 @@ public final class AdapterCatalog {
         String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
         String prov = provider == null ? "" : provider.toLowerCase(Locale.ROOT);
         String cat = category == null ? "" : category.toLowerCase(Locale.ROOT);
-        if (key.contains("agnes-image") || (isOfficialProvider(prov) && ModelCategory.IMAGE.equals(cat))) {
+        if (key.contains("agnes-image") || (key.contains("agnes") && ModelCategory.IMAGE.equals(cat))) {
             return AGNES_IMAGE_2_5;
         }
-        if (key.contains("agnes") || (isOfficialProvider(prov) && ModelCategory.VIDEO.equals(cat))) {
+        if (isArk25Model(key)) {
+            return SEEDANCE_2_5;
+        }
+        if (isArk20Model(key) || (isArkProvider(prov) && ModelCategory.VIDEO.equals(cat))) {
+            return SEEDANCE_2_0;
+        }
+        if (key.contains("agnes")) {
             return AGNES_VIDEO_2_5;
         }
         if (key.contains("minimax") || (prov.contains("comfy") && ModelCategory.VIDEO.equals(cat))) {
@@ -153,6 +175,27 @@ public final class AdapterCatalog {
     public static boolean isAgnes(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && TRANSPORT_AGNES.equals(spec.transport());
+    }
+
+    public static boolean isArk(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && TRANSPORT_ARK.equals(spec.transport());
+    }
+
+    public static boolean isOfficialTokenPlan(String provider) {
+        if (provider == null || provider.isBlank()) {
+            return false;
+        }
+        String value = provider.toLowerCase(Locale.ROOT);
+        return value.contains("token plan") || value.contains("tokenplan") || value.contains("agent plan");
+    }
+
+    public static String officialProviderOf(String requested, String adapterKey) {
+        if (isArk(adapterKey) && isOfficialTokenPlan(requested)) {
+            return PROVIDER_OFFICIAL_TOKEN_PLAN;
+        }
+        Spec spec = find(adapterKey);
+        return spec != null ? spec.providerLabel() : requested;
     }
 
     public static List<String> constrainCapabilities(List<String> capabilities, String category, Spec spec) {
@@ -215,13 +258,35 @@ public final class AdapterCatalog {
         if (AGNES_VIDEO_2_5.equals(adapterKey)) {
             return AGNES_VIDEO_MODEL;
         }
+        if (SEEDANCE_2_0.equals(adapterKey)) {
+            return SEEDANCE_2_0_MODEL;
+        }
+        if (SEEDANCE_2_5.equals(adapterKey)) {
+            return SEEDANCE_2_5_MODEL;
+        }
         return "";
     }
 
-    private static boolean isOfficialProvider(String provider) {
-        return provider.contains("官方")
-                || provider.contains("agnes")
-                || provider.contains("official");
+    private static boolean isArkProvider(String provider) {
+        return provider.contains("ark")
+                || provider.contains("volc")
+                || provider.contains("火山")
+                || provider.contains("方舟")
+                || provider.contains("byteplus");
+    }
+
+    private static boolean isArk25Model(String modelKey) {
+        return modelKey.contains("seedance-2.5")
+                || modelKey.contains("seedance-2-5")
+                || modelKey.contains("doubao-seedance-2-5")
+                || modelKey.contains("doubao-seedance-2.5");
+    }
+
+    private static boolean isArk20Model(String modelKey) {
+        return modelKey.contains("doubao-seedance-2-0")
+                || modelKey.contains("doubao-seedance-2.0")
+                || modelKey.contains("seedance-2-0-fast")
+                || modelKey.contains("seedance-2.0-fast");
     }
 
     private static boolean containsIgnoreCase(List<String> values, String wanted) {

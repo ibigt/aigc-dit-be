@@ -24,7 +24,7 @@ public class DramaSeriesCreateReq {
     @Schema(description = "默认清晰度：480P / 720P", example = "720P")
     private String defaultResolution;
 
-    @Schema(description = "默认单镜时长秒：5 / 10 / 15", example = "5")
+    @Schema(description = "默认单镜时长秒：5 / 10 / 15", example = "15")
     private Integer defaultDurationSec;
 
     @Schema(description = "规划集数 1–99", example = "5")

@@ -12,6 +12,8 @@ public class GenerateProperties {
     private Worker worker = new Worker();
     private Runninghub runninghub = new Runninghub();
     private Agnes agnes = new Agnes();
+    private Ark ark = new Ark();
+    private Ffmpeg ffmpeg = new Ffmpeg();
 
     /**
      * ComfyUI Adapter 始终注册；实际地址以模型 {@code endpoint} 为准。
@@ -84,5 +86,31 @@ public class GenerateProperties {
         private int rateLimitBackoffSeconds = 8;
         private int downloadTimeoutSeconds = 600;
         private int downloadRetries = 3;
+    }
+
+    /**
+     * 火山方舟官方 Seedance：{@code POST /contents/generations/tasks}，再 {@code GET} 轮询。
+     * 默认地址 {@code https://ark.cn-beijing.volces.com/api/v3}；模型记录上的 API Key 优先。
+     */
+    @Data
+    public static class Ark {
+        private String baseUrl = "https://ark.cn-beijing.volces.com/api/v3";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        private int requestTimeoutSeconds = 120;
+        private int pollTimeoutSeconds = 30;
+        private int pollIntervalSeconds = 5;
+        private int rateLimitBackoffSeconds = 8;
+        private int downloadTimeoutSeconds = 600;
+        private int downloadRetries = 3;
+    }
+
+    /**
+     * 成片拼接超时。stream copy 通常几十秒；编码不一致回退重编码时需更长。
+     */
+    @Data
+    public static class Ffmpeg {
+        private int concatCopyTimeoutSeconds = 180;
+        private int concatEncodeTimeoutSeconds = 900;
     }
 }

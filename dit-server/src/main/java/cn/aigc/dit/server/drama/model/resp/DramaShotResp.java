@@ -1,5 +1,7 @@
 package cn.aigc.dit.server.drama.model.resp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
@@ -43,8 +45,11 @@ public class DramaShotResp {
     private String videoPosterKey;
     @Schema(description = "成片首帧预览地址")
     private String videoPosterUrl;
+    @JsonProperty("generating")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(description = "是否正在出片")
     private Boolean generating;
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     private String genTaskStatus;
     private String genErrorMessage;
     private OffsetDateTime createdAt;

@@ -37,7 +37,11 @@ public interface DramaTextService {
      * 乙未覆盖时走规则拆镜；时长仅 5/10/15，第一场 4–8 镜。
      */
     default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames) {
-        return cn.aigc.dit.server.drama.DramaShotDrafts.fromScript(script, assetNames);
+        return draftShots(seriesId, script, assetNames, cn.aigc.dit.server.drama.DramaContract.DEFAULT_DURATION_SEC);
+    }
+
+    default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames, int durationSec) {
+        return cn.aigc.dit.server.drama.DramaShotDrafts.fromScript(script, assetNames, durationSec);
     }
 
     /**

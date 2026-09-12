@@ -28,6 +28,7 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -259,7 +260,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         Map<Long, String> modelNames = loadModelNames(tasks.values().stream().map(GenTask::getModelId).toList());
         List<GenerateTaskResp> taskResps = new ArrayList<>();
         for (GenTask task : tasks.values()) {
-            taskResps.add(toTaskResp(task, byTask.getOrDefault(task.getId(), List.of()), modelNames.get(task.getModelId())));
+            taskResps.add(toTaskResp(task, byTask.getOrDefault(task.getId(), List.of()), modelNameOf(modelNames, task.getModelId())));
         }
         taskResps.sort((a, b) -> {
             OffsetDateTime left = a.getCreatedAt() == null ? OffsetDateTime.MIN : a.getCreatedAt();
@@ -306,10 +307,18 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     private Map<Long, String> loadModelNames(List<Long> ids) {
         List<Long> modelIds = ids.stream().filter(Objects::nonNull).distinct().toList();
         if (modelIds.isEmpty()) {
-            return Map.of();
+            return new HashMap<>();
         }
         return aiModelMapper.selectBatchIds(modelIds).stream()
-                .collect(Collectors.toMap(AiModel::getId, AiModel::getName, (a, b) -> a));
+                .filter(item -> item.getId() != null)
+                .collect(Collectors.toMap(AiModel::getId, item -> item.getName() == null ? "" : item.getName(), (a, b) -> a, HashMap::new));
+    }
+
+    static String modelNameOf(Map<Long, String> modelNames, Long modelId) {
+        if (modelNames == null || modelId == null) {
+            return null;
+        }
+        return modelNames.get(modelId);
     }
 
     static String normalizeCategory(String category) {

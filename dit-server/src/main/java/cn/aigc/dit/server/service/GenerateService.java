@@ -10,6 +10,7 @@ import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.agnes.AgnesRequestMapper;
+import cn.aigc.dit.generate.ark.ArkRequestMapper;
 import cn.aigc.dit.generate.comfyui.ComfyUiGeometry;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.server.credit.CreditCalculator;
@@ -66,6 +67,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         }
         String adapterKey = AdapterCatalog.resolveKey(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        request.setAdapterKey(adapterKey);
         if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
@@ -82,6 +84,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         }
         applyRunningHubGuardrails(model, request);
         applyAgnesGuardrails(adapterKey, request);
+        applyArkGuardrails(adapterKey, request);
         long cost = CreditCalculator.calculate(
                 model.getPricing(),
                 request.getCategory(),
@@ -143,6 +146,17 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         request.setCopies(1);
         if (ModelCategory.VIDEO.equals(request.getCategory())) {
             request.setDurationSec(AgnesRequestMapper.clampSeconds(request.getDurationSec()));
+        }
+    }
+
+    private static void applyArkGuardrails(String adapterKey, GenerateRequest request) {
+        if (!AdapterCatalog.isArk(adapterKey)) {
+            return;
+        }
+        request.setCopies(1);
+        if (ModelCategory.VIDEO.equals(request.getCategory())) {
+            request.setDurationSec(ArkRequestMapper.clampSeconds(request.getDurationSec()));
+            request.setResolution(ArkRequestMapper.clampResolution(request));
         }
     }
 

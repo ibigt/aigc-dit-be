@@ -30,6 +30,10 @@ public class DramaEpisode {
     private String engine;
     private String status;
     private Long inheritedFromEpisodeId;
+    private String filmKey;
+    private String filmPosterKey;
+    private String filmFingerprint;
+    private OffsetDateTime filmAssembledAt;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

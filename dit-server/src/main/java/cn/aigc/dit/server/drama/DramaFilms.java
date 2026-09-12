@@ -1,0 +1,122 @@
+package cn.aigc.dit.server.drama;
+
+import cn.aigc.dit.server.drama.entity.DramaEpisode;
+import cn.aigc.dit.server.drama.entity.DramaShot;
+import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
+import cn.aigc.dit.server.drama.model.resp.DramaFilmShotResp;
+import cn.aigc.dit.server.media.MediaUrls;
+import org.springframework.util.StringUtils;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.List;
+
+/**
+ * 成片指纹与响应：按 {@code shot_index} 拼接 {@code shotId:videoKey:durationSec} 再 SHA-256。
+ * 时长纳入指纹，避免改镜长后成片页仍显示未过期。
+ */
+public final class DramaFilms {
+
+    private DramaFilms() {
+    }
+
+    public static List<DramaShot> ordered(List<DramaShot> shots) {
+        if (shots == null || shots.isEmpty()) {
+            return List.of();
+        }
+        return shots.stream()
+                .sorted(Comparator.comparing(DramaShot::getShotIndex, Comparator.nullsLast(Integer::compareTo))
+                        .thenComparing(DramaShot::getId, Comparator.nullsLast(Long::compareTo)))
+                .toList();
+    }
+
+    public static List<DramaShot> clips(List<DramaShot> shots) {
+        List<DramaShot> clips = new ArrayList<>();
+        for (DramaShot shot : ordered(shots)) {
+            if (shot != null && StringUtils.hasText(shot.getVideoKey())) {
+                clips.add(shot);
+            }
+        }
+        return clips;
+    }
+
+    public static List<Integer> missingShotIndexes(List<DramaShot> shots) {
+        List<Integer> missing = new ArrayList<>();
+        for (DramaShot shot : ordered(shots)) {
+            if (shot == null || shot.getShotIndex() == null) {
+                continue;
+            }
+            if (!StringUtils.hasText(shot.getVideoKey())) {
+                missing.add(shot.getShotIndex());
+            }
+        }
+        return missing;
+    }
+
+    public static String fingerprint(List<DramaShot> shots) {
+        StringBuilder payload = new StringBuilder();
+        for (DramaShot shot : ordered(shots)) {
+            if (payload.length() > 0) {
+                payload.append('\n');
+            }
+            payload.append(shot.getId() == null ? "" : shot.getId());
+            payload.append(':');
+            payload.append(shot.getVideoKey() == null ? "" : shot.getVideoKey());
+            payload.append(':');
+            payload.append(shot.getDurationSec() == null ? "" : shot.getDurationSec());
+        }
+        return sha256Hex(payload.toString());
+    }
+
+    public static boolean stale(DramaEpisode episode, List<DramaShot> shots) {
+        if (episode == null || !StringUtils.hasText(episode.getFilmKey())) {
+            return false;
+        }
+        return !fingerprint(shots).equals(episode.getFilmFingerprint());
+    }
+
+    public static DramaFilmResp describe(DramaEpisode episode, List<DramaShot> shots) {
+        List<DramaShot> ordered = ordered(shots);
+        List<Integer> missing = missingShotIndexes(ordered);
+        DramaFilmResp resp = new DramaFilmResp();
+        if (episode != null) {
+            resp.setEpisodeId(episode.getId());
+            resp.setFilmUrl(MediaUrls.of(episode.getFilmKey()));
+            resp.setPosterUrl(MediaUrls.of(episode.getFilmPosterKey()));
+            resp.setAssembledAt(episode.getFilmAssembledAt());
+        }
+        resp.setStale(stale(episode, ordered));
+        resp.setComplete(missing.isEmpty() && !ordered.isEmpty());
+        resp.setMissingShotIndexes(missing);
+        resp.setShotCount(ordered.size());
+        resp.setReadyShotCount(ordered.size() - missing.size());
+        List<DramaFilmShotResp> items = new ArrayList<>();
+        for (DramaShot shot : ordered) {
+            DramaFilmShotResp item = new DramaFilmShotResp();
+            item.setId(shot.getId());
+            item.setShotIndex(shot.getShotIndex());
+            item.setTitle(shot.getTitle());
+            item.setDurationSec(shot.getDurationSec());
+            boolean ready = StringUtils.hasText(shot.getVideoKey());
+            item.setReady(ready);
+            item.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
+            item.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
+            items.add(item);
+        }
+        resp.setShots(items);
+        return resp;
+    }
+
+    static String sha256Hex(String payload) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(payload.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+}

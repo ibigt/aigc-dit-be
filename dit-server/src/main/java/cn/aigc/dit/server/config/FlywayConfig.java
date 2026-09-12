@@ -24,7 +24,7 @@ public class FlywayConfig {
                 statement.execute("ALTER TABLE ai_model ADD COLUMN IF NOT EXISTS adapter_key VARCHAR(64)");
                 statement.execute("""
                         COMMENT ON COLUMN ai_model.adapter_key
-                        IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5 / agnes-video-2.5；mock 为占位'
+                        IS '适配协议（出站翻译包）：gpt-image-2 / seedance-2 / seedance-2.0 / seedance-2.5 / minimax-h3 / agnes-image-2.5 / agnes-video-2.5；mock 为占位'
                         """);
                 statement.execute("""
                         UPDATE ai_model
@@ -32,6 +32,26 @@ public class FlywayConfig {
                         WHERE (adapter_key IS NULL OR adapter_key = '')
                           AND category = 'video'
                           AND (provider ILIKE '%comfy%' OR model_key ILIKE '%minimax%')
+                        """);
+                statement.execute("""
+                        UPDATE ai_model
+                        SET adapter_key = 'seedance-2.5', updated_at = NOW()
+                        WHERE (adapter_key IS NULL OR adapter_key = '')
+                          AND category = 'video'
+                          AND (model_key ILIKE '%seedance-2.5%'
+                            OR model_key ILIKE '%seedance-2-5%'
+                            OR model_key ILIKE '%doubao-seedance-2-5%'
+                            OR model_key ILIKE '%doubao-seedance-2.5%')
+                        """);
+                statement.execute("""
+                        UPDATE ai_model
+                        SET adapter_key = 'seedance-2.0', updated_at = NOW()
+                        WHERE (adapter_key IS NULL OR adapter_key = '')
+                          AND category = 'video'
+                          AND (model_key ILIKE '%doubao-seedance-2-0%'
+                            OR model_key ILIKE '%doubao-seedance-2.0%'
+                            OR model_key ILIKE '%seedance-2-0-fast%'
+                            OR model_key ILIKE '%seedance-2.0-fast%')
                         """);
                 statement.execute("""
                         UPDATE ai_model

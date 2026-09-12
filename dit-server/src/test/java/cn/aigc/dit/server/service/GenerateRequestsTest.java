@@ -6,6 +6,7 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.server.entity.Asset;
+import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import org.junit.jupiter.api.AfterEach;
@@ -112,8 +113,13 @@ class GenerateRequestsTest {
         assertTrue(GenerateRequests.bindsQuickCreate(java.util.Map.of("source", GenerateRequests.SOURCE)));
         assertFalse(GenerateRequests.bindsQuickCreate(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
         assertTrue(GenerateRequests.isDramaSource(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
+        assertTrue(GenerateRequests.isDramaShot(java.util.Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA, "shotId", 201L)));
+        assertFalse(GenerateRequests.isDramaShot(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
         assertEquals(31L, GenerateRequests.sessionIdFromParams(java.util.Map.of("sessionId", 31)));
         assertEquals(null, GenerateRequests.sessionIdFromParams(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
+        assertEquals(201L, GenerateRequests.shotIdFromParams(java.util.Map.of("shotId", 201)));
+        assertEquals(201L, GenerateRequests.shotIdFromParams(java.util.Map.of("shotId", "201")));
     }
 
     @Test
@@ -137,5 +143,20 @@ class GenerateRequestsTest {
         assertEquals(GenerateMode.R2V, request.getMode());
         assertEquals("video", request.getReferences().get(0).getType());
         assertEquals("users/1/assets/clip.mp4", request.getReferences().get(0).getStorageKey());
+    }
+
+    @Test
+    void persistsAdapterKeyOnTaskParams() {
+        GenerateRequest request = new GenerateRequest()
+                .setMode(GenerateMode.T2V)
+                .setRatio("16:9")
+                .setAdapterKey("seedance-2.0");
+        java.util.Map<String, Object> params = GenerateRequests.toParams(request, null);
+        assertEquals("seedance-2.0", params.get("adapterKey"));
+        GenTask task = new GenTask();
+        task.setCategory("video");
+        task.setParams(params);
+        GenerateRequest restored = GenerateRequests.fromTask(task, "doubao-seedance-2.0-fast");
+        assertEquals("seedance-2.0", restored.getAdapterKey());
     }
 }

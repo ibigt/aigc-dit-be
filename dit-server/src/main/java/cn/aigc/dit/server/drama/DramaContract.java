@@ -18,7 +18,7 @@ public final class DramaContract {
 
     public static final String DEFAULT_ASPECT_RATIO = "16:9";
     public static final String DEFAULT_RESOLUTION = "720P";
-    public static final int DEFAULT_DURATION_SEC = 5;
+    public static final int DEFAULT_DURATION_SEC = 15;
     public static final int DEFAULT_PLANNED_EPISODES = 1;
 
     public static final Set<String> ASPECT_RATIOS = Set.of("16:9", "9:16", "1:1");
@@ -46,8 +46,8 @@ public final class DramaContract {
 
     /** 资产页同时进行的 t2i 上限。 */
     public static final int MAX_ASSET_GENERATE = 4;
-    /** 分镜页同时进行的 r2v 上限。 */
-    public static final int MAX_SHOT_GENERATE = 2;
+    /** 同时向模型提交的分镜出片上限；超出的任务保持排队，空出槽位后再提交。 */
+    public static final int MAX_SHOT_GENERATE = 8;
 
     /** 单场分镜下限（乙/规则草稿）。 */
     public static final int MIN_SHOTS_PER_CHAPTER = 2;

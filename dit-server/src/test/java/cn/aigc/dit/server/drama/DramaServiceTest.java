@@ -55,12 +55,15 @@ class DramaServiceTest {
     private TextChatGateway textChatGateway;
     @Mock
     private DramaStoryboardService storyboardService;
+    @Mock
+    private DramaFilmService filmService;
 
     private DramaService service;
 
     @BeforeEach
     void setUp() {
-        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService);
+        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService);
+        org.mockito.Mockito.lenient().when(filmService.preview(any())).thenReturn(new cn.aigc.dit.server.drama.model.resp.DramaFilmResp());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(aiModelMapper.selectCount(any())).thenReturn(0L);
         org.mockito.Mockito.lenient().when(assetMapper.selectList(any())).thenReturn(List.of());
@@ -97,7 +100,7 @@ class DramaServiceTest {
         assertNull(resp.getCoverUrl());
         assertEquals("16:9", resp.getAspectRatio());
         assertEquals("720P", resp.getDefaultResolution());
-        assertEquals(5, resp.getDefaultDurationSec());
+        assertEquals(15, resp.getDefaultDurationSec());
         assertEquals(5, resp.getPlannedEpisodeCount());
         assertEquals(1, resp.getEpisodeCount());
         assertEquals("第 1 集", resp.getEpisodes().get(0).getName());

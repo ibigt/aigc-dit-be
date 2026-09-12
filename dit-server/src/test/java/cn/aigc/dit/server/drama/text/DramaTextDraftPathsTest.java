@@ -139,6 +139,8 @@ class DramaTextDraftPathsTest {
                 .getShots();
 
         ShotDraftList.ShotDraft first = shots.get(0);
+        assertTrue(shots.stream().allMatch(item -> Integer.valueOf(DramaContract.DEFAULT_DURATION_SEC).equals(item.getDurationSec())),
+                "拆镜时长必须统一成指定秒数");
         assertEquals(DramaContract.DEFAULT_DURATION_SEC, first.getDurationSec(), "7 秒不在白名单内");
         assertEquals(List.of("洛白"), first.getCharacterNames(), "路人甲没有这个资产");
         assertEquals(List.of("古铜怀表"), first.getPropNames());

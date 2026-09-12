@@ -1,11 +1,13 @@
 package cn.aigc.dit.generate;
 
+import cn.aigc.dit.common.exception.BizException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AdapterCatalogTest {
@@ -16,8 +18,30 @@ class AdapterCatalogTest {
         assertEquals(AdapterCatalog.AGNES_VIDEO_2_5, AdapterCatalog.infer("官方API", "video", "agnes-video-2.5-flash"));
         assertEquals(AdapterCatalog.MINIMAX_H3, AdapterCatalog.infer("ComfyUI", "video", "minimax.h3"));
         assertEquals(AdapterCatalog.SEEDANCE_2, AdapterCatalog.infer("RunningHub", "video", "seedance-2.0"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_5, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2-5-260628"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_5, AdapterCatalog.infer("火山方舟", "video", "seedance-2.5"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2-0-fast-260128"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0, AdapterCatalog.infer("火山方舟", "video", "doubao-seedance-2-0-260128"));
+        assertEquals(null, AdapterCatalog.infer("官方API", "video", ""));
+        assertEquals(null, AdapterCatalog.infer("官方API", "video", "unknown-official-video"));
         assertEquals(AdapterCatalog.GPT_IMAGE_2, AdapterCatalog.infer("RunningHub", "image", "gpt-image-2"));
         assertEquals(AdapterCatalog.MOCK, AdapterCatalog.infer("mock", "video", "mock-video"));
+    }
+
+    @Test
+    void pinnedAdapterKeyDoesNotCrossTransport() {
+        assertEquals(AdapterCatalog.SEEDANCE_2_0,
+                AdapterCatalog.resolveKey("seedance-2.0", "官方API", "video", "agnes-video-2.5-flash"));
+        assertEquals(AdapterCatalog.AGNES_VIDEO_2_5,
+                AdapterCatalog.resolveKey("agnes-video-2.5", "官方API", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.SEEDANCE_2,
+                AdapterCatalog.resolveKey("seedance-2", "官方API", "video", "doubao-seedance-2.0-fast"));
+        assertEquals(AdapterCatalog.TRANSPORT_ARK, AdapterCatalog.transport("seedance-2.0", "官方API"));
+        assertEquals(AdapterCatalog.TRANSPORT_AGNES, AdapterCatalog.transport("agnes-video-2.5", "官方API"));
+        assertEquals(AdapterCatalog.TRANSPORT_RUNNINGHUB, AdapterCatalog.transport("seedance-2", "RunningHub"));
+        assertThrows(BizException.class,
+                () -> AdapterCatalog.resolveKey("not-a-real-adapter", "官方API", "video", "agnes-video-2.5-flash"));
     }
 
     @Test
@@ -30,10 +54,28 @@ class AdapterCatalogTest {
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_IMAGE_2_5, GenerateMode.T2I));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_IMAGE_2_5, GenerateMode.I2I));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_VIDEO_2_5, GenerateMode.I2V));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_5, GenerateMode.T2V));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_5, GenerateMode.R2V));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_5, GenerateMode.I2V));
         assertTrue(AdapterCatalog.isAgnes(AdapterCatalog.AGNES_VIDEO_2_5));
+        assertTrue(AdapterCatalog.isArk(AdapterCatalog.SEEDANCE_2_5));
+        assertTrue(AdapterCatalog.isArk(AdapterCatalog.SEEDANCE_2_0));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_0, GenerateMode.T2V));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_0, GenerateMode.R2V));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_0, GenerateMode.I2V));
+        assertEquals(AdapterCatalog.SEEDANCE_2_0_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.SEEDANCE_2_0));
         assertEquals("https://api.agnes-ai.cn/v1", AdapterCatalog.require(AdapterCatalog.AGNES_IMAGE_2_5).defaultEndpoint());
         assertEquals("官方API", AdapterCatalog.require(AdapterCatalog.AGNES_VIDEO_2_5).providerLabel());
+        assertEquals("官方API", AdapterCatalog.require(AdapterCatalog.SEEDANCE_2_5).providerLabel());
+        assertEquals(AdapterCatalog.ARK_DEFAULT_ENDPOINT, AdapterCatalog.require(AdapterCatalog.SEEDANCE_2_5).defaultEndpoint());
+        assertEquals(AdapterCatalog.SEEDANCE_2_5_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.SEEDANCE_2_5));
         assertEquals("http://127.0.0.1:8188", AdapterCatalog.require(AdapterCatalog.MINIMAX_H3).defaultEndpoint());
+        assertTrue(AdapterCatalog.isOfficialTokenPlan("官方API（token plan）"));
+        assertFalse(AdapterCatalog.isOfficialTokenPlan("官方API"));
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
+                AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.SEEDANCE_2_0));
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL,
+                AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.AGNES_VIDEO_2_5));
     }
 
     @Test

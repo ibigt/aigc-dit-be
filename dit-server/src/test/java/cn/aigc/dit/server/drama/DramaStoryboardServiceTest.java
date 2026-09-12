@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
@@ -20,6 +21,7 @@ import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
@@ -108,6 +110,8 @@ class DramaStoryboardServiceTest {
             return storedShots.stream().filter(item -> id.equals(item.getId())).findFirst().orElse(null);
         });
         org.mockito.Mockito.lenient().when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+        org.mockito.Mockito.lenient().when(genTaskMapper.selectList(any())).thenReturn(List.of());
+        org.mockito.Mockito.lenient().when(genTaskMapper.selectBatchIds(any())).thenReturn(List.of());
     }
 
     @AfterEach
@@ -148,6 +152,23 @@ class DramaStoryboardServiceTest {
         assertEquals(first.getCastCount(), first.getCharacterNames().size());
         assertEquals(1, board.getChapters().size());
         assertTrue(board.getChapters().get(0).getShots().size() >= 4);
+    }
+
+    @Test
+    void draftAppliesRequestedDurationToEveryShot() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        service.draft(31L, true, 15);
+
+        assertFalse(storedShots.isEmpty());
+        assertTrue(storedShots.stream().allMatch(item -> Integer.valueOf(15).equals(item.getDurationSec())));
+        assertTrue(storedShots.stream().allMatch(item -> item.getCompiledPrompt().contains("Duration: 15 seconds")));
     }
 
     @Test
@@ -199,6 +220,60 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void storyboardKeepsGeneratingAfterReloadWhenTaskStillPending() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setShotIndex(3);
+        shot.setGenTaskId(500L);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        GenTask task = new GenTask();
+        task.setId(500L);
+        task.setStatus(TaskStatus.PENDING);
+        when(genTaskMapper.selectBatchIds(any())).thenReturn(List.of(task));
+        GenerateTaskResp pending = new GenerateTaskResp();
+        pending.setId(500L);
+        pending.setStatus(TaskStatus.PENDING);
+        when(generateService.getMine(500L)).thenReturn(pending);
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        DramaShotResp item = board.getChapters().get(0).getShots().get(0);
+        assertTrue(Boolean.TRUE.equals(item.getGenerating()));
+        assertEquals(TaskStatus.PENDING, item.getGenTaskStatus());
+        assertEquals(500L, item.getGenTaskId());
+    }
+
+    @Test
+    void storyboardRecoversInFlightTaskWhenShotLostGenTaskId() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setShotIndex(3);
+        shot.setGenTaskId(null);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        GenTask live = new GenTask();
+        live.setId(77L);
+        live.setStatus(TaskStatus.RUNNING);
+        live.setParams(java.util.Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA,
+                "episodeId", 31L,
+                "shotId", 201L));
+        when(genTaskMapper.selectList(any())).thenReturn(List.of(live));
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        DramaShotResp item = board.getChapters().get(0).getShots().get(0);
+        assertTrue(Boolean.TRUE.equals(item.getGenerating()));
+        assertEquals(TaskStatus.RUNNING, item.getGenTaskStatus());
+        assertEquals(77L, item.getGenTaskId());
+        assertEquals(77L, shot.getGenTaskId());
+    }
+
+    @Test
     void generateRequiresBoundVideoModel() {
         DramaShot shot = pendingShot();
         storedShots.add(shot);
@@ -226,7 +301,6 @@ class DramaStoryboardServiceTest {
         when(seriesMapper.selectById(21L)).thenReturn(series);
         AiModel model = r2vModel();
         when(aiModelMapper.selectById(88L)).thenReturn(model);
-        when(genTaskMapper.selectCount(any())).thenReturn(0L);
         GenerateTaskResp task = new GenerateTaskResp();
         task.setId(500L);
         task.setStatus("PENDING");
@@ -261,6 +335,75 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void generateDoesNotReuseInFlightTaskFromAnotherModel() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setGenTaskId(400L);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        GenTask stale = new GenTask();
+        stale.setId(400L);
+        stale.setModelId(7L);
+        stale.setStatus(TaskStatus.RUNNING);
+        stale.setErrorMessage("Agnes 查询 HTTP 404");
+        when(genTaskMapper.selectById(400L)).thenReturn(stale);
+        GenerateTaskResp fresh = new GenerateTaskResp();
+        fresh.setId(502L);
+        fresh.setModelId(88L);
+        fresh.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(fresh);
+
+        DramaShotGenerateResp resp = service.generateShot(201L);
+
+        verify(generateService).submit(any(GenerateSubmitReq.class), any());
+        assertEquals(TaskStatus.CANCELLED, stale.getStatus());
+        assertEquals(502L, shot.getGenTaskId());
+        assertEquals(502L, resp.getTask().getId());
+    }
+
+    @Test
+    void generateAbandonsInFlightTaskAndSubmitsNew() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setGenTaskId(400L);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        GenTask existing = new GenTask();
+        existing.setId(400L);
+        existing.setModelId(88L);
+        existing.setStatus(TaskStatus.RUNNING);
+        when(genTaskMapper.selectById(400L)).thenReturn(existing);
+        GenerateTaskResp fresh = new GenerateTaskResp();
+        fresh.setId(503L);
+        fresh.setModelId(88L);
+        fresh.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(fresh);
+
+        DramaShotGenerateResp resp = service.generateShot(201L);
+
+        verify(generateService).submit(any(GenerateSubmitReq.class), any());
+        assertEquals(TaskStatus.CANCELLED, existing.getStatus());
+        assertEquals(503L, resp.getTask().getId());
+        assertEquals(503L, shot.getGenTaskId());
+    }
+
+    @Test
     void generateRebindsNamedPicturesEvenIfManualRefsStale() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);
@@ -275,7 +418,6 @@ class DramaStoryboardServiceTest {
         series.setVideoModelId(88L);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
-        when(genTaskMapper.selectCount(any())).thenReturn(0L);
         GenerateTaskResp task = new GenerateTaskResp();
         task.setId(501L);
         task.setStatus("PENDING");

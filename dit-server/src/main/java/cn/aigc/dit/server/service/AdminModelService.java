@@ -5,6 +5,8 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.ark.ArkKeys;
+import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
@@ -162,11 +164,14 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setName(req.getName().trim());
         model.setModelKey(modelKey);
         model.setAdapterKey(spec.key());
-        model.setProvider(spec.providerLabel());
+        model.setProvider(AdapterCatalog.officialProviderOf(req.getProvider(), spec.key()));
         if (StringUtils.hasText(req.getEndpoint())) {
             model.setEndpoint(trimToNull(req.getEndpoint()));
         } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
             model.setEndpoint(spec.defaultEndpoint());
+        }
+        if (AdapterCatalog.isOfficialTokenPlan(model.getProvider()) && AdapterCatalog.isArk(spec.key())) {
+            model.setEndpoint(ArkUrls.v3Base(model.getEndpoint(), spec.defaultEndpoint(), model.getProvider()));
         }
         model.setCategory(category);
         model.setCapabilities(AdapterCatalog.constrainCapabilities(req.getCapabilities(), category, spec));
@@ -181,7 +186,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setBadge(StringUtils.hasText(req.getBadge()) ? req.getBadge().trim() : defaultBadge(category));
         model.setLogo(trimToNull(req.getLogo()));
         if (StringUtils.hasText(req.getApiKey())) {
-            model.setApiKeyEnc(encryptor.encrypt(req.getApiKey().trim()));
+            model.setApiKeyEnc(encryptor.encrypt(normalizeSecret(req.getApiKey())));
         } else if (creating) {
             model.setApiKeyEnc(null);
         }
@@ -214,7 +219,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setBadge(StringUtils.hasText(req.getBadge()) ? req.getBadge().trim() : defaultBadge(ModelCategory.TEXT));
         model.setLogo(trimToNull(req.getLogo()));
         if (StringUtils.hasText(req.getApiKey())) {
-            model.setApiKeyEnc(encryptor.encrypt(req.getApiKey().trim()));
+            model.setApiKeyEnc(encryptor.encrypt(normalizeSecret(req.getApiKey())));
         } else if (creating) {
             model.setApiKeyEnc(null);
         }
@@ -388,6 +393,10 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
 
     static String trimToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    static String normalizeSecret(String value) {
+        return ArkKeys.normalize(value);
     }
 
     static Integer asInt(Object value) {

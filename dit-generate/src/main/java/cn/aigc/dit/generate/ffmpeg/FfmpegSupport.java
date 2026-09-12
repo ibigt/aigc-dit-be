@@ -33,16 +33,21 @@ public final class FfmpegSupport {
     }
 
     public static void run(List<String> args) {
+        run(args, 120);
+    }
+
+    public static void run(List<String> args, long timeoutSeconds) {
         List<String> command = new ArrayList<>();
         command.add("ffmpeg");
         command.add("-y");
         command.addAll(args);
+        long timeout = timeoutSeconds < 1 ? 120 : timeoutSeconds;
         try {
             Process process = new ProcessBuilder(command)
                     .redirectErrorStream(true)
                     .start();
             String logText = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            boolean finished = process.waitFor(120, TimeUnit.SECONDS);
+            boolean finished = process.waitFor(timeout, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
                 throw new BizException(ErrorCode.INTERNAL, "ffmpeg 超时");

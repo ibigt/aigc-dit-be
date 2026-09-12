@@ -23,6 +23,10 @@ public class DramaEpisodeResp {
     @Schema(description = "是否可点「生成 AI 剧本」（服务已合入且项目文本模型可用）")
     private Boolean canGenerate;
     private Long inheritedFromEpisodeId;
+    @Schema(description = "本集成片预览地址")
+    private String filmUrl;
+    @Schema(description = "成片是否因分镜视频变更而过期")
+    private Boolean filmStale;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 }

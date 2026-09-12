@@ -27,12 +27,14 @@ class DramaStoryboardCompilerTest {
                 "洛白坐起掏表",
                 5,
                 List.of("洛白", "夏安", "局长"),
-                3);
+                3,
+                List.of(new DramaStoryboardCompiler.NamedAppearance("局长", "中年男性；浓眉；灰西装")));
 
         DramaStoryboardCompiler.Result result = DramaStoryboardCompiler.compile(prefix, refs, shot);
         String prompt = result.prompt();
 
-        assertTrue(prompt.startsWith(prefix));
+        assertTrue(prompt.startsWith(DramaStyles.withVideoSceneClause(prefix)));
+        assertTrue(prompt.contains(DramaStyles.VIDEO_SCENE_CLAUSE));
         assertTrue(prompt.contains("<Picture 1> 洛白"));
         assertTrue(prompt.contains("<Picture 2> 夏安"));
         assertTrue(prompt.contains("<Picture 3> 古铜怀表"));
@@ -42,14 +44,48 @@ class DramaStoryboardCompilerTest {
         int p3 = prompt.indexOf("<Picture 3>");
         int p4 = prompt.indexOf("<Picture 4>");
         assertTrue(p1 < p2 && p2 < p3 && p3 < p4);
-        assertTrue(prompt.contains("仅作洛白身份与服装，不要继承构图"));
-        assertTrue(prompt.contains("可参考陈设与光线"));
-        assertTrue(prompt.contains("完整人物描述永不缩写"));
+        assertTrue(prompt.contains("青年男性；清冷骨相；黑碎盖；修长；立领长风衣轮廓；锐利眼神"));
+        assertTrue(prompt.contains("只借洛白的身份与当前服装，不继承姿态、背景、构图、机位、光线"));
+        assertTrue(prompt.contains("必须在戏里被使用"));
+        assertTrue(prompt.contains("必须有人在此演戏"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.MOVIE_SCENE_MUST));
         assertTrue(prompt.contains("本镜恰好 3 人，不得增删角色"));
-        assertTrue(prompt.contains("出场：洛白、夏安、局长"));
+        assertTrue(prompt.contains("出场：洛白、夏安。"));
+        assertTrue(prompt.contains("未出图角色按外貌出演：中年男性；浓眉；灰西装。"));
+        assertFalse(prompt.contains("出场：洛白、夏安、局长"));
         assertTrue(prompt.contains("Duration: 5 seconds"));
+        assertTrue(prompt.contains("对白执行："));
+        assertTrue(prompt.contains("只念台词正文，不念角色名和冒号"));
+        assertTrue(prompt.contains("角色“局长”逐字说出：“洛老弟，别睡了。”"));
+        assertFalse(prompt.contains("完整人物描述永不缩写"));
+        assertFalse(prompt.contains("三视图"));
+        assertFalse(prompt.contains("不要剧情场面"));
+        assertFalse(prompt.contains("画面中不要出现人物"));
+        assertFalse(prompt.contains("浅灰或纯白"));
         assertFalse(prompt.contains("…"));
         assertTrue(prompt.indexOf("<Picture") >= 0);
+    }
+
+    @Test
+    void fullIdentityKeepsOnlyIdentityInvariants() {
+        DramaStoryboardCompiler.ActiveReference ref = ref(
+                1, "洛白", DramaContract.ASSET_TYPE_CHARACTER,
+                "青年男性；清冷骨相",
+                "浅灰或纯白背景的角色三视图，不要剧情场面，画面中不要出现人物");
+        assertEquals("青年男性；清冷骨相", DramaStoryboardCompiler.fullIdentity(ref));
+        assertFalse(DramaStoryboardCompiler.fullIdentity(ref).contains("三视图"));
+    }
+
+    @Test
+    void omitsSpokenDialogueWhenNoLines() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "场景", "动作", null, "in", "out", 5, List.of("洛白"), 1);
+        String prompt = DramaStoryboardCompiler.compile(prefix, List.of(ref(
+                1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "完整人物描述永不缩写")), shot).prompt();
+        assertFalse(prompt.contains("对白执行"));
+        assertTrue(prompt.contains("出场：洛白。"));
+        assertFalse(prompt.contains("完整人物描述永不缩写"));
     }
 
     @Test

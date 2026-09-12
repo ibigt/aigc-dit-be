@@ -128,6 +128,33 @@ class AdminModelServiceTest {
     }
 
     @Test
+    void createSeedanceTokenPlanKeepsSourceAndPlanEndpoint() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(encryptor.encrypt("ark-plan")).thenReturn("v1:cipher");
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(21L);
+            assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN, model.getProvider());
+            assertEquals("https://ark.cn-beijing.volces.com/api/plan/v3", model.getEndpoint());
+            assertEquals(AdapterCatalog.SEEDANCE_2_0, model.getAdapterKey());
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Seedance 2.0 Fast Plan");
+        req.setModelKey("doubao-seedance-2.0-fast");
+        req.setAdapterKey("seedance-2.0");
+        req.setProvider("官方API（token plan）");
+        req.setCategory(ModelCategory.VIDEO);
+        req.setApiKey("ark-plan");
+        req.setCapabilities(List.of("video", "t2v", "r2v", "i2v"));
+
+        var resp = service.create(req);
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN, resp.getProvider());
+        assertEquals("https://ark.cn-beijing.volces.com/api/plan/v3", resp.getEndpoint());
+    }
+
+    @Test
     void updateKeepsExistingKeyWhenBlank() {
         AiModel existing = new AiModel();
         existing.setId(3L);

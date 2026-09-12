@@ -55,12 +55,15 @@ class DramaServiceScriptTest {
     private DramaTextService dramaTextService;
     @Mock
     private DramaStoryboardService storyboardService;
+    @Mock
+    private DramaFilmService filmService;
 
     private DramaService service;
 
     @BeforeEach
     void setUp() {
-        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService);
+        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService);
+        org.mockito.Mockito.lenient().when(filmService.preview(any())).thenReturn(new cn.aigc.dit.server.drama.model.resp.DramaFilmResp());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(textChatGateway.llmAvailable(anyLong())).thenReturn(false);

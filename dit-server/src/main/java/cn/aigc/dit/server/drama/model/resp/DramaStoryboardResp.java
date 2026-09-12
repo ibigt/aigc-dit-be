@@ -17,6 +17,10 @@ public class DramaStoryboardResp {
     private Boolean textServiceAvailable;
     private Integer lockedAssetCount;
     private Integer staleShotCount;
+    @Schema(description = "本集成片预览地址")
+    private String filmUrl;
+    @Schema(description = "成片是否因分镜视频变更而过期")
+    private Boolean filmStale;
     private List<DramaChapterResp> chapters = new ArrayList<>();
     private List<DramaAssetResp> lockedAssets = new ArrayList<>();
 }

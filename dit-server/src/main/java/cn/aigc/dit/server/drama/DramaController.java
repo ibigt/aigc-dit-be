@@ -16,6 +16,7 @@ import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
+import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
@@ -51,6 +52,7 @@ public class DramaController {
     private final DramaService dramaService;
     private final DramaAssetService dramaAssetService;
     private final DramaStoryboardService dramaStoryboardService;
+    private final DramaFilmService dramaFilmService;
 
     @Operation(summary = "可选视觉风格（图例；不含编译前缀）")
     @GetMapping("/styles")
@@ -251,8 +253,10 @@ public class DramaController {
 
     @Operation(summary = "按场拆章并生成分镜草稿，随后编译 Style Prefix / 身份 / Picture")
     @PostMapping("/episodes/{id}/storyboard/draft")
-    public CommonResult<DramaStoryboardResp> draftStoryboard(@PathVariable Long id) {
-        return CommonResult.success(dramaStoryboardService.draft(id));
+    public CommonResult<DramaStoryboardResp> draftStoryboard(
+            @PathVariable Long id,
+            @RequestParam(required = false) Integer durationSec) {
+        return CommonResult.success(dramaStoryboardService.draft(id, true, durationSec));
     }
 
     @Operation(summary = "重新编译本集全部分镜（预览，不调视频模型）")
@@ -307,5 +311,17 @@ public class DramaController {
             @PathVariable Long id,
             @PathVariable Long taskId) {
         return CommonResult.success(dramaStoryboardService.getGenerateTask(id, taskId));
+    }
+
+    @Operation(summary = "本集成片状态（指纹过期、缺镜清单）")
+    @GetMapping("/episodes/{id}/film")
+    public CommonResult<DramaFilmResp> getFilm(@PathVariable Long id) {
+        return CommonResult.success(dramaFilmService.get(id));
+    }
+
+    @Operation(summary = "按镜序拼接本集已出片镜头；缺镜仍可预览")
+    @PostMapping("/episodes/{id}/film/assemble")
+    public CommonResult<DramaFilmResp> assembleFilm(@PathVariable Long id) {
+        return CommonResult.success(dramaFilmService.assemble(id));
     }
 }

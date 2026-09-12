@@ -56,6 +56,11 @@ public final class GenerateRequests {
         return SOURCE_DRAMA.equals(sourceOf(params));
     }
 
+    /** 分镜出片任务（相对资产生图）。 */
+    public static boolean isDramaShot(Map<String, Object> params) {
+        return isDramaSource(params) && params != null && params.get("shotId") != null;
+    }
+
     public static boolean bindsQuickCreate(Map<String, Object> params) {
         return !isDramaSource(params);
     }
@@ -69,10 +74,18 @@ public final class GenerateRequests {
     }
 
     public static Long sessionIdFromParams(Map<String, Object> params) {
-        if (params == null || params.get("sessionId") == null) {
+        return longVal(params, "sessionId");
+    }
+
+    public static Long shotIdFromParams(Map<String, Object> params) {
+        return longVal(params, "shotId");
+    }
+
+    private static Long longVal(Map<String, Object> params, String key) {
+        if (params == null || params.get(key) == null) {
             return null;
         }
-        Object value = params.get("sessionId");
+        Object value = params.get(key);
         if (value instanceof Number number) {
             return number.longValue();
         }
@@ -92,6 +105,9 @@ public final class GenerateRequests {
         params.put("quality", request.getQuality());
         params.put("durationSec", request.getDurationSec());
         params.put("copies", request.resolvedCopies());
+        if (request.getAdapterKey() != null && !request.getAdapterKey().isBlank()) {
+            params.put("adapterKey", request.getAdapterKey());
+        }
         if (sessionId != null) {
             params.put("sessionId", sessionId);
         }
@@ -139,6 +155,7 @@ public final class GenerateRequests {
                 .setUserId(task.getUserId())
                 .setTaskId(task.getId())
                 .setModelKey(modelKey)
+                .setAdapterKey(stringVal(params.get("adapterKey"), null))
                 .setCategory(category)
                 .setMode(mode)
                 .setPrompt(task.getPrompt())

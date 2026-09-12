@@ -596,3 +596,12 @@ COMMENT ON COLUMN drama_shot.gen_task_id IS '阶段 6 出片任务（关联 gen_
 COMMENT ON COLUMN drama_shot.video_key IS '阶段 6 镜头成片相对对象存储 key';
 COMMENT ON COLUMN drama_shot.created_at IS '创建时间';
 COMMENT ON COLUMN drama_shot.updated_at IS '更新时间';
+
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_key VARCHAR(512);
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_poster_key VARCHAR(512);
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_fingerprint VARCHAR(128);
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_assembled_at TIMESTAMPTZ;
+COMMENT ON COLUMN drama_episode.film_key IS '本集成片 MP4 相对对象存储 key（按 shot_index 硬切拼接）';
+COMMENT ON COLUMN drama_episode.film_poster_key IS '成片封面（ffmpeg 抽出的 poster.webp）';
+COMMENT ON COLUMN drama_episode.film_fingerprint IS '按镜序 shotId:videoKey:durationSec 的 SHA-256；与当前分镜不一致则成片过期';
+COMMENT ON COLUMN drama_episode.film_assembled_at IS '最近一次拼接成片时间';

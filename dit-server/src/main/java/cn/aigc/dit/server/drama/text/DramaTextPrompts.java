@@ -1,5 +1,7 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaContract;
+
 /**
  * 剧本理解层的系统提示。字段名与 {@link ScriptDoc} / {@link AssetDraftList} / {@link ShotDraftList}
  * 的合同逐一对应，禁止模型发明 key——下游按 JSONB 落库并渲染表单。
@@ -82,7 +84,7 @@ public final class DramaTextPrompts {
                   "chapter_index": 1,
                   "index": 1,
                   "title": "侦探社开场",
-                  "duration_sec": 5,
+                  "duration_sec": 15,
                   "narrative_goal": "交代空间与二人关系，局长闯入",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
                   "dialogue": "局长：洛老弟，别睡了。",
@@ -96,7 +98,7 @@ public final class DramaTextPrompts {
               ]
             }
             规则：
-            - duration_sec 只许 5、10、15。
+            - duration_sec 只许 5、10、15；全部镜头必须等于用户指定的秒数，不得自行改成 5 或 10。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - cast_count 必须等于 character_names 元素个数。
             - chapter_index 对应 scene_index，一场至少 2 镜；不要压成少数超长镜。
@@ -128,8 +130,13 @@ public final class DramaTextPrompts {
     }
 
     public static String shotUser(String scriptJson, String assetNames) {
+        return shotUser(scriptJson, assetNames, DramaContract.DEFAULT_DURATION_SEC);
+    }
+
+    public static String shotUser(String scriptJson, String assetNames, int durationSec) {
         return "为这份剧本出章节与分镜草稿 ShotDraftList。"
                 + "只允许引用下列资产名，其它名字一律不得出现：\n" + assetNames
+                + "\n每条分镜的 duration_sec 必须是 " + durationSec + "，不得改成其它秒数。"
                 + "\n\n剧本：\n" + scriptJson;
     }
 }

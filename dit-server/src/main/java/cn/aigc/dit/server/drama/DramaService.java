@@ -67,6 +67,7 @@ public class DramaService {
     private final ObjectProvider<DramaTextService> textService;
     private final TextChatGateway textChatGateway;
     private final DramaStoryboardService storyboardService;
+    private final DramaFilmService filmService;
     @Autowired
     private DramaAssetService assetService;
 
@@ -415,8 +416,18 @@ public class DramaService {
             boolean serviceAvailable = textService.getIfAvailable() != null;
             resp.setTextServiceAvailable(serviceAvailable);
             resp.setCanGenerate(serviceAvailable && textChatGateway.llmAvailable(episode.getSeriesId()));
+            applyFilm(resp, episode);
         }
         return resp;
+    }
+
+    private void applyFilm(DramaEpisodeResp resp, DramaEpisode episode) {
+        if (filmService == null) {
+            return;
+        }
+        var film = filmService.preview(episode);
+        resp.setFilmUrl(film.getFilmUrl());
+        resp.setFilmStale(film.getStale());
     }
 
     private void applyParseIfPresent(DramaEpisode episode, String raw) {
@@ -664,6 +675,8 @@ public class DramaService {
         resp.setName(model.getName());
         resp.setProvider(model.getProvider());
         resp.setAdapterKey(model.getAdapterKey());
+        resp.setDurations(DramaDurations.supported(model.getAdapterKey(), model.getModelKey()));
+        resp.setResolutions(DramaResolutions.supported(model.getAdapterKey(), model.getModelKey()));
         return resp;
     }
 

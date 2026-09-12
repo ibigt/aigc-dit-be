@@ -1,6 +1,5 @@
 package cn.aigc.dit.server.drama;
 
-import cn.aigc.dit.server.drama.entity.DramaAsset;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -8,17 +7,22 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * 分镜视频 prompt 编译器。每镜自包含：Style Prefix + Active References（Picture 序号与资产顺序一致）
- * + 身份不变量全文 + 场景/动作/台词 + 人数正约束。
+ * 分镜视频 prompt 编译器。每镜自包含：Style Prefix + Active References（只注入短身份）
+ * + 电影场面硬约束 + 场景/动作/台词 + Cast（只点名已锁定出图角色）+ 对白口型。
  */
 public final class DramaStoryboardCompiler {
 
-    public static final String CHAR_PICTURE_HINT = "仅作%s身份与服装，不要继承构图";
-    public static final String PROP_PICTURE_HINT = "仅作%s外观与材质，不要继承构图";
-    public static final String SCENE_PICTURE_HINT = "可参考陈设与光线，不要改人物身份";
+    public static final String CHAR_PICTURE_HINT = "只借%s的身份与当前服装，不继承姿态、背景、构图、机位、光线";
+    public static final String PROP_PICTURE_HINT = "只借%s的外观与材质，必须在戏里被使用，不继承姿态、背景、构图、机位、光线";
+    public static final String SCENE_PICTURE_HINT = "只借空间陈设，必须有人在此演戏，不继承原图构图、机位、光线";
+    public static final String MOVIE_SCENE_MUST =
+            "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
+    public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号；口型与每个字严格同步，不得增删或改写。";
 
     private DramaStoryboardCompiler() {
     }
@@ -33,6 +37,12 @@ public final class DramaStoryboardCompiler {
     ) {
     }
 
+    /**
+     * 本镜点名但未锁定出图的角色，用外貌短句代替点名，避免模型乱长脸。
+     */
+    public record NamedAppearance(String name, String identityInvariants) {
+    }
+
     public record ShotContent(
             String scene,
             String narrativeGoal,
@@ -41,8 +51,21 @@ public final class DramaStoryboardCompiler {
             String continuityOut,
             int durationSec,
             List<String> characterNames,
-            int castCount
+            int castCount,
+            List<NamedAppearance> unnamedAppearances
     ) {
+        public ShotContent(
+                String scene,
+                String narrativeGoal,
+                String dialogue,
+                String continuityIn,
+                String continuityOut,
+                int durationSec,
+                List<String> characterNames,
+                int castCount) {
+            this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
+                    characterNames, castCount, List.of());
+        }
     }
 
     public record Result(String prompt, String fingerprint) {
@@ -53,9 +76,9 @@ public final class DramaStoryboardCompiler {
         ShotContent content = shot == null
                 ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
                 : shot;
-        String prefix = StringUtils.hasText(stylePrefix)
+        String prefix = DramaStyles.withVideoSceneClause(StringUtils.hasText(stylePrefix)
                 ? stylePrefix.trim()
-                : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+                : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
 
         StringBuilder prompt = new StringBuilder();
         prompt.append(prefix);
@@ -86,13 +109,18 @@ public final class DramaStoryboardCompiler {
             }
         }
 
+        prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
         appendLine(prompt, "Scene", content.scene());
         appendLine(prompt, "Action", content.narrativeGoal());
         appendLine(prompt, "Dialogue", content.dialogue());
         appendLine(prompt, "Continuity in", content.continuityIn());
         appendLine(prompt, "Continuity out", content.continuityOut());
-        prompt.append(castConstraint(content)).append('\n');
+        prompt.append(castConstraint(content, refs)).append('\n');
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
+        String spoken = spokenDialogueConstraint(content.dialogue());
+        if (StringUtils.hasText(spoken)) {
+            prompt.append('\n').append(spoken);
+        }
 
         return new Result(prompt.toString().trim(), fingerprint(prefix, refs, content));
     }
@@ -103,7 +131,6 @@ public final class DramaStoryboardCompiler {
         if (references != null) {
             for (ActiveReference ref : references) {
                 raw.append(ref.assetId()).append(':').append(ref.identityVersion()).append(':')
-                        .append(blank(ref.descriptor())).append(':')
                         .append(blank(ref.identityInvariants())).append('\n');
             }
         }
@@ -116,22 +143,24 @@ public final class DramaStoryboardCompiler {
             raw.append(blank(shot.continuityOut())).append('\n');
             raw.append(String.join(",", shot.characterNames() == null ? List.of() : shot.characterNames()));
             raw.append('\n').append(shot.castCount());
+            if (shot.unnamedAppearances() != null) {
+                for (NamedAppearance appearance : shot.unnamedAppearances()) {
+                    if (appearance == null) {
+                        continue;
+                    }
+                    raw.append('\n').append(blank(appearance.name())).append(':')
+                            .append(blank(appearance.identityInvariants()));
+                }
+            }
         }
         return sha256(raw.toString());
     }
 
     static String fullIdentity(ActiveReference ref) {
-        List<String> parts = new ArrayList<>();
-        if (StringUtils.hasText(ref.identityInvariants())) {
-            parts.add(ref.identityInvariants().trim());
+        if (ref == null || !StringUtils.hasText(ref.identityInvariants())) {
+            return "";
         }
-        if (StringUtils.hasText(ref.descriptor())) {
-            String descriptor = ref.descriptor().trim();
-            if (parts.stream().noneMatch(existing -> existing.equals(descriptor))) {
-                parts.add(descriptor);
-            }
-        }
-        return String.join("。", parts);
+        return ref.identityInvariants().trim();
     }
 
     static String pictureHint(ActiveReference ref) {
@@ -145,7 +174,7 @@ public final class DramaStoryboardCompiler {
         return CHAR_PICTURE_HINT.formatted(name);
     }
 
-    static String castConstraint(ShotContent shot) {
+    static String castConstraint(ShotContent shot, List<ActiveReference> references) {
         List<String> names = shot.characterNames() == null ? List.of() : shot.characterNames().stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
@@ -154,9 +183,104 @@ public final class DramaStoryboardCompiler {
         if (count <= 0 && names.isEmpty()) {
             return "Cast: 本镜不要增删人物。";
         }
-        String joined = String.join("、", names);
-        return "Cast: 本镜恰好 " + count + " 人，不得增删角色。"
-                + (joined.isEmpty() ? "" : "出场：" + joined + "。");
+
+        Set<String> pictured = new LinkedHashSet<>();
+        if (references != null) {
+            for (ActiveReference ref : references) {
+                if (ref != null
+                        && DramaContract.ASSET_TYPE_CHARACTER.equals(ref.type())
+                        && StringUtils.hasText(ref.name())) {
+                    pictured.add(ref.name().trim());
+                }
+            }
+        }
+
+        List<String> picturedNames = names.stream().filter(pictured::contains).toList();
+        List<String> unnamedLooks = unnamedLooks(names, pictured, shot.unnamedAppearances());
+
+        StringBuilder line = new StringBuilder();
+        line.append("Cast: 本镜恰好 ").append(count).append(" 人，不得增删角色。");
+        if (!picturedNames.isEmpty()) {
+            line.append("出场：").append(String.join("、", picturedNames)).append("。");
+        }
+        if (!unnamedLooks.isEmpty()) {
+            line.append("未出图角色按外貌出演：").append(String.join("；", unnamedLooks)).append("。");
+        }
+        return line.toString();
+    }
+
+    static String spokenDialogueConstraint(String dialogue) {
+        if (!StringUtils.hasText(dialogue)) {
+            return "";
+        }
+        List<String> contracts = new ArrayList<>();
+        for (String rawLine : dialogue.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            int sep = speakerSeparator(line);
+            String speaker;
+            String words;
+            if (sep > 0 && sep <= 20) {
+                speaker = line.substring(0, sep).trim();
+                words = line.substring(sep + 1).trim();
+            } else {
+                speaker = "画面中的说话者";
+                words = line;
+            }
+            if (!StringUtils.hasText(words)) {
+                continue;
+            }
+            if ("旁白".equals(speaker) || "画外音".equals(speaker) || "解说".equals(speaker)) {
+                contracts.add("使用清晰自然的" + speaker + "逐字念出：“" + words + "”");
+            } else {
+                contracts.add("角色“" + speaker + "”逐字说出：“" + words + "”，口型与每个字严格同步");
+            }
+        }
+        StringBuilder line = new StringBuilder("对白执行：");
+        if (!contracts.isEmpty()) {
+            line.append(String.join("；", contracts)).append("。");
+        }
+        line.append(DIALOGUE_EXECUTION_TAIL);
+        return line.toString();
+    }
+
+    private static List<String> unnamedLooks(
+            List<String> names, Set<String> pictured, List<NamedAppearance> unnamedAppearances) {
+        List<NamedAppearance> appearances = unnamedAppearances == null ? List.of() : unnamedAppearances;
+        List<String> looks = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String name : names) {
+            if (pictured.contains(name) || !seen.add(name)) {
+                continue;
+            }
+            String identity = "";
+            for (NamedAppearance appearance : appearances) {
+                if (appearance != null && name.equals(blank(appearance.name()))) {
+                    identity = blank(appearance.identityInvariants());
+                    break;
+                }
+            }
+            looks.add(StringUtils.hasText(identity) ? identity : "外貌普通、五官不可识别的配角");
+        }
+        return looks;
+    }
+
+    private static int speakerSeparator(String line) {
+        int colon = indexOfUnquoted(line, '：');
+        int ascii = indexOfUnquoted(line, ':');
+        if (colon < 0) {
+            return ascii;
+        }
+        if (ascii < 0) {
+            return colon;
+        }
+        return Math.min(colon, ascii);
+    }
+
+    private static int indexOfUnquoted(String line, char sep) {
+        return line.indexOf(sep);
     }
 
     private static void appendLine(StringBuilder prompt, String label, String value) {
