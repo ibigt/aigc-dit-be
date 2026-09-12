@@ -36,6 +36,7 @@ public class DramaShotResp {
     private String compiledPrompt;
     private String compiledFingerprint;
     private Boolean compiledStale;
+    private String promptOverride;
     private List<String> unboundNames = new ArrayList<>();
     private String status;
     private Long genTaskId;

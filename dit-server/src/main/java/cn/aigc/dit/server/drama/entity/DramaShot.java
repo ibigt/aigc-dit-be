@@ -51,6 +51,9 @@ public class DramaShot {
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String compiledFingerprint;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String promptOverride;
     private String status;
     private Long genTaskId;
     private String videoKey;

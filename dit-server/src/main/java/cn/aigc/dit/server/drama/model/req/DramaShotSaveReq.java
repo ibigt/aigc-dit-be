@@ -34,4 +34,8 @@ public class DramaShotSaveReq {
 
     @Size(max = 128)
     private String locationName;
+
+    @Schema(description = "手动覆盖视频提示词；传非空=启用覆盖并跳过自动编译，传空串=清除覆盖回到自动编译，不传=不改动")
+    @Size(max = 4000)
+    private String promptOverride;
 }

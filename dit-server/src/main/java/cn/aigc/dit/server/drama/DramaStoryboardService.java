@@ -133,21 +133,30 @@ public class DramaStoryboardService {
         }
         applySave(shot, req);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        String prefix = stylePrefix(shot.getSeriesId());
         boolean autoBind = req.getReferenceAssetIds() == null || req.getReferenceAssetIds().isEmpty();
-        rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, autoBind);
+
+        boolean overrideActive = applyPromptOverride(shot, req);
+        if (overrideActive) {
+            rebindReferencesOnly(shot, assets, false, autoBind);
+        } else {
+            rebindAndCompile(shot, assets, prefix, false, autoBind);
+        }
+
         if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())
                 || DramaContract.STATUS_NOT_STARTED.equals(shot.getStatus())) {
             shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         shotMapper.updateById(shot);
         touchSeries(shot.getSeriesId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix, loadTask(shot.getGenTaskId()));
     }
 
     @Transactional
     public DramaShotResp compileShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        shot.setPromptOverride(null);
         rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, true);
         if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())) {
             shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -166,6 +175,7 @@ public class DramaStoryboardService {
             if (DramaContract.STATUS_LOCKED.equals(shot.getStatus()) && !isStale(shot, assets, prefix)) {
                 continue;
             }
+            shot.setPromptOverride(null);
             rebindAndCompile(shot, assets, prefix, false, true);
             if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())) {
                 shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -286,7 +296,7 @@ public class DramaStoryboardService {
         if (!unbound.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "未锁定不能进分镜参考：" + String.join("、", unbound));
         }
-        if (!StringUtils.hasText(shot.getCompiledPrompt()) || isStale(shot, assets, prefix)) {
+        if (!StringUtils.hasText(effectivePrompt(shot)) || isStale(shot, assets, prefix)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再确认");
         }
         shot.setStatus(DramaContract.STATUS_LOCKED);
@@ -303,13 +313,18 @@ public class DramaStoryboardService {
         AiModel model = requireBoundVideoModel(series);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         String prefix = stylePrefixOf(series);
-        rebindAndCompile(shot, assets, prefix, true, true);
-        List<DramaAsset> refs = resolveReferences(shot, assets, true, true);
+        List<DramaAsset> refs;
+        if (StringUtils.hasText(shot.getPromptOverride())) {
+            refs = resolveReferences(shot, assets, true, true);
+        } else {
+            rebindAndCompile(shot, assets, prefix, true, true);
+            refs = resolveReferences(shot, assets, true, true);
+            if (!StringUtils.hasText(shot.getCompiledPrompt())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
+            }
+        }
         if (refs.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定主体参考图再出片");
-        }
-        if (!StringUtils.hasText(shot.getCompiledPrompt())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
         }
         shotMapper.updateById(shot);
 
@@ -317,7 +332,7 @@ public class DramaStoryboardService {
         GenerateSubmitReq req = new GenerateSubmitReq();
         req.setModelId(model.getId());
         req.setCategory(ModelCategory.VIDEO);
-        req.setPrompt(shot.getCompiledPrompt());
+        req.setPrompt(effectivePrompt(shot));
         req.setRatio(series.getAspectRatio());
         req.setResolution(DramaResolutions.clamp(
                 series.getDefaultResolution(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
@@ -622,6 +637,29 @@ public class DramaStoryboardService {
         shot.setCompiledFingerprint(compiled.fingerprint());
     }
 
+    private static String effectivePrompt(DramaShot shot) {
+        if (StringUtils.hasText(shot.getPromptOverride())) {
+            return shot.getPromptOverride();
+        }
+        return shot.getCompiledPrompt();
+    }
+
+    private boolean applyPromptOverride(DramaShot shot, DramaShotSaveReq req) {
+        if (req.getPromptOverride() == null) {
+            return StringUtils.hasText(shot.getPromptOverride());
+        }
+        String trimmed = StringUtils.hasText(req.getPromptOverride()) ? req.getPromptOverride().trim() : null;
+        shot.setPromptOverride(trimmed);
+        return trimmed != null;
+    }
+
+    private void rebindReferencesOnly(DramaShot shot, Map<Long, DramaAsset> assets,
+                                      boolean requireLocked, boolean autoBindIfEmpty) {
+        List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
+        shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
+        shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
+    }
+
     private List<DramaAsset> resolveReferences(
             DramaShot shot, Map<Long, DramaAsset> assets, boolean requireLocked, boolean autoBindIfEmpty) {
         boolean dream = isDreamContext(shot);
@@ -727,6 +765,9 @@ public class DramaStoryboardService {
     }
 
     private boolean isStale(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix) {
+        if (StringUtils.hasText(shot.getPromptOverride())) {
+            return false;
+        }
         if (!StringUtils.hasText(shot.getCompiledFingerprint())) {
             return StringUtils.hasText(shot.getCompiledPrompt());
         }
@@ -924,6 +965,7 @@ public class DramaStoryboardService {
         resp.setCompiledPrompt(shot.getCompiledPrompt());
         resp.setCompiledFingerprint(shot.getCompiledFingerprint());
         resp.setCompiledStale(isStale(shot, assets, stylePrefix));
+        resp.setPromptOverride(shot.getPromptOverride());
         resp.setUnboundNames(unboundLockedRequired(shot, assets));
         resp.setStatus(shot.getStatus());
         resp.setGenTaskId(shot.getGenTaskId());
