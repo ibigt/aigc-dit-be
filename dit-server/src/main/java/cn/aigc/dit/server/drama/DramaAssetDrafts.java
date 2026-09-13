@@ -135,7 +135,7 @@ public final class DramaAssetDrafts {
         text.append("服装款式、颜色、面料、纹理、配饰和鞋履清晰。");
         if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
             text.append("当代都市人物，穿现代常服，不要古装汉服广袖，不要武侠仙侠造型。");
-        } else if (DramaStyles.LIVE_WUXIA.equals(spec.key())) {
+        } else if (DramaStyles.ANIME_WUXIA.equals(spec.key())) {
             text.append("古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。");
         }
         if (DramaContract.STATE_TAG_DREAM.equals(stateTag)) {

@@ -15,7 +15,7 @@ public class DramaSeriesCreateReq {
     private String name;
 
     @Size(max = 64)
-    @Schema(description = "风格键：anime-comic / live-realism / live-wuxia", example = "anime-comic")
+    @Schema(description = "风格键：anime-comic / live-realism / anime-wuxia / costume-comic / republican-era / cyberpunk / sci-fi / rural", example = "anime-comic")
     private String styleKey;
 
     @Schema(description = "画幅：16:9 / 9:16 / 1:1", example = "16:9")
