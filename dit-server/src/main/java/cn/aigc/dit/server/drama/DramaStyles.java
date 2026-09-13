@@ -35,8 +35,8 @@ public final class DramaStyles {
                 "/drama/styles/live-realism.jpg"));
         register(new Spec(
                 LIVE_WUXIA,
-                "真人武侠风",
-                "真人武侠风，电影级古装武侠实拍，飘逸服饰与刀剑气韵，山水雾气金戈光影，写实人物，不要卡通漫画，不要现代都市",
+                "动漫武侠风",
+                "动漫武侠风，精致二次元作画，飘逸古装与刀剑气韵，山水雾气竹林光影，赛璐璐上色，清晰线稿，动态打斗场面，电影分镜构图，不要真实人脸，不要现代都市，不要 3D 写实",
                 "/drama/styles/live-wuxia.jpg"));
     }
 
