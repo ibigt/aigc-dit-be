@@ -18,6 +18,7 @@ Thumbs.db
 
 .env
 .env.local
+.deploy.env
 /data/
 application-local.yml
 application-local.yaml
