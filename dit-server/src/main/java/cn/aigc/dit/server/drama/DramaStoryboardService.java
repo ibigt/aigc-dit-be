@@ -324,7 +324,7 @@ public class DramaStoryboardService {
             }
         }
         if (refs.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定主体参考图再出片");
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定资产参考图再出片");
         }
         shotMapper.updateById(shot);
 

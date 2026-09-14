@@ -13,7 +13,7 @@ public class DramaShotSaveReq {
     @Size(max = 128)
     private String title;
 
-    @Schema(description = "仅 5 / 10 / 15")
+    @Schema(description = "5–15 秒，逐秒可选")
     private Integer durationSec;
 
     private String narrativeGoal;

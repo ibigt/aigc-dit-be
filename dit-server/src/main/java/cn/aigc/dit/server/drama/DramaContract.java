@@ -19,11 +19,14 @@ public final class DramaContract {
     public static final String DEFAULT_ASPECT_RATIO = "16:9";
     public static final String DEFAULT_RESOLUTION = "720P";
     public static final int DEFAULT_DURATION_SEC = 15;
+    public static final int MIN_DURATION_SEC = 5;
+    public static final int MAX_DURATION_SEC = 15;
     public static final int DEFAULT_PLANNED_EPISODES = 1;
 
     public static final Set<String> ASPECT_RATIOS = Set.of("16:9", "9:16", "1:1");
     public static final Set<String> RESOLUTIONS = Set.of("480P", "720P");
-    public static final Set<Integer> DURATIONS = Set.of(5, 10, 15);
+    public static final List<Integer> DURATION_OPTIONS = List.of(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    public static final Set<Integer> DURATIONS = Set.copyOf(DURATION_OPTIONS);
 
     /** 乙未合入：导入只存原文。 */
     public static final String ENGINE_PENDING = "pending";

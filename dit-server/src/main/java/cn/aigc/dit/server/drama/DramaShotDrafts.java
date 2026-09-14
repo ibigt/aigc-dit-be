@@ -11,7 +11,7 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 乙未合入时的规则分镜草稿。第一场覆盖开场日常 / 局长闯入 / 掏怀表，时长仅 5/10/15。
+ * 乙未合入时的规则分镜草稿。第一场覆盖开场日常 / 局长闯入 / 掏怀表，时长仅 5–15 秒。
  */
 public final class DramaShotDrafts {
 

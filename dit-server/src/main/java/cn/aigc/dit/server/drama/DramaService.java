@@ -511,7 +511,7 @@ public class DramaService {
     static int normalizeDuration(Integer value) {
         int duration = value == null ? DramaContract.DEFAULT_DURATION_SEC : value;
         if (!DramaContract.DURATIONS.contains(duration)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "单镜时长仅支持 5、10、15 秒");
+            throw new BizException(ErrorCode.BAD_REQUEST, "单镜时长仅支持 5–15 秒");
         }
         return duration;
     }

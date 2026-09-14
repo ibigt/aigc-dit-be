@@ -70,8 +70,11 @@ public final class DramaTextPrompts {
               state_tag 给 dream 或 costume，must_split 给 true，
               identity_invariants 写明「与本体同一张脸和发型；禁止写成另一个人」。
             - 状态条目绝不能并进本体 description，本体 description 里不得出现入梦/湿身字样。
-            - image_prompt 必须是「中性浅灰或纯白背景的角色三视图参考图」：正面全身、侧面半身、面部特写；
+            - 角色 image_prompt：中性浅灰或纯白背景的三视图参考图（正面全身、侧面半身、面部特写）；
               不要写剧情动作、首次出场、分镜格子、设定表排版或其它人物。
+            - 场景 image_prompt：无人场景概念图，写空间陈设、材质与光线；不要人物、不要整场剧情动作。
+            - 道具 image_prompt：只写该物件的外形、材质、磨损和标志性细节；静物产品级特写、纯色干净背景。
+              不要写剧情用途、场面动作、人物名字或台词。
             - description 与 identity_invariants 不得互相引用，不得写「同上」。
             """;
 
@@ -98,7 +101,7 @@ public final class DramaTextPrompts {
               ]
             }
             规则：
-            - duration_sec 只许 5、10、15；全部镜头必须等于用户指定的秒数，不得自行改成 5 或 10。
+            - duration_sec 只许 5–15 的整数秒；全部镜头必须等于用户指定的秒数，不得自行改成其它秒数。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - cast_count 必须等于 character_names 元素个数。
             - chapter_index 对应 scene_index，一场至少 2 镜；不要压成少数超长镜。

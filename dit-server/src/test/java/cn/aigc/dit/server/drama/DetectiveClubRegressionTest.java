@@ -162,7 +162,7 @@ class DetectiveClubRegressionTest {
 
         for (ShotDraftList.ShotDraft shot : drafts.getShots()) {
             assertTrue(DramaContract.DURATIONS.contains(shot.getDurationSec()),
-                    "时长只许 5/10/15，实得 " + shot.getDurationSec());
+                    "时长只许 5–15 秒，实得 " + shot.getDurationSec());
             assertEquals(shot.getCastCount(), shot.getCharacterNames().size(), "cast_count 与人名数组不符：" + shot.getTitle());
             assertTrue(assetNames.containsAll(shot.getCharacterNames()), "分镜引用了不存在的资产名：" + shot.getTitle());
             assertTrue(assetNames.containsAll(shot.getPropNames()), "分镜引用了不存在的道具名：" + shot.getTitle());

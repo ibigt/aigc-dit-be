@@ -118,7 +118,7 @@ public class FlywayConfig {
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
                     CONSTRAINT ck_drama_series_resolution CHECK (default_resolution IN ('480P', '720P')),
-                    CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec IN (5, 10, 15)),
+                    CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec >= 5 AND default_duration_sec <= 15),
                     CONSTRAINT ck_drama_series_planned CHECK (planned_episode_count >= 1 AND planned_episode_count <= 99)
                 )
                 """);
@@ -314,7 +314,7 @@ public class FlywayConfig {
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
                     CONSTRAINT ck_drama_shot_index CHECK (shot_index >= 1),
-                    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec IN (5, 10, 15)),
+                    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec >= 5 AND duration_sec <= 15),
                     CONSTRAINT ck_drama_shot_cast CHECK (cast_count >= 0),
                     CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
                 )
@@ -331,6 +331,18 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_shot.video_poster_key
                 IS '成片首帧（ffmpeg 抽出的 poster.webp）；底片条预览用，未出片为空'
+                """);
+        statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_duration");
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD CONSTRAINT ck_drama_series_duration
+                CHECK (default_duration_sec >= 5 AND default_duration_sec <= 15)
+                """);
+        statement.execute("ALTER TABLE drama_shot DROP CONSTRAINT IF EXISTS ck_drama_shot_duration");
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD CONSTRAINT ck_drama_shot_duration
+                CHECK (duration_sec >= 5 AND duration_sec <= 15)
                 """);
     }
 }

@@ -9,11 +9,11 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 分镜可选时长：合同只有 5/10/15，再与当前视频适配器的真实区间求交。
+ * 分镜可选时长：合同 5–15 逐秒，再与当前视频适配器的真实区间求交。
  */
 public final class DramaDurations {
 
-    public static final List<Integer> OPTIONS = List.of(5, 10, 15);
+    public static final List<Integer> OPTIONS = DramaContract.DURATION_OPTIONS;
 
     private DramaDurations() {
     }

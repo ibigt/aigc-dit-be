@@ -446,7 +446,7 @@ class DramaStoryboardServiceTest {
                 pendingAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
 
         BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
-        assertTrue(error.getMessage().contains("尚未锁定") || error.getMessage().contains("请先锁定主体参考图"));
+        assertTrue(error.getMessage().contains("尚未锁定") || error.getMessage().contains("请先锁定资产参考图"));
         verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 

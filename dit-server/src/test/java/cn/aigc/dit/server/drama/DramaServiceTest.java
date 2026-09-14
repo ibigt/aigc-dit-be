@@ -129,7 +129,16 @@ class DramaServiceTest {
         req.setName("侦探社");
         req.setDefaultDurationSec(4);
         BizException error = assertThrows(BizException.class, () -> service.createSeries(req));
-        assertEquals("单镜时长仅支持 5、10、15 秒", error.getMessage());
+        assertEquals("单镜时长仅支持 5–15 秒", error.getMessage());
+    }
+
+    @Test
+    void normalizeDurationAcceptsEachSecondFromFiveToFifteen() {
+        for (int seconds = 5; seconds <= 15; seconds++) {
+            assertEquals(seconds, DramaService.normalizeDuration(seconds));
+        }
+        BizException tooLong = assertThrows(BizException.class, () -> DramaService.normalizeDuration(16));
+        assertEquals("单镜时长仅支持 5–15 秒", tooLong.getMessage());
     }
 
     @Test

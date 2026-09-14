@@ -18,8 +18,8 @@ class DramaDurationsTest {
     @Test
     void agnesHidesFifteenAndClampsDown() {
         assertFalse(DramaDurations.supported(AdapterCatalog.AGNES_VIDEO_2_5).contains(15));
-        assertEquals(10, DramaDurations.clamp(15, AdapterCatalog.AGNES_VIDEO_2_5));
-        assertEquals(10, DramaDurations.clamp(12, "agnes-video-2.5-flash"));
+        assertEquals(12, DramaDurations.clamp(15, AdapterCatalog.AGNES_VIDEO_2_5));
+        assertEquals(12, DramaDurations.clamp(12, "agnes-video-2.5-flash"));
     }
 
     @Test

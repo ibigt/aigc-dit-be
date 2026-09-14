@@ -84,7 +84,7 @@ public final class DramaAssetDrafts {
             return scenePrompt(name, styleLine, context);
         }
         if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
-            return propPrompt(name, styleLine, context);
+            return propPrompt(name, styleLine);
         }
         return characterPrompt(name, stateTag, spec, context);
     }
@@ -184,13 +184,10 @@ public final class DramaAssetDrafts {
         return text.toString();
     }
 
-    private static String propPrompt(String name, String styleLine, Context context) {
+    private static String propPrompt(String name, String styleLine) {
         StringBuilder text = new StringBuilder();
         text.append(name).append("道具设定图。");
         text.append("完整展示外形、材质、磨损和标志性细节，可被手持或放置。");
-        if (context != null && StringUtils.hasText(context.action())) {
-            text.append("剧情用途：").append(clip(context.action(), 60)).append("。");
-        }
         text.append("正面与微距特写，纯色干净背景，静物产品级清晰。");
         text.append(styleLine).append("。");
         text.append("画面中不要出现人物。");
@@ -239,7 +236,8 @@ public final class DramaAssetDrafts {
         }
         return prompt.contains("角色设定表排版")
                 || prompt.contains("符合剧情设定的核心动作")
-                || prompt.contains("首次出场：");
+                || prompt.contains("首次出场：")
+                || prompt.contains("剧情用途：");
     }
 
     private static boolean isLegacyOneLiner(String prompt) {

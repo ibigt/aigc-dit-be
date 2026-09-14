@@ -56,6 +56,15 @@ class DramaAssetDraftsTest {
                 .orElseThrow();
         assertTrue(watch.getImagePrompt().contains("道具设定图"));
         assertTrue(watch.getImagePrompt().contains("不要出现人物"));
+        assertTrue(!watch.getImagePrompt().contains("剧情用途"));
+        assertTrue(!watch.getImagePrompt().contains("风扇"));
+        assertTrue(!watch.getImagePrompt().contains("夏安"));
+    }
+
+    @Test
+    void shouldReplaceLegacyPropPlotUsagePrompt() {
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                "古铜怀表道具设定图。剧情用途：风扇转动。夏安在白板贴照片。"));
     }
 
     @Test

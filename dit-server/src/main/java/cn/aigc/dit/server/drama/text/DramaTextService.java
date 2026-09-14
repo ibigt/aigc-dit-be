@@ -34,7 +34,7 @@ public interface DramaTextService {
 
     /**
      * 锁定剧本 + 资产名 → 章节与分镜草稿。不含 compiled_prompt。
-     * 乙未覆盖时走规则拆镜；时长仅 5/10/15，第一场 4–8 镜。
+     * 乙未覆盖时走规则拆镜；时长仅 5–15 秒，第一场 4–8 镜。
      */
     default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames) {
         return draftShots(seriesId, script, assetNames, cn.aigc.dit.server.drama.DramaContract.DEFAULT_DURATION_SEC);
