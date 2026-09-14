@@ -254,10 +254,11 @@ public class DramaService {
             ops.importSource(id, importReq);
             ops.lockScript(id);
             // 一键分析只同步完成分场和规则抽资产；LLM 拆镜后台跑，避免剧本页被第三次模型调用拖死。
+            // 不把「单集时长 / 目标分镜数」传给拆镜：默认 15 秒/8 镜会和每镜最少 5 秒冲突，模型会为凑时长打乱场次。
             List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
             int episodeBudget = req.getEpisodeDurationSec() == null ? 15 : req.getEpisodeDurationSec();
             int targetShots = req.getShotsPerEpisode() == null ? 8 : req.getShotsPerEpisode();
-            storyboardService.enqueueAutoDraft(id, episodeBudget, targetShots);
+            storyboardService.enqueueAutoDraft(id, null, null);
             DramaStoryboardResp storyboard = storyboardService.getStoryboard(id);
 
             DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();

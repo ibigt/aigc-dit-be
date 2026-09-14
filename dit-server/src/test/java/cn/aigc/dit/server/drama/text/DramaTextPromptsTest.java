@@ -26,12 +26,21 @@ class DramaTextPromptsTest {
     }
 
     @Test
-    void shotUserAsksForPerShotDuration() {
+    void shotUserAsksForPerShotDurationWithoutForcingEpisodeSum() {
         String user = DramaTextPrompts.shotUser("{}", "洛白", 8, 30, 6);
         assertTrue(user.contains("自行估计"));
         assertTrue(user.contains("不要所有镜头填同一个秒数"));
-        assertTrue(user.contains("本集目标总时长约 30 秒"));
-        assertTrue(user.contains("目标大约 6 个分镜"));
+        assertTrue(user.contains("严格按剧本场次先后"));
+        assertTrue(user.contains("本集故事体量大约 30 秒"));
+        assertTrue(user.contains("大约 6 个只是参考"));
+        assertFalse(user.contains("各镜秒数之和尽量接近"));
         assertFalse(user.contains("必须是 8，不得改成其它秒数"));
+    }
+
+    @Test
+    void shotSchemaForbidsReorderingToFitDuration() {
+        String system = DramaTextPrompts.shotSystem();
+        assertTrue(system.contains("禁止为了凑总秒数而删戏、并戏或打乱时间线"));
+        assertTrue(system.contains("必须按 scenes 的先后"));
     }
 }

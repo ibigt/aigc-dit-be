@@ -700,9 +700,15 @@ public class DramaStoryboardService {
             }
             Integer chapterIndex = draft.getChapterIndex();
             DramaChapter chapter = chapterIndex == null ? null : chapters.get(chapterIndex);
-            if (chapter == null && !chapters.isEmpty()) {
-                chapter = chapters.values().iterator().next();
-                chapterIndex = chapter.getChapterIndex();
+            if (chapter == null && chapterIndex != null && !chapters.isEmpty()) {
+                Integer nearest = null;
+                for (Integer key : chapters.keySet()) {
+                    if (nearest == null || Math.abs(key - chapterIndex) < Math.abs(nearest - chapterIndex)) {
+                        nearest = key;
+                    }
+                }
+                chapter = chapters.get(nearest);
+                chapterIndex = nearest;
             }
             if (chapter == null) {
                 continue;

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -118,7 +119,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                     content -> clampDurations(
                             normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
                             duration),
-                    "ShotDraftList", 4096);
+                    "ShotDraftList", 8192);
         } catch (RuntimeException e) {
             swallowUnlessUnbound(seriesId, "分镜草稿", e);
         }
@@ -287,14 +288,31 @@ public class DramaTextServiceImpl implements DramaTextService {
         if (list == null || list.getShots() == null || list.getShots().isEmpty()) {
             return null;
         }
+        int sceneCount = script == null || script.getScenes() == null ? 0 : script.getScenes().size();
         Set<String> allowed = new LinkedHashSet<>(assetNames);
-        Map<Integer, Integer> perChapter = new HashMap<>();
-        List<ShotDraftList.ShotDraft> kept = new ArrayList<>();
+        List<ShotDraftList.ShotDraft> raw = new ArrayList<>();
+        int lastChapter = 1;
         for (ShotDraftList.ShotDraft shot : list.getShots()) {
             if (shot == null || !StringUtils.hasText(shot.getTitle())) {
                 continue;
             }
-            int chapter = shot.getChapterIndex() == null ? 1 : shot.getChapterIndex();
+            if (shot.getChapterIndex() == null) {
+                shot.setChapterIndex(lastChapter);
+            } else {
+                lastChapter = shot.getChapterIndex();
+            }
+            raw.add(shot);
+        }
+        if (raw.isEmpty()) {
+            return null;
+        }
+        raw.sort(Comparator
+                .comparingInt((ShotDraftList.ShotDraft shot) -> clampChapter(shot.getChapterIndex(), sceneCount))
+                .thenComparingInt(shot -> shot.getIndex() == null ? Integer.MAX_VALUE : shot.getIndex()));
+        Map<Integer, Integer> perChapter = new HashMap<>();
+        List<ShotDraftList.ShotDraft> kept = new ArrayList<>();
+        for (ShotDraftList.ShotDraft shot : raw) {
+            int chapter = clampChapter(shot.getChapterIndex(), sceneCount);
             shot.setChapterIndex(chapter);
             shot.setIndex(perChapter.merge(chapter, 1, Integer::sum));
             shot.setTitle(shot.getTitle().strip());
@@ -306,14 +324,19 @@ public class DramaTextServiceImpl implements DramaTextService {
             shot.setCastCount(shot.getCharacterNames().size());
             kept.add(shot);
         }
-        if (kept.isEmpty()) {
-            return null;
-        }
         list.setShots(kept);
         if (list.getChapters() == null || list.getChapters().isEmpty()) {
             list.setChapters(chaptersFrom(script));
         }
         return list;
+    }
+
+    private static int clampChapter(Integer chapterIndex, int sceneCount) {
+        int chapter = chapterIndex == null || chapterIndex < 1 ? 1 : chapterIndex;
+        if (sceneCount > 0 && chapter > sceneCount) {
+            return sceneCount;
+        }
+        return chapter;
     }
 
     static ShotDraftList clampDurations(ShotDraftList list, int fallbackSec) {

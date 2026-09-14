@@ -101,8 +101,9 @@ public final class DramaTextPrompts {
               ]
             }
             规则：
-            - duration_sec 只许 5–15 的整数秒；必须按本镜对白长短、动作节拍、剧本里的时长提示各自估计，
-              不要所有镜头填同一个秒数。
+            - duration_sec 只许 5–15 的整数秒；按本镜对白长短、动作节拍各自估计，不要所有镜头填同一个秒数。
+              时长只服务单镜，禁止为了凑总秒数而删戏、并戏或打乱时间线。
+            - 必须按 scenes 的先后、场内 action 与 dialogue 的出现顺序拆镜；后一场的事件不得出现在前面的镜头里。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
             - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
@@ -155,16 +156,17 @@ public final class DramaTextPrompts {
         StringBuilder text = new StringBuilder();
         text.append("为这份剧本出章节与分镜草稿 ShotDraftList。");
         text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
-        text.append("\n每条分镜的 duration_sec 必须按该镜对白长短、动作节拍、剧本里的时长提示自行估计，");
-        text.append("只能是 5 到 15 的整数秒。不要所有镜头填同一个秒数。无法判断时再用 ")
-                .append(fallbackSec)
-                .append(" 秒。");
+        text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
+        text.append("\n每条分镜的 duration_sec 按该镜对白长短和动作节拍自行估计，只能是 5 到 15 的整数秒。");
+        text.append("不要所有镜头填同一个秒数。无法判断时再用 ").append(fallbackSec).append(" 秒。");
+        text.append("单镜时长不要影响镜头顺序，也不要为了凑总时长删戏或把两场戏并进一镜。");
         if (episodeBudgetSec != null && episodeBudgetSec > 0) {
-            text.append("\n本集目标总时长约 ").append(episodeBudgetSec)
-                    .append(" 秒，各镜秒数之和尽量接近该预算；内容密的镜给更长，过场给 5–8 秒，不要为凑时长灌水。");
+            text.append("\n本集故事体量大约 ").append(episodeBudgetSec)
+                    .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
         if (targetShots != null && targetShots > 0) {
-            text.append("\n目标大约 ").append(targetShots).append(" 个分镜，可按场次戏量增减，不要压成少数超长镜。");
+            text.append("\n镜头数量以把每场戏按顺序讲清楚为准，大约 ").append(targetShots)
+                    .append(" 个只是参考，不要为凑数灌水，也不要为压到这个数而跳过情节。");
         }
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();

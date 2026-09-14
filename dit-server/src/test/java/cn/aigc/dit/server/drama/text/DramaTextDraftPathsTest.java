@@ -160,6 +160,31 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
+    void shotsAreSortedByChapterThenIndex() {
+        DramaTextServiceImpl service = boundService();
+        when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("""
+                {"shots":[
+                  {"chapter_index":2,"index":1,"title":"后场先出","duration_sec":6,"character_names":["洛白"]},
+                  {"chapter_index":1,"index":2,"title":"前场第二","duration_sec":7,"character_names":["洛白"]},
+                  {"chapter_index":1,"index":1,"title":"前场第一","duration_sec":5,"character_names":["洛白"]}
+                ]}
+                """, "m", "stop"));
+
+        ScriptDoc doc = new ScriptDoc();
+        ScriptDoc.Scene first = new ScriptDoc.Scene();
+        first.setIndex(1);
+        first.setHeading("第一场");
+        ScriptDoc.Scene second = new ScriptDoc.Scene();
+        second.setIndex(2);
+        second.setHeading("第二场");
+        doc.setScenes(List.of(first, second));
+
+        List<String> titles = service.draftShots(BOUND, doc, List.of("洛白")).getShots()
+                .stream().map(ShotDraftList.ShotDraft::getTitle).toList();
+        assertEquals(List.of("前场第一", "前场第二", "后场先出"), titles);
+    }
+
+    @Test
     void unboundOrEmptyShotsFallBackToRules() {
         DramaTextServiceImpl service = boundService();
 
