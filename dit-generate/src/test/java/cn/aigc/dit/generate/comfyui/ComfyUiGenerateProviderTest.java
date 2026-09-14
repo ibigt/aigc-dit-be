@@ -110,6 +110,24 @@ class ComfyUiGenerateProviderTest {
     }
 
     @Test
+    void submitR2vWiresStandaloneVoiceReference() throws Exception {
+        http.promptResponse = "{\"prompt_id\":\"r-audio\",\"node_errors\":{}}";
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+        storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
+
+        provider.submit(video("r2v").setReferences(List.of(
+                new ReferenceAsset("image", "users/8/assets/a.png"),
+                new ReferenceAsset("audio", "users/8/assets/voice.wav"))));
+
+        JsonNode prompt = mapper.readTree(http.lastJson).get("prompt");
+        JsonNode miniMax = nodeByClass(prompt, "MiniMaxH3ReferenceToVideo");
+        assertTrue(miniMax.get("inputs").get("prompt").asText().startsWith("<Picture 1> <Audio 1>"));
+        assertTrue(miniMax.get("inputs").has("ref_audios.ref_audio_0"));
+        assertEquals("LoadAudio", classType(prompt, "LoadAudio"));
+        assertEquals(List.of("a.png", "voice.wav"), http.uploads);
+    }
+
+    @Test
     void submitI2vUploadsFrames() throws Exception {
         http.promptResponse = "{\"prompt_id\":\"v1\",\"node_errors\":{}}";
         storage.put("users/8/assets/first.png", TINY_PNG, "image/png");

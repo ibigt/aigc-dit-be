@@ -19,6 +19,9 @@ public class DramaAssetResp {
     private String identityInvariants;
     private String imagePrompt;
     private String voiceLock;
+    private String voiceReferenceKey;
+    private String voiceReferenceUrl;
+    private String voiceReferenceMime;
     private Boolean mustSplit;
     private Boolean needsHuman;
     private String status;

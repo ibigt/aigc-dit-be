@@ -53,7 +53,8 @@ public final class ComfyUiMinimaxGraph {
 
     public static Map<String, Object> referenceToVideo(String prompt, int width, int height, int length,
                                                       int seed, String unet, String lora, int steps,
-                                                      List<String> imageFiles, List<String> videoFiles) {
+                                                      List<String> imageFiles, List<String> videoFiles,
+                                                      List<String> audioFiles) {
         Graph graph = new Graph();
         Stack stack = loaders(graph, unet, lora);
         Map<String, Object> miniMax = new LinkedHashMap<>();
@@ -83,6 +84,11 @@ public final class ComfyUiMinimaxGraph {
             String load = graph.add("VHS_LoadVideo", vhs);
             miniMax.put("ref_videos.ref_video_" + i, ref(load, 0));
             miniMax.put("ref_video_audios.ref_video_audio_" + i, ref(load, 2));
+        }
+        List<String> audios = audioFiles == null ? List.of() : audioFiles;
+        for (int i = 0; i < audios.size(); i++) {
+            String load = graph.add("LoadAudio", Map.of("audio", audios.get(i)));
+            miniMax.put("ref_audios.ref_audio_" + i, ref(load, 0));
         }
         String cond = graph.add("MiniMaxH3ReferenceToVideo", miniMax);
         return finish(graph, stack, cond, seed, steps);

@@ -183,6 +183,28 @@ public class DramaAssetService {
     }
 
     @Transactional
+    public DramaAssetResp uploadVoiceReference(Long assetId, MultipartFile file) {
+        DramaAsset asset = requireAsset(assetId);
+        if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "只有角色资产可以设置音色参考");
+        }
+        if (file == null || file.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择音频");
+        }
+        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
+        if (!mime.startsWith("audio/")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "音色参考仅支持音频文件");
+        }
+        String key = assetService.putOwnedFile(file, "drama/" + asset.getSeriesId() + "/voices");
+        asset.setVoiceReferenceKey(key);
+        asset.setVoiceReferenceMime(mime);
+        reopenIfConfirmed(asset);
+        assetMapper.updateById(asset);
+        touchSeries(asset.getSeriesId());
+        return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    @Transactional
     public DramaAssetGenerateResp generateImage(Long assetId) {
         return generateImage(assetId, null);
     }
@@ -578,6 +600,9 @@ public class DramaAssetService {
         resp.setIdentityInvariants(asset.getIdentityInvariants());
         resp.setImagePrompt(asset.getImagePrompt());
         resp.setVoiceLock(asset.getVoiceLock());
+        resp.setVoiceReferenceKey(asset.getVoiceReferenceKey());
+        resp.setVoiceReferenceUrl(MediaUrls.of(asset.getVoiceReferenceKey()));
+        resp.setVoiceReferenceMime(asset.getVoiceReferenceMime());
         resp.setMustSplit(Boolean.TRUE.equals(asset.getMustSplit()));
         resp.setNeedsHuman(Boolean.TRUE.equals(asset.getNeedsHuman()));
         resp.setStatus(asset.getStatus());

@@ -141,6 +141,33 @@ class DramaStoryboardCompilerTest {
         assertEquals(64, v1.length());
     }
 
+    @Test
+    void compilesVoiceIdentityAndIncludesItInFingerprint() {
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "雨夜", "回头", "洛白：别跟过来。", null, null, 5, List.of("洛白"), 1);
+        var audio = new DramaStoryboardCompiler.AudioReference(
+                "洛白", "低沉、克制的青年男声", "users/1/drama/voices/luobai.wav");
+        DramaStoryboardCompiler.Result result = DramaStoryboardCompiler.compile(
+                "电影写实", List.of(), List.of(audio), shot);
+        assertTrue(result.prompt().contains("<Audio 1>"));
+        assertTrue(result.prompt().contains("低沉、克制的青年男声"));
+        String changed = DramaStoryboardCompiler.fingerprint(
+                "电影写实", List.of(), List.of(new DramaStoryboardCompiler.AudioReference(
+                        "洛白", "清亮男声", "users/1/drama/voices/luobai.wav")), shot);
+        assertNotEquals(result.fingerprint(), changed);
+    }
+
+    @Test
+    void compilesTextOnlyVoiceWithoutAudioTag() {
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "室内", "说话", "洛白：知道了。", null, null, 5, List.of("洛白"), 1);
+        DramaStoryboardCompiler.Result result = DramaStoryboardCompiler.compile(
+                "电影写实", List.of(), List.of(new DramaStoryboardCompiler.AudioReference(
+                        "洛白", "低沉克制的青年男声", null)), shot);
+        assertTrue(result.prompt().contains("低沉克制的青年男声"));
+        assertFalse(result.prompt().contains("<Audio 1>"));
+    }
+
     private static DramaStoryboardCompiler.ActiveReference ref(
             long id, String name, String type, String identity, String descriptor) {
         return new DramaStoryboardCompiler.ActiveReference(id, 1, name, type, descriptor, identity);

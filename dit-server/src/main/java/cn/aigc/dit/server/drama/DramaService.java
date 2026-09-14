@@ -713,6 +713,15 @@ public class DramaService {
         resp.setAdapterKey(model.getAdapterKey());
         resp.setDurations(DramaDurations.supported(model.getAdapterKey(), model.getModelKey()));
         resp.setResolutions(DramaResolutions.supported(model.getAdapterKey(), model.getModelKey()));
+        String adapter = AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        boolean h3 = AdapterCatalog.MINIMAX_H3.equals(adapter);
+        boolean agnes = AdapterCatalog.AGNES_VIDEO_2_5.equals(adapter);
+        boolean ark = AdapterCatalog.isArk(adapter);
+        resp.setSupportsNativeAudio(h3 || agnes || ark);
+        resp.setSupportsAudioReference(h3 || agnes);
+        resp.setMaxAudioReferences(h3 ? 3 : agnes ? 5 : 0);
+        resp.setAudioMode(h3 || agnes || ark ? "native" : "unknown");
         return resp;
     }
 

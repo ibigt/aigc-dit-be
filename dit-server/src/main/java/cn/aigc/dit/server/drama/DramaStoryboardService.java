@@ -519,6 +519,20 @@ public class DramaStoryboardService {
             }
             inputs.add(input);
         }
+        if (supportsAudioReference(model)) {
+            List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(shot, refs, true).stream()
+                    .filter(item -> StringUtils.hasText(item.storageKey()))
+                    .toList();
+            if (audioRefs.size() > 3 && AdapterCatalog.MINIMAX_H3.equals(resolvedAdapter(model))) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax-H3 单镜最多引用 3 个角色音色，请拆分镜头");
+            }
+            for (DramaStoryboardCompiler.AudioReference audioRef : audioRefs) {
+                GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
+                input.setType(AssetKind.AUDIO);
+                input.setStorageKey(audioRef.storageKey());
+                inputs.add(input);
+            }
+        }
         req.setReferences(inputs);
 
         Map<String, Object> extra = new LinkedHashMap<>();
@@ -820,9 +834,12 @@ public class DramaStoryboardService {
         for (DramaAsset asset : ordered) {
             refs.add(toActive(asset));
         }
+        List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(
+                shot, ordered, supportsAudioReference(shot.getSeriesId()));
         DramaStoryboardCompiler.Result compiled = DramaStoryboardCompiler.compile(
                 stylePrefix,
                 refs,
+                audioRefs,
                 toShotContent(shot, assets, ordered));
         shot.setCompiledPrompt(compiled.prompt());
         shot.setCompiledFingerprint(compiled.fingerprint());
@@ -1018,8 +1035,44 @@ public class DramaStoryboardService {
         String current = DramaStoryboardCompiler.fingerprint(
                 stylePrefix,
                 refs,
+                voiceReferences(shot, pictured, supportsAudioReference(shot.getSeriesId())),
                 toShotContent(shot, assets, pictured));
         return !current.equals(shot.getCompiledFingerprint());
+    }
+
+    private List<DramaStoryboardCompiler.AudioReference> voiceReferences(
+            DramaShot shot, List<DramaAsset> assets, boolean includeAudioKey) {
+        Set<String> cast = new LinkedHashSet<>(cleanNames(shot.getCharacterNames()));
+        List<DramaStoryboardCompiler.AudioReference> values = new ArrayList<>();
+        for (DramaAsset asset : assets) {
+            if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
+                    || !cast.contains(asset.getName())
+                    || (!StringUtils.hasText(asset.getVoiceLock())
+                    && (!includeAudioKey || !StringUtils.hasText(asset.getVoiceReferenceKey())))) {
+                continue;
+            }
+            values.add(new DramaStoryboardCompiler.AudioReference(
+                    asset.getName(), asset.getVoiceLock(), includeAudioKey ? asset.getVoiceReferenceKey() : null));
+        }
+        return values;
+    }
+
+    private boolean supportsAudioReference(Long seriesId) {
+        DramaSeries series = seriesMapper.selectById(seriesId);
+        if (series == null || series.getVideoModelId() == null) return false;
+        AiModel model = aiModelMapper.selectById(series.getVideoModelId());
+        return model != null && supportsAudioReference(model);
+    }
+
+    private static boolean supportsAudioReference(AiModel model) {
+        String adapter = resolvedAdapter(model);
+        return AdapterCatalog.MINIMAX_H3.equals(adapter)
+                || AdapterCatalog.AGNES_VIDEO_2_5.equals(adapter);
+    }
+
+    private static String resolvedAdapter(AiModel model) {
+        return AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
     }
 
     private List<String> unboundLockedRequired(DramaShot shot, Map<Long, DramaAsset> assets) {

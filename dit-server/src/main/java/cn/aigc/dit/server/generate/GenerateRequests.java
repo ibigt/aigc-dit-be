@@ -230,9 +230,9 @@ public final class GenerateRequests {
             } else {
                 throw new BizException(ErrorCode.BAD_REQUEST, "参考素材缺少 storageKey");
             }
-            result.add(new ReferenceAsset(
-                    AssetKind.VIDEO.equalsIgnoreCase(type) ? AssetKind.VIDEO : AssetKind.IMAGE,
-                    key));
+            String normalized = AssetKind.VIDEO.equalsIgnoreCase(type) ? AssetKind.VIDEO
+                    : AssetKind.AUDIO.equalsIgnoreCase(type) ? AssetKind.AUDIO : AssetKind.IMAGE;
+            result.add(new ReferenceAsset(normalized, key));
         }
         return result;
     }

@@ -71,8 +71,8 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择文件");
         }
         String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
-        if (!mime.startsWith("image/") && !mime.startsWith("video/")) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持图片或视频");
+        if (!mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持图片、视频或音频");
         }
         Long userId = UserContext.requireUserId();
         String ext = extension(file.getOriginalFilename(), mime);
@@ -186,6 +186,11 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         }
         if (mime.startsWith("video/")) {
             return ".mp4";
+        }
+        if (mime.startsWith("audio/")) {
+            if ("audio/wav".equals(mime) || "audio/x-wav".equals(mime)) return ".wav";
+            if ("audio/mp4".equals(mime) || "audio/x-m4a".equals(mime)) return ".m4a";
+            return ".mp3";
         }
         if ("image/jpeg".equals(mime)) {
             return ".jpg";

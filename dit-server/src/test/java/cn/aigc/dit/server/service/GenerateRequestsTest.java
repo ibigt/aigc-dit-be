@@ -146,6 +146,23 @@ class GenerateRequestsTest {
     }
 
     @Test
+    void preservesAudioReferenceKind() {
+        Asset asset = new Asset();
+        asset.setId(12L);
+        asset.setKind(AssetKind.AUDIO);
+        asset.setStorageKey("users/1/assets/voice.wav");
+        when(assetService.requireOwned(12L)).thenReturn(asset);
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setPrompt("参考角色音色生成有声视频");
+        req.setCategory("video");
+        GenerateSubmitReq.ReferenceInput ref = new GenerateSubmitReq.ReferenceInput();
+        ref.setAssetId(12L);
+        req.setReferences(List.of(ref));
+        GenerateRequest request = GenerateRequests.fromSubmit(1L, "minimax-h3", req, assetService);
+        assertEquals(AssetKind.AUDIO, request.getReferences().get(0).getType());
+    }
+
+    @Test
     void persistsAdapterKeyOnTaskParams() {
         GenerateRequest request = new GenerateRequest()
                 .setMode(GenerateMode.T2V)

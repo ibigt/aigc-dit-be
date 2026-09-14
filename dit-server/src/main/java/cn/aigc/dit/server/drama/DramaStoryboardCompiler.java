@@ -46,6 +46,10 @@ public final class DramaStoryboardCompiler {
     public record NamedAppearance(String name, String identityInvariants) {
     }
 
+    /** 音色描述与 Audio 序号独立于 Picture 序号。 */
+    public record AudioReference(String name, String voiceLock, String storageKey) {
+    }
+
     public record ShotContent(
             String scene,
             String narrativeGoal,
@@ -75,7 +79,13 @@ public final class DramaStoryboardCompiler {
     }
 
     public static Result compile(String stylePrefix, List<ActiveReference> references, ShotContent shot) {
+        return compile(stylePrefix, references, List.of(), shot);
+    }
+
+    public static Result compile(String stylePrefix, List<ActiveReference> references,
+                                 List<AudioReference> audioReferences, ShotContent shot) {
         List<ActiveReference> refs = references == null ? List.of() : references;
+        List<AudioReference> audioRefs = audioReferences == null ? List.of() : audioReferences;
         ShotContent content = shot == null
                 ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
                 : shot;
@@ -121,6 +131,17 @@ public final class DramaStoryboardCompiler {
             }
         }
 
+        if (!audioRefs.isEmpty()) {
+            prompt.append('\n').append("Voice References:\n");
+            int audioIndex = 0;
+            for (AudioReference ref : audioRefs) {
+                if (!StringUtils.hasText(ref.storageKey())) continue;
+                audioIndex++;
+                prompt.append("<Audio ").append(audioIndex).append("> 只定义角色“")
+                        .append(blank(ref.name())).append("”的音色身份，不复述参考音频文字，不继承底噪。\n");
+            }
+        }
+
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
         Map<String, Integer> pictures = pictureIndexByName(refs);
         appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
@@ -132,19 +153,35 @@ public final class DramaStoryboardCompiler {
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
         String spoken = spokenDialogueConstraint(content.dialogue());
         if (StringUtils.hasText(spoken)) {
+            String voices = voiceConstraint(audioRefs);
+            if (StringUtils.hasText(voices)) {
+                prompt.append('\n').append(voices);
+            }
             prompt.append('\n').append(spoken);
         }
 
-        return new Result(prompt.toString().trim(), fingerprint(prefix, refs, content));
+        return new Result(prompt.toString().trim(), fingerprint(prefix, refs, audioRefs, content));
     }
 
     public static String fingerprint(String stylePrefix, List<ActiveReference> references, ShotContent shot) {
+        return fingerprint(stylePrefix, references, List.of(), shot);
+    }
+
+    public static String fingerprint(String stylePrefix, List<ActiveReference> references,
+                                     List<AudioReference> audioReferences, ShotContent shot) {
         StringBuilder raw = new StringBuilder();
         raw.append(blank(stylePrefix)).append('\n');
         if (references != null) {
             for (ActiveReference ref : references) {
                 raw.append(ref.assetId()).append(':').append(ref.identityVersion()).append(':')
                         .append(blank(ref.identityInvariants())).append('\n');
+            }
+        }
+        if (audioReferences != null) {
+            for (AudioReference ref : audioReferences) {
+                raw.append("audio:").append(blank(ref.name())).append(':')
+                        .append(blank(ref.voiceLock())).append(':')
+                        .append(blank(ref.storageKey())).append('\n');
             }
         }
         if (shot != null) {
@@ -202,6 +239,29 @@ public final class DramaStoryboardCompiler {
             result = result.replace(name, token);
         }
         return result;
+    }
+
+    static String voiceConstraint(List<AudioReference> references) {
+        if (references == null || references.isEmpty()) {
+            return "";
+        }
+        List<String> rules = new ArrayList<>();
+        int audioIndex = 0;
+        for (AudioReference ref : references) {
+            StringBuilder rule = new StringBuilder();
+            rule.append("角色“").append(blank(ref.name())).append("”");
+            if (StringUtils.hasText(ref.storageKey())) {
+                audioIndex++;
+                rule.append("使用 <Audio ").append(audioIndex).append("> 的同一音色身份、年龄、口音与音质");
+            } else {
+                rule.append("的声音必须保持一致");
+            }
+            if (StringUtils.hasText(ref.voiceLock())) {
+                rule.append("，并保持").append(ref.voiceLock().trim());
+            }
+            rules.add(rule.toString());
+        }
+        return "Audio: " + String.join("；", rules) + "。除指定对白外不得出现其他人声；保留符合场景的环境声与音效。";
     }
 
     static String fullIdentity(ActiveReference ref) {

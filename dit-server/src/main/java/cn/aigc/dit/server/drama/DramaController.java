@@ -231,6 +231,14 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.uploadImage(id, file));
     }
 
+    @Operation(summary = "上传角色音色参考（用于支持 Audio 引用的原生有声视频模型）")
+    @PostMapping("/assets/{id}/voice-reference")
+    public CommonResult<DramaAssetResp> uploadAssetVoiceReference(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file) {
+        return CommonResult.success(dramaAssetService.uploadVoiceReference(id, file));
+    }
+
     @Operation(summary = "用系列绑定的图像模型纯 t2i；不按素材选模型")
     @PostMapping("/assets/{id}/generate")
     public CommonResult<DramaAssetGenerateResp> generateAssetImage(

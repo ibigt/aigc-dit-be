@@ -17,4 +17,8 @@ public class DramaVideoModelResp {
     private List<Integer> durations;
     @Schema(description = "该模型支持的成片清晰度，已与 480P/720P 求交")
     private List<String> resolutions;
+    private Boolean supportsNativeAudio;
+    private Boolean supportsAudioReference;
+    private Integer maxAudioReferences;
+    private String audioMode;
 }

@@ -201,12 +201,19 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
         if (GenerateMode.R2V.equalsIgnoreCase(mode)) {
             List<String> images = new ArrayList<>();
             List<String> videos = new ArrayList<>();
+            List<String> audios = new ArrayList<>();
             for (ReferenceAsset ref : request.getReferences()) {
                 if (ref == null || !StringUtils.hasText(ref.getStorageKey())) {
                     continue;
                 }
                 boolean video = AssetKind.VIDEO.equalsIgnoreCase(ref.getType());
-                if (video) {
+                boolean audio = AssetKind.AUDIO.equalsIgnoreCase(ref.getType());
+                if (audio) {
+                    if (audios.size() >= 3) {
+                        throw new BizException(ErrorCode.BAD_REQUEST, "参考音频最多 3 段");
+                    }
+                    audios.add(upload(base, apiKey, ref.getStorageKey(), ref.getType()));
+                } else if (video) {
                     if (videos.size() >= 3) {
                         throw new BizException(ErrorCode.BAD_REQUEST, "参考视频最多 3 段");
                     }
@@ -219,15 +226,15 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
                 }
             }
             if (images.isEmpty() && videos.isEmpty()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "参考生视频至少需要一张图片或一段视频");
+                throw new BizException(ErrorCode.BAD_REQUEST, "参考生视频至少需要一张图片或一段视频；音频不能单独驱动画面");
             }
             return ComfyUiMinimaxGraph.referenceToVideo(
-                    r2vPrompt(request.getPrompt(), images.size(), videos.size()),
+                    r2vPrompt(request.getPrompt(), images.size(), videos.size(), audios.size()),
                     size[0], size[1], length, seed,
                     config(request, "unetName", ComfyUiMinimaxGraph.UNET_R2V),
                     config(request, "loraName", ComfyUiMinimaxGraph.LORA_R2V),
                     configInt(request, "steps", ComfyUiMinimaxGraph.R2V_STEPS),
-                    images, videos);
+                    images, videos, audios);
         }
         String first = null;
         String last = null;
@@ -362,7 +369,7 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
         return null;
     }
 
-    private static String r2vPrompt(String prompt, int imageCount, int videoCount) {
+    private static String r2vPrompt(String prompt, int imageCount, int videoCount, int audioCount) {
         String text = prompt == null ? "" : prompt.trim();
         String lower = text.toLowerCase(Locale.ROOT);
         if (lower.contains("<picture") || lower.contains("@image") || lower.contains("@video")) {
@@ -380,6 +387,12 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
                 prefix.append(' ');
             }
             prefix.append("<Video ").append(i).append('>');
+        }
+        for (int i = 1; i <= audioCount; i++) {
+            if (!prefix.isEmpty()) {
+                prefix.append(' ');
+            }
+            prefix.append("<Audio ").append(i).append('>');
         }
         if (prefix.isEmpty()) {
             return text;
@@ -432,6 +445,18 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
         }
         if (lower.endsWith(".mp4")) {
             return "video/mp4";
+        }
+        if (lower.endsWith(".wav")) {
+            return "audio/wav";
+        }
+        if (lower.endsWith(".m4a") || lower.endsWith(".aac")) {
+            return "audio/mp4";
+        }
+        if (lower.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (AssetKind.AUDIO.equalsIgnoreCase(type)) {
+            return "audio/mpeg";
         }
         return AssetKind.VIDEO.equalsIgnoreCase(type) ? "video/mp4" : "image/png";
     }
