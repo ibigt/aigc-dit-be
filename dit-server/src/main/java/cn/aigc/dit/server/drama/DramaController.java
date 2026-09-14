@@ -13,6 +13,7 @@ import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
+import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
@@ -177,6 +178,14 @@ public class DramaController {
             @PathVariable Long id,
             @Valid @RequestBody DramaVideoModelBindReq req) {
         return CommonResult.success(dramaService.bindVideoModel(id, req));
+    }
+
+    @Operation(summary = "剧本页绑定文本模型；传 null 解绑并回退规则分场")
+    @PutMapping("/series/{id}/text-model")
+    public CommonResult<DramaSeriesResp> bindTextModel(
+            @PathVariable Long id,
+            @RequestBody DramaTextModelBindReq req) {
+        return CommonResult.success(dramaService.bindTextModel(id, req));
     }
 
     @Operation(summary = "剧集资产列表")

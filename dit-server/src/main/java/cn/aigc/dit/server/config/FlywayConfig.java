@@ -151,7 +151,7 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_series.style_key
-                IS '风格键（anime-comic / live-realism / live-wuxia）；UI 用图例卡片选择，不展示前缀文本'
+                IS '风格键（anime-comic / ancient-realism / anime-wuxia）；UI 用图例卡片选择，不展示前缀文本'
                 """);
         statement.execute("""
                 UPDATE drama_series

@@ -21,6 +21,7 @@ import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
@@ -39,6 +40,7 @@ import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
@@ -582,6 +584,20 @@ public class DramaService {
         return getSeries(series.getId());
     }
 
+    @Transactional
+    public DramaSeriesResp bindTextModel(Long seriesId, DramaTextModelBindReq req) {
+        DramaSeries series = requireSeries(seriesId);
+        if (req.getTextModelId() == null) {
+            seriesMapper.update(null, new UpdateWrapper<DramaSeries>()
+                    .eq("id", series.getId())
+                    .set("text_model_id", null));
+        } else {
+            series.setTextModelId(requireEnabledTextModel(req.getTextModelId()).getId());
+            seriesMapper.updateById(series);
+        }
+        return getSeries(series.getId());
+    }
+
     public List<DramaTextModelResp> listEnabledTextModels() {
         UserContext.requireUserId();
         return aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
@@ -594,13 +610,7 @@ public class DramaService {
     }
 
     private Long resolveCreateTextModelId(Long requested) {
-        long enabled = aiModelMapper.selectCount(new LambdaQueryWrapper<AiModel>()
-                .eq(AiModel::getCategory, ModelCategory.TEXT)
-                .eq(AiModel::getEnabled, true));
         if (requested == null) {
-            if (enabled > 0) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "请选择文本模型");
-            }
             return null;
         }
         return requireEnabledTextModel(requested).getId();
