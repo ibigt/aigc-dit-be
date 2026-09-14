@@ -105,6 +105,12 @@ public class DramaController {
         return CommonResult.success(dramaService.updateSeries(id, req));
     }
 
+    @Operation(summary = "章节列表添加一集，返回含全部剧集的项目详情")
+    @PostMapping("/series/{id}/episodes")
+    public CommonResult<DramaSeriesResp> createEpisode(@PathVariable Long id) {
+        return CommonResult.success(dramaService.createEpisode(id));
+    }
+
     @Operation(summary = "删除系列（级联剧集、资产、章节、分镜）")
     @DeleteMapping("/series/{id}")
     public CommonResult<Void> deleteSeries(@PathVariable Long id) {

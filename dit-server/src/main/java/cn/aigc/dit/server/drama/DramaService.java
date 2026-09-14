@@ -140,6 +140,30 @@ public class DramaService {
         return toSeriesResp(series, List.of(episode), true, modelNames(idsOf(series.getTextModelId())), Map.of());
     }
 
+    /**
+     * 章节列表「添加集数」：在当前项目末尾追加一集，返回含全部剧集的项目详情。
+     */
+    @Transactional
+    public DramaSeriesResp createEpisode(Long seriesId) {
+        DramaSeries series = requireSeries(seriesId);
+        List<DramaEpisode> existing = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
+                .eq(DramaEpisode::getSeriesId, series.getId()));
+        int next = existing.stream()
+                .map(DramaEpisode::getEpisodeNumber)
+                .filter(java.util.Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(0) + 1;
+        DramaEpisode episode = new DramaEpisode();
+        episode.setSeriesId(series.getId());
+        episode.setUserId(UserContext.requireUserId());
+        episode.setEpisodeNumber(next);
+        episode.setName("第 " + next + " 集");
+        episode.setStatus(DramaContract.STATUS_NOT_STARTED);
+        episode.setEngine(DramaContract.ENGINE_PENDING);
+        episodeMapper.insert(episode);
+        return getSeries(series.getId());
+    }
+
     @Transactional
     public DramaSeriesResp updateSeries(Long id, DramaSeriesUpdateReq req) {
         DramaSeries series = requireSeries(id);
