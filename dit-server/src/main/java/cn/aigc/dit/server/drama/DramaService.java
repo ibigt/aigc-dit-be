@@ -5,6 +5,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -718,9 +719,12 @@ public class DramaService {
         boolean h3 = AdapterCatalog.MINIMAX_H3.equals(adapter);
         boolean agnes = AdapterCatalog.AGNES_VIDEO_2_5.equals(adapter);
         boolean ark = AdapterCatalog.isArk(adapter);
+        AudioReferenceCapabilities audio = AudioReferenceCapabilities.resolve(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         resp.setSupportsNativeAudio(h3 || agnes || ark);
-        resp.setSupportsAudioReference(h3 || agnes);
-        resp.setMaxAudioReferences(h3 ? 3 : agnes ? 5 : 0);
+        resp.setSupportsAudioReference(audio.supported());
+        resp.setMaxAudioReferences(audio.maxReferences());
+        resp.setSupportsAudioOnlyReference(audio.audioOnly());
         resp.setAudioMode(h3 || agnes || ark ? "native" : "unknown");
         return resp;
     }

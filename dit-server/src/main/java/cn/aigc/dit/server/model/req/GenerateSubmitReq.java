@@ -20,7 +20,6 @@ public class GenerateSubmitReq {
 
     private Long sessionId;
 
-    @NotBlank(message = "提示词不能为空")
     @Size(max = 4000)
     private String prompt;
 
@@ -48,7 +47,7 @@ public class GenerateSubmitReq {
 
     @Data
     public static class ReferenceInput {
-        @Schema(description = "image / video；r2v 参考生视频可同时使用图片与视频")
+        @Schema(description = "image / video / audio；是否允许 audio 由所选模型的 supportsAudioReference 决定")
         private String type;
         private String storageKey;
         private Long assetId;

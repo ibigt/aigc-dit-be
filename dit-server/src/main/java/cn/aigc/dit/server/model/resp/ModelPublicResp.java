@@ -16,6 +16,9 @@ public class ModelPublicResp {
     private String provider;
     private String category;
     private List<String> capabilities;
+    private Boolean supportsAudioReference;
+    private Integer maxAudioReferences;
+    private Boolean supportsAudioOnlyReference;
     private Map<String, Object> pricing;
     private Boolean enabled;
     private String description;

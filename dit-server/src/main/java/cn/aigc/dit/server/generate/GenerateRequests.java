@@ -41,7 +41,7 @@ public final class GenerateRequests {
                 .setModelKey(modelKey)
                 .setCategory(category)
                 .setMode(mode)
-                .setPrompt(req.getPrompt().trim())
+                .setPrompt(req.getPrompt() == null ? "" : req.getPrompt().trim())
                 .setRatio(blankToNull(req.getRatio()))
                 .setResolution(blankToNull(req.getResolution()))
                 .setQuality(blankToNull(req.getQuality()))

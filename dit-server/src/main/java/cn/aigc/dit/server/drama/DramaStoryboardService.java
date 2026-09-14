@@ -8,6 +8,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
@@ -520,11 +521,13 @@ public class DramaStoryboardService {
             inputs.add(input);
         }
         if (supportsAudioReference(model)) {
+            AudioReferenceCapabilities capability = audioCapabilities(model);
             List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(shot, refs, true).stream()
                     .filter(item -> StringUtils.hasText(item.storageKey()))
                     .toList();
-            if (audioRefs.size() > 3 && AdapterCatalog.MINIMAX_H3.equals(resolvedAdapter(model))) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax-H3 单镜最多引用 3 个角色音色，请拆分镜头");
+            if (audioRefs.size() > capability.maxReferences()) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "当前视频模型单镜最多引用 " + capability.maxReferences() + " 个角色音色，请拆分镜头");
             }
             for (DramaStoryboardCompiler.AudioReference audioRef : audioRefs) {
                 GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
@@ -1065,9 +1068,12 @@ public class DramaStoryboardService {
     }
 
     private static boolean supportsAudioReference(AiModel model) {
-        String adapter = resolvedAdapter(model);
-        return AdapterCatalog.MINIMAX_H3.equals(adapter)
-                || AdapterCatalog.AGNES_VIDEO_2_5.equals(adapter);
+        return audioCapabilities(model).supported();
+    }
+
+    private static AudioReferenceCapabilities audioCapabilities(AiModel model) {
+        return AudioReferenceCapabilities.resolve(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
     }
 
     private static String resolvedAdapter(AiModel model) {

@@ -104,6 +104,30 @@ class ArkRequestMapperTest {
     }
 
     @Test
+    void mapsBase64AudioReferenceAndAllowsOmittedText() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_5)
+                .setModelKey("doubao-seedance-2-5-260628")
+                .setCategory("video")
+                .setMode("r2v")
+                .setPrompt("");
+        Map<String, Object> body = ArkRequestMapper.toCreateBody(
+                request, null, null, List.of(), List.of(),
+                List.of("data:audio/wav;base64,AQID"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) body.get("content");
+        assertEquals(1, content.size());
+        assertEquals("audio_url", content.get(0).get("type"));
+        assertEquals("reference_audio", content.get(0).get("role"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audioUrl = (Map<String, Object>) content.get(0).get("audio_url");
+        assertEquals("data:audio/wav;base64,AQID", audioUrl.get("url"));
+        assertEquals(10, ArkRequestMapper.maxAudios(request));
+        assertTrue(ArkRequestMapper.supportsAudioOnly(request));
+    }
+
+    @Test
     void fastModelClamps1080DownTo720() {
         GenerateRequest request = new GenerateRequest()
                 .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)

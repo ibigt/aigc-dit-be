@@ -18,6 +18,12 @@ public class AdminModelResp {
     private String endpoint;
     private String category;
     private List<String> capabilities;
+    @Schema(description = "是否支持上传参考音频")
+    private Boolean supportsAudioReference;
+    @Schema(description = "单次生成最多可携带的参考音频数；不支持时为 0")
+    private Integer maxAudioReferences;
+    @Schema(description = "是否允许仅上传音频、不搭配图片或视频")
+    private Boolean supportsAudioOnlyReference;
     private Map<String, Object> adapterConfig;
     private Map<String, Object> pricing;
     private Boolean enabled;

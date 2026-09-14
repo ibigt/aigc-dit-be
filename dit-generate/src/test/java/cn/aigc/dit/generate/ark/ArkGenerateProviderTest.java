@@ -107,6 +107,35 @@ class ArkGenerateProviderTest {
     }
 
     @Test
+    void submitSeedance25ReadsAudioFromStorageAndSendsBase64() throws Exception {
+        http.postBody = "{\"id\":\"cgt-audio\",\"status\":\"queued\"}";
+        storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
+
+        provider.submit(video("r2v")
+                .setPrompt("")
+                .setReferences(List.of(new ReferenceAsset("audio", "users/8/assets/voice.wav"))));
+
+        JsonNode body = mapper.readTree(http.lastJson);
+        JsonNode audio = body.get("content").get(0);
+        assertEquals("audio_url", audio.get("type").asText());
+        assertEquals("reference_audio", audio.get("role").asText());
+        assertEquals("data:audio/wav;base64,AQID", audio.get("audio_url").get("url").asText());
+    }
+
+    @Test
+    void submitSeedance20RejectsAudioOnly() {
+        storage.put("users/8/assets/voice.mp3", new byte[]{1}, "audio/mpeg");
+        GenerateRequest request = video("r2v")
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("doubao-seedance-2-0-260128")
+                .setReferences(List.of(new ReferenceAsset("audio", "users/8/assets/voice.mp3")));
+
+        BizException error = org.junit.jupiter.api.Assertions.assertThrows(
+                BizException.class, () -> provider.submit(request));
+        assertTrue(error.getMessage().contains("必须搭配图片或视频"));
+    }
+
+    @Test
     void submitR2vRetriesT2vWhenReferenceLooksLikeRealPerson() throws Exception {
         http.postError = new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
         http.postBody = """
@@ -121,6 +150,23 @@ class ArkGenerateProviderTest {
         JsonNode body = mapper.readTree(http.lastJson);
         assertEquals(1, body.get("content").size());
         assertEquals("text", body.get("content").get(0).get("type").asText());
+    }
+
+    @Test
+    void realPersonFallbackKeepsSeedance25AudioReference() throws Exception {
+        http.postError = new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
+        http.postBody = "{\"id\":\"cgt-audio-fallback\",\"status\":\"queued\"}";
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+        storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
+
+        provider.submit(video("r2v").setReferences(List.of(
+                new ReferenceAsset("image", "users/8/assets/a.png"),
+                new ReferenceAsset("audio", "users/8/assets/voice.wav"))));
+
+        JsonNode content = mapper.readTree(http.lastJson).get("content");
+        assertEquals(2, content.size());
+        assertEquals("text", content.get(0).get("type").asText());
+        assertEquals("audio_url", content.get(1).get("type").asText());
     }
 
     @Test

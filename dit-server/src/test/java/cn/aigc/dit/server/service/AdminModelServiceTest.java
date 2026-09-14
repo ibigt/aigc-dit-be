@@ -152,6 +152,24 @@ class AdminModelServiceTest {
         var resp = service.create(req);
         assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN, resp.getProvider());
         assertEquals("https://ark.cn-beijing.volces.com/api/plan/v3", resp.getEndpoint());
+        assertTrue(resp.getSupportsAudioReference());
+        assertEquals(3, resp.getMaxAudioReferences());
+        assertFalse(resp.getSupportsAudioOnlyReference());
+    }
+
+    @Test
+    void publicSeedance25ExposesAudioUploadCapability() {
+        AiModel model = new AiModel();
+        model.setAdapterKey(AdapterCatalog.SEEDANCE_2_5);
+        model.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
+        model.setCategory(ModelCategory.VIDEO);
+        model.setModelKey("doubao-seedance-2-5-260628");
+
+        var resp = service.toPublicResp(model);
+
+        assertTrue(resp.getSupportsAudioReference());
+        assertEquals(10, resp.getMaxAudioReferences());
+        assertTrue(resp.getSupportsAudioOnlyReference());
     }
 
     @Test

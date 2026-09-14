@@ -1,14 +1,17 @@
 package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.common.constant.CreditReason;
+import cn.aigc.dit.common.constant.AssetKind;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateRequest;
+import cn.aigc.dit.generate.ReferenceAsset;
 import cn.aigc.dit.generate.agnes.AgnesRequestMapper;
 import cn.aigc.dit.generate.ark.ArkRequestMapper;
 import cn.aigc.dit.generate.comfyui.ComfyUiGeometry;
@@ -76,6 +79,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         String adapterKey = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         request.setAdapterKey(adapterKey);
+        validatePromptAndAudio(model, request);
         if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
@@ -132,6 +136,35 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             }
         });
         return creationService.toTaskResp(task, List.of(), model.getName());
+    }
+
+    private static void validatePromptAndAudio(AiModel model, GenerateRequest request) {
+        List<ReferenceAsset> refs = request.getReferences() == null ? List.of() : request.getReferences();
+        long audioCount = refs.stream()
+                .filter(java.util.Objects::nonNull)
+                .filter(ref -> AssetKind.AUDIO.equalsIgnoreCase(ref.getType()))
+                .count();
+        if (audioCount == 0) {
+            if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
+            }
+            return;
+        }
+        AudioReferenceCapabilities capability = AudioReferenceCapabilities.resolve(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (!capability.supported()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型不支持上传参考音频");
+        }
+        if (audioCount > capability.maxReferences()) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "当前视频模型最多支持 " + capability.maxReferences() + " 段参考音频");
+        }
+        boolean hasVisualReference = refs.stream()
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(ref -> !AssetKind.AUDIO.equalsIgnoreCase(ref.getType()));
+        if (!hasVisualReference && !capability.audioOnly()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型的参考音频必须搭配图片或视频");
+        }
     }
 
     public GenerateTaskResp getMine(Long taskId) {

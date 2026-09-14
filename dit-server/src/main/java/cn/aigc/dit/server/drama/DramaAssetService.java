@@ -6,6 +6,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -194,6 +195,16 @@ public class DramaAssetService {
         String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
         if (!mime.startsWith("audio/")) {
             throw new BizException(ErrorCode.BAD_REQUEST, "音色参考仅支持音频文件");
+        }
+        DramaSeries series = requireOwnedSeries(asset.getSeriesId());
+        AiModel videoModel = series.getVideoModelId() == null
+                ? null : aiModelMapper.selectById(series.getVideoModelId());
+        AudioReferenceCapabilities audio = videoModel == null
+                ? new AudioReferenceCapabilities(false, 0, false)
+                : AudioReferenceCapabilities.resolve(videoModel.getAdapterKey(), videoModel.getProvider(),
+                videoModel.getCategory(), videoModel.getModelKey());
+        if (!audio.supported()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前项目的视频模型不支持上传参考音频");
         }
         String key = assetService.putOwnedFile(file, "drama/" + asset.getSeriesId() + "/voices");
         asset.setVoiceReferenceKey(key);

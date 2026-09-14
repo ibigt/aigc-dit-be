@@ -20,6 +20,8 @@ public final class ArkRequestMapper {
     public static final int MAX_SECONDS = 15;
     public static final int MAX_IMAGES = 9;
     public static final int MAX_VIDEOS = 3;
+    public static final int MAX_AUDIO_2_0 = 3;
+    public static final int MAX_AUDIO_2_5 = 10;
     static final Set<String> RATIOS = Set.of(
             "16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive");
     static final Set<String> RESOLUTIONS_720 = Set.of("480p", "720p");
@@ -88,9 +90,18 @@ public final class ArkRequestMapper {
                                                    String lastFrame,
                                                    List<String> images,
                                                    List<String> videos) {
+        return toCreateBody(request, firstFrame, lastFrame, images, videos, List.of());
+    }
+
+    public static Map<String, Object> toCreateBody(GenerateRequest request,
+                                                   String firstFrame,
+                                                   String lastFrame,
+                                                   List<String> images,
+                                                   List<String> videos,
+                                                   List<String> audios) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", modelName(request));
-        body.put("content", content(request.getPrompt(), firstFrame, lastFrame, images, videos));
+        body.put("content", content(request.getPrompt(), firstFrame, lastFrame, images, videos, audios));
         body.put("resolution", clampResolution(request));
         body.put("ratio", videoRatio(request.getRatio()));
         body.put("duration", clampSeconds(request.getDurationSec()));
@@ -103,12 +114,15 @@ public final class ArkRequestMapper {
                                              String firstFrame,
                                              String lastFrame,
                                              List<String> images,
-                                             List<String> videos) {
+                                             List<String> videos,
+                                             List<String> audios) {
         List<Map<String, Object>> items = new ArrayList<>();
-        Map<String, Object> text = new LinkedHashMap<>();
-        text.put("type", "text");
-        text.put("text", prompt == null ? "" : prompt.trim());
-        items.add(text);
+        if (prompt != null && !prompt.isBlank()) {
+            Map<String, Object> text = new LinkedHashMap<>();
+            text.put("type", "text");
+            text.put("text", prompt.trim());
+            items.add(text);
+        }
         if (firstFrame != null && !firstFrame.isBlank()) {
             items.add(imageItem(firstFrame, "first_frame"));
         }
@@ -117,7 +131,29 @@ public final class ArkRequestMapper {
         }
         appendUrls(items, images, "image_url", "image_url", "reference_image");
         appendUrls(items, videos, "video_url", "video_url", "reference_video");
+        appendUrls(items, audios, "audio_url", "audio_url", "reference_audio");
         return items;
+    }
+
+    public static int maxImages(GenerateRequest request) {
+        return isSeedance25(request) ? 30 : MAX_IMAGES;
+    }
+
+    public static int maxVideos(GenerateRequest request) {
+        return isSeedance25(request) ? 10 : MAX_VIDEOS;
+    }
+
+    public static int maxAudios(GenerateRequest request) {
+        return isSeedance25(request) ? MAX_AUDIO_2_5 : MAX_AUDIO_2_0;
+    }
+
+    public static boolean supportsAudioOnly(GenerateRequest request) {
+        return isSeedance25(request);
+    }
+
+    private static boolean isSeedance25(GenerateRequest request) {
+        return AdapterCatalog.SEEDANCE_2_5.equals(AdapterCatalog.resolveKeyForGenerate(
+                request.getAdapterKey(), null, request.getCategory(), request.getModelKey()));
     }
 
     static void appendUrls(List<Map<String, Object>> items, List<String> urls,

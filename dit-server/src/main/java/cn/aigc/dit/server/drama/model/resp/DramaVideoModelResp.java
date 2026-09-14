@@ -20,5 +20,6 @@ public class DramaVideoModelResp {
     private Boolean supportsNativeAudio;
     private Boolean supportsAudioReference;
     private Integer maxAudioReferences;
+    private Boolean supportsAudioOnlyReference;
     private String audioMode;
 }

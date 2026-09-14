@@ -4,6 +4,7 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
@@ -252,6 +253,8 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setEndpoint(model.getEndpoint());
         resp.setCategory(model.getCategory());
         resp.setCapabilities(GenerateMode.canonicalizeCapabilities(model.getCapabilities()));
+        applyAudioCapabilities(model, resp::setSupportsAudioReference,
+                resp::setMaxAudioReferences, resp::setSupportsAudioOnlyReference);
         resp.setAdapterConfig(model.getAdapterConfig());
         Map<String, Object> pricing = model.getPricing() == null
                 ? new LinkedHashMap<>()
@@ -281,6 +284,8 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setProvider(model.getProvider());
         resp.setCategory(model.getCategory());
         resp.setCapabilities(GenerateMode.canonicalizeCapabilities(model.getCapabilities()));
+        applyAudioCapabilities(model, resp::setSupportsAudioReference,
+                resp::setMaxAudioReferences, resp::setSupportsAudioOnlyReference);
         Map<String, Object> pricing = model.getPricing() == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(model.getPricing());
@@ -293,6 +298,18 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setBadge(model.getBadge());
         resp.setLogo(model.getLogo());
         return resp;
+    }
+
+    private static void applyAudioCapabilities(
+            AiModel model,
+            java.util.function.Consumer<Boolean> supported,
+            java.util.function.Consumer<Integer> maxReferences,
+            java.util.function.Consumer<Boolean> audioOnly) {
+        AudioReferenceCapabilities value = AudioReferenceCapabilities.resolve(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        supported.accept(value.supported());
+        maxReferences.accept(value.maxReferences());
+        audioOnly.accept(value.audioOnly());
     }
 
     static Map<String, Object> mergePricing(AdminModelSaveReq req) {

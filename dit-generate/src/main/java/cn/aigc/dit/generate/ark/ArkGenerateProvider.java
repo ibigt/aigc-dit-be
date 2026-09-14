@@ -80,17 +80,26 @@ public class ArkGenerateProvider implements GenerateProvider {
             images = mediaUris(request, "image");
         }
         List<String> videos = GenerateMode.R2V.equalsIgnoreCase(mode) ? mediaUris(request, "video") : List.of();
+        List<String> audios = GenerateMode.R2V.equalsIgnoreCase(mode) ? mediaUris(request, "audio") : List.of();
         try {
-            return createTask(request, apiKey, v3Base, mode, first, last, images, videos);
+            return createTask(request, apiKey, v3Base, mode, first, last, images, videos, audios);
         } catch (BizException e) {
             if (!ArkErrors.isRealPerson(e.getMessage())
                     || !GenerateMode.R2V.equalsIgnoreCase(mode)
                     || images.isEmpty()) {
                 throw e;
             }
+            if ((!videos.isEmpty() || !audios.isEmpty())
+                    && (!videos.isEmpty() || ArkRequestMapper.supportsAudioOnly(request))) {
+                log.warn("Seedance rejected reference images as real person, retrying without images taskId={}",
+                        request.getTaskId());
+                return createTask(request, apiKey, v3Base, GenerateMode.R2V,
+                        null, null, List.of(), videos, audios);
+            }
             log.warn("Seedance rejected reference images as real person, retrying text-only t2v taskId={}",
                     request.getTaskId());
-            return createTask(request, apiKey, v3Base, GenerateMode.T2V, null, null, List.of(), List.of());
+            return createTask(request, apiKey, v3Base, GenerateMode.T2V,
+                    null, null, List.of(), List.of(), List.of());
         }
     }
 
@@ -102,11 +111,13 @@ public class ArkGenerateProvider implements GenerateProvider {
             String first,
             String last,
             List<String> images,
-            List<String> videos) {
-        Map<String, Object> body = ArkRequestMapper.toCreateBody(request, first, last, images, videos);
-        log.info("Seedance posting taskId={}, model={}, mode={}, images={}, endpoint={}",
+            List<String> videos,
+            List<String> audios) {
+        Map<String, Object> body = ArkRequestMapper.toCreateBody(request, first, last, images, videos, audios);
+        log.info("Seedance posting taskId={}, model={}, mode={}, images={}, videos={}, audios={}, endpoint={}",
                 request.getTaskId(), ArkRequestMapper.modelName(request), mode,
-                images == null ? 0 : images.size(), v3Base);
+                images == null ? 0 : images.size(), videos == null ? 0 : videos.size(),
+                audios == null ? 0 : audios.size(), v3Base);
         JsonNode response = postJson(ArkUrls.toUri(ArkUrls.createTask(v3Base)), apiKey, body);
         String status = ArkResponses.status(response);
         if (ArkResponses.failed(status)) {
@@ -253,7 +264,10 @@ public class ArkGenerateProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
-        if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+        boolean hasAudio = request.getReferences() != null && request.getReferences().stream()
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(ref -> "audio".equals(refKind(ref)));
+        if ((request.getPrompt() == null || request.getPrompt().isBlank()) && !hasAudio) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
         }
         String adapterKey = AdapterCatalog.resolveKey(
@@ -283,7 +297,7 @@ public class ArkGenerateProvider implements GenerateProvider {
         }
         if (GenerateMode.R2V.equalsIgnoreCase(mode)) {
             if (request.getReferences() == null || request.getReferences().isEmpty()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "参考生视频至少需要一张图片或一段视频");
+                throw new BizException(ErrorCode.BAD_REQUEST, "参考生视频至少需要图片、视频或音频之一");
             }
             if (request.getFrames() != null && request.getFrames().hasAny()) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "参考生视频请使用参考素材，不要同时提交首尾帧");
@@ -297,28 +311,37 @@ public class ArkGenerateProvider implements GenerateProvider {
     private void assertRefs(GenerateRequest request) {
         int images = 0;
         int videos = 0;
+        int audios = 0;
         for (ReferenceAsset ref : request.getReferences()) {
             if (ref == null || !StringUtils.hasText(ref.getStorageKey())) {
                 continue;
             }
             String kind = refKind(ref);
             if ("audio".equals(kind)) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "本期 Seedance 通道暂不支持参考音频");
-            }
-            if ("video".equals(kind)) {
+                audios++;
+                if (audios > ArkRequestMapper.maxAudios(request)) {
+                    throw new BizException(ErrorCode.BAD_REQUEST,
+                            "参考音频最多 " + ArkRequestMapper.maxAudios(request) + " 段");
+                }
+            } else if ("video".equals(kind)) {
                 videos++;
-                if (videos > ArkRequestMapper.MAX_VIDEOS) {
-                    throw new BizException(ErrorCode.BAD_REQUEST, "参考视频最多 " + ArkRequestMapper.MAX_VIDEOS + " 段");
+                if (videos > ArkRequestMapper.maxVideos(request)) {
+                    throw new BizException(ErrorCode.BAD_REQUEST,
+                            "参考视频最多 " + ArkRequestMapper.maxVideos(request) + " 段");
                 }
             } else {
                 images++;
-                if (images > ArkRequestMapper.MAX_IMAGES) {
-                    throw new BizException(ErrorCode.BAD_REQUEST, "参考图最多 " + ArkRequestMapper.MAX_IMAGES + " 张");
+                if (images > ArkRequestMapper.maxImages(request)) {
+                    throw new BizException(ErrorCode.BAD_REQUEST,
+                            "参考图最多 " + ArkRequestMapper.maxImages(request) + " 张");
                 }
             }
         }
-        if (images + videos == 0) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "至少需要一张参考图或一段参考视频");
+        if (images + videos + audios == 0) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "至少需要一张参考图、一段参考视频或一段参考音频");
+        }
+        if (images + videos == 0 && !ArkRequestMapper.supportsAudioOnly(request)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "Seedance 2.0 的参考音频必须搭配图片或视频");
         }
     }
 
@@ -332,7 +355,7 @@ public class ArkGenerateProvider implements GenerateProvider {
                 continue;
             }
             if (kind.equals(refKind(ref))) {
-                values.add(mediaUri(ref.getStorageKey()));
+                values.add(mediaUri(ref.getStorageKey(), kind));
             }
         }
         return values;
@@ -357,6 +380,10 @@ public class ArkGenerateProvider implements GenerateProvider {
     }
 
     private String mediaUri(String storageKey) {
+        return mediaUri(storageKey, null);
+    }
+
+    private String mediaUri(String storageKey, String kind) {
         if (!StringUtils.hasText(storageKey)) {
             return null;
         }
@@ -364,7 +391,7 @@ public class ArkGenerateProvider implements GenerateProvider {
         if (bytes == null || bytes.length == 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空");
         }
-        String mime = contentTypeOf(storageKey);
+        String mime = contentTypeOf(storageKey, kind);
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
     }
 
@@ -426,7 +453,7 @@ public class ArkGenerateProvider implements GenerateProvider {
         return message.contains("429") || message.toLowerCase(Locale.ROOT).contains("rate limit");
     }
 
-    private static String contentTypeOf(String storageKey) {
+    private static String contentTypeOf(String storageKey, String kind) {
         String name = storageKey.toLowerCase(Locale.ROOT);
         if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
             return "image/jpeg";
@@ -445,6 +472,21 @@ public class ArkGenerateProvider implements GenerateProvider {
         }
         if (name.endsWith(".mov")) {
             return "video/quicktime";
+        }
+        if (name.endsWith(".wav")) {
+            return "audio/wav";
+        }
+        if (name.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (name.endsWith(".m4a") || name.endsWith(".aac")) {
+            return "audio/mp4";
+        }
+        if ("audio".equals(kind)) {
+            return "audio/mpeg";
+        }
+        if ("video".equals(kind)) {
+            return "video/mp4";
         }
         return "image/png";
     }

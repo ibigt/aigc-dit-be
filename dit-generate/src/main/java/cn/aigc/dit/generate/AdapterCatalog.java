@@ -310,6 +310,11 @@ public final class AdapterCatalog {
         row.put("modes", spec.modes());
         row.put("defaultPaths", spec.defaultPaths());
         row.put("defaultModelKey", defaultModelKey(spec.key()));
+        AudioReferenceCapabilities audio = AudioReferenceCapabilities.resolve(
+                spec.key(), spec.providerLabel(), spec.category(), defaultModelKey(spec.key()));
+        row.put("supportsAudioReference", audio.supported());
+        row.put("maxAudioReferences", audio.maxReferences());
+        row.put("supportsAudioOnlyReference", audio.audioOnly());
         return row;
     }
 
