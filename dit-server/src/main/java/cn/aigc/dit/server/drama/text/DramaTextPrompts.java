@@ -44,7 +44,11 @@ public final class DramaTextPrompts {
               ]
             }
             index 从 1 连续递增；interior 内景为 true、外景为 false；
-            characters 收录本场出场与说话的所有人物；props 收录本场出现的具体道具；
+            characters 收录本场出场与说话的所有人物；
+            props 只收录主要道具，并按剧情重要性从高到低排列，每场最多 3 个：
+            - 保留推动情节、触发关键动作/冲突、承载线索，或能稳定识别角色身份的道具；
+            - 普通家具、环境陈设、服装、餐具、文具、消耗品及仅在背景中一闪而过的物品不要收录；
+            - 同一道具不要重复；没有主要道具时返回空数组，不要为了凑数添加物品；
             action 只写可视动作与环境，不要写心理独白，不要把台词搬进来。
             """;
 
@@ -65,7 +69,9 @@ public final class DramaTextPrompts {
               ]
             }
             规则：
-            - 角色、场景、道具三类都要出，剧本里出现过的名字一条都不能漏。
+            - 角色和场景按剧本完整抽取；道具只允许从各场 props 数组引用，禁止从 action、heading、dialogue
+              或环境描写中追加桌椅、杯子、衣物等普通物品。
+            - props 已是筛选后的主要道具，按名称去重后逐条输出，不要扩写成零件或附属物。
             - 入梦 / 梦魇 / 换装 / 湿身等状态必须独立成条：name 用「本体名·状态」，
               state_tag 给 dream 或 costume，must_split 给 true，
               identity_invariants 写明「与本体同一张脸和发型；禁止写成另一个人」。

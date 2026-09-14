@@ -38,6 +38,8 @@ public class DramaTextServiceImpl implements DramaTextService {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private static final int LLM_JSON_RETRIES = 2;
+    /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
+    private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
 
     /**
      * 本线程最近一次 parseScript 的实际引擎。文本模型失败会静默回落规则，
@@ -210,7 +212,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             }
             scene.setIndex(kept.size() + 1);
             scene.setCharacters(cleanNames(scene.getCharacters()));
-            scene.setProps(cleanNames(scene.getProps()));
+            scene.setProps(cleanMainProps(scene.getProps()));
             List<ScriptDoc.Dialogue> dialogue = new ArrayList<>();
             for (ScriptDoc.Dialogue line : safe(scene.getDialogue())) {
                 if (line == null || !StringUtils.hasText(line.getLine())) {
@@ -233,6 +235,22 @@ public class DramaTextServiceImpl implements DramaTextService {
         for (String name : safe(names)) {
             if (StringUtils.hasText(name)) {
                 clean.add(name.strip());
+            }
+        }
+        return clean;
+    }
+
+    private static List<String> cleanMainProps(List<String> names) {
+        List<String> clean = new ArrayList<>();
+        for (String name : safe(names)) {
+            if (StringUtils.hasText(name)) {
+                String value = name.strip();
+                if (!clean.contains(value)) {
+                    clean.add(value);
+                }
+                if (clean.size() >= MAX_MAIN_PROPS_PER_SCENE) {
+                    break;
+                }
             }
         }
         return clean;

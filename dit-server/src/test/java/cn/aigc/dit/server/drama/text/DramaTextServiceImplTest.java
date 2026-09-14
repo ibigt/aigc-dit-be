@@ -197,6 +197,26 @@ class DramaTextServiceImplTest {
     }
 
     @Test
+    void generatedScriptKeepsOnlyThreeDistinctMainProps() {
+        ScriptDoc doc = DramaTextServiceImpl.readScript("""
+                {"scenes":[{"index":1,"heading":"办公室 日 内","characters":[],
+                  "props":["关键钥匙","证据手机","身份徽章","关键钥匙","背景水杯","普通椅子"],
+                  "dialogue":[],"location":"办公室"}]}
+                """);
+
+        assertNotNull(doc);
+        assertEquals(List.of("关键钥匙", "证据手机", "身份徽章"), doc.getScenes().get(0).getProps(),
+                "模型应按重要性排序，服务端兜底去重并只保留前三个主要道具");
+    }
+
+    @Test
+    void promptsExplicitlyLimitPropsToMainOnes() {
+        assertTrue(DramaTextPrompts.scriptSystem().contains("每场最多 3 个"));
+        assertTrue(DramaTextPrompts.scriptSystem().contains("没有主要道具时返回空数组"));
+        assertTrue(DramaTextPrompts.assetSystem().contains("只允许从各场 props 数组引用"));
+    }
+
+    @Test
     void unreadableContentYieldsNullNotException() {
         assertNull(DramaTextServiceImpl.readScript(null));
         assertNull(DramaTextServiceImpl.readScript("   "));
