@@ -140,6 +140,7 @@ public class FlywayConfig {
                     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
                     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
                     storyboard_drafting_at      TIMESTAMPTZ,
+                    script_analyzing_at         TIMESTAMPTZ,
                     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
@@ -365,6 +366,14 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.storyboard_drafting_at
                 IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS script_analyzing_at TIMESTAMPTZ
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.script_analyzing_at
+                IS '正在一键分析剧本的开始时间；空表示空闲。超时视为僵死可重试'
                 """);
     }
 }

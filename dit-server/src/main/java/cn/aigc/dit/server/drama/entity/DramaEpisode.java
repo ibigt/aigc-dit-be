@@ -47,6 +47,9 @@ public class DramaEpisode {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private OffsetDateTime storyboardDraftingAt;
 
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private OffsetDateTime scriptAnalyzingAt;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

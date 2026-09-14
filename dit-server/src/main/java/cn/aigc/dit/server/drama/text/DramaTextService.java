@@ -41,6 +41,20 @@ public interface DramaTextService {
     }
 
     default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames, int durationSec) {
+        return draftShots(seriesId, script, assetNames, durationSec, null, null);
+    }
+
+    /**
+     * {@code durationSec} 只作缺省/钳位参考，不再整表覆盖。
+     * {@code episodeBudgetSec} 是整集预算（可大于 15），供模型把各镜秒数往总时长靠。
+     */
+    default ShotDraftList draftShots(
+            long seriesId,
+            ScriptDoc script,
+            java.util.List<String> assetNames,
+            int durationSec,
+            Integer episodeBudgetSec,
+            Integer targetShots) {
         return cn.aigc.dit.server.drama.DramaShotDrafts.fromScript(script, assetNames, durationSec);
     }
 

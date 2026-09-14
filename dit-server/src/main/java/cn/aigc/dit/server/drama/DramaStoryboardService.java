@@ -5,6 +5,7 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
@@ -43,6 +44,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -60,6 +63,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.Executor;
 
 @Slf4j
 @Service
@@ -77,6 +81,11 @@ public class DramaStoryboardService {
     private final ObjectProvider<DramaTextService> textService;
     private final DramaFilmService filmService;
     private final DramaStoryboardDraftLock draftLock;
+    @Autowired
+    private ObjectProvider<DramaStoryboardService> self;
+    @Autowired(required = false)
+    @Qualifier("storyboardDraftExecutor")
+    private Executor storyboardDraftExecutor;
 
     @Transactional
     public DramaStoryboardResp getStoryboard(Long episodeId) {
@@ -113,6 +122,80 @@ public class DramaStoryboardService {
 
     @Transactional
     public DramaStoryboardResp draft(Long episodeId, boolean useLlm, Integer durationSec) {
+        return draft(episodeId, useLlm, durationSec, null, null);
+    }
+
+    @Transactional
+    public DramaStoryboardResp draft(
+            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+        assertCanDraft(episodeId);
+        draftLock.claim(episodeId);
+        boolean held = true;
+        try {
+            DramaStoryboardResp board = finishDraft(episodeId, useLlm, durationSec, episodeBudgetSec, targetShots);
+            held = false;
+            return board;
+        } finally {
+            if (held) {
+                draftLock.release(episodeId);
+            }
+        }
+    }
+
+    /**
+     * 分析结束后立刻占锁，让分镜页能显示「正在自动拆镜中」，真正的 LLM 拆镜在后台跑。
+     */
+    public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec, Integer targetShots) {
+        LoginUser user = UserContext.require();
+        try {
+            draftLock.claim(episodeId);
+        } catch (BizException ex) {
+            if (DramaStoryboardDraftLock.BUSY_MESSAGE.equals(ex.getMessage())) {
+                log.info("自动拆镜已在进行 episodeId={}", episodeId);
+                return;
+            }
+            throw ex;
+        }
+        draftExecutor().execute(() -> {
+            LoginUser previous = UserContext.get();
+            UserContext.set(user);
+            try {
+                ops().runClaimedDraft(episodeId, null, episodeBudgetSec, targetShots);
+            } catch (Exception e) {
+                log.warn("自动拆镜失败 episodeId={}: {}", episodeId, e.toString());
+                try {
+                    draftLock.release(episodeId);
+                } catch (RuntimeException ignored) {
+                    log.warn("自动拆镜释放锁失败 episodeId={}", episodeId);
+                }
+            } finally {
+                if (previous != null) {
+                    UserContext.set(previous);
+                } else {
+                    UserContext.clear();
+                }
+            }
+        });
+    }
+
+    /** 锁已占用，供后台线程经 Spring 代理提交事务。 */
+    @Transactional
+    public DramaStoryboardResp runClaimedDraft(
+            Long episodeId, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+        assertCanDraft(episodeId);
+        boolean held = true;
+        try {
+            DramaStoryboardResp board = finishDraft(episodeId, true, durationSec, episodeBudgetSec, targetShots);
+            held = false;
+            return board;
+        } finally {
+            if (held) {
+                draftLock.release(episodeId);
+            }
+        }
+    }
+
+    private void assertCanDraft(Long episodeId) {
         DramaEpisode episode = requireEpisode(episodeId);
         if (!DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定分场剧本再拆章节");
@@ -121,24 +204,29 @@ public class DramaStoryboardService {
         if (doc == null || doc.getScenes() == null || doc.getScenes().isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集没有可拆章的分场剧本");
         }
-        List<DramaShot> existing = listShots(episode.getId());
-        if (existing.stream().anyMatch(item -> DramaContract.STATUS_LOCKED.equals(item.getStatus()))) {
+        if (listShots(episode.getId()).stream().anyMatch(item -> DramaContract.STATUS_LOCKED.equals(item.getStatus()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "已有确认分镜，锁定剧本变更过期后再重新拆镜");
         }
-        draftLock.claim(episode.getId());
-        boolean held = true;
-        try {
-            replaceStoryboard(episode, doc, useLlm, durationSec);
-            DramaStoryboardResp board = getStoryboard(episode.getId());
-            board.setDrafting(false);
-            releaseDraftLockWhenDone(episode.getId());
-            held = false;
-            return board;
-        } finally {
-            if (held) {
-                draftLock.release(episode.getId());
-            }
-        }
+    }
+
+    private DramaStoryboardResp finishDraft(
+            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+        DramaEpisode episode = requireEpisode(episodeId);
+        ScriptDoc doc = ScriptDocs.fromMap(episode.getScript());
+        replaceStoryboard(episode, doc, useLlm, durationSec, episodeBudgetSec, targetShots);
+        DramaStoryboardResp board = getStoryboard(episode.getId());
+        board.setDrafting(false);
+        releaseDraftLockWhenDone(episode.getId());
+        return board;
+    }
+
+    private DramaStoryboardService ops() {
+        DramaStoryboardService bean = self == null ? null : self.getIfAvailable();
+        return bean != null ? bean : this;
+    }
+
+    private Executor draftExecutor() {
+        return storyboardDraftExecutor != null ? storyboardDraftExecutor : Runnable::run;
     }
 
     private void releaseDraftLockWhenDone(Long episodeId) {
@@ -546,12 +634,20 @@ public class DramaStoryboardService {
         }
     }
 
-    private void replaceStoryboard(DramaEpisode episode, ScriptDoc doc, boolean useLlm, Integer requestedDuration) {
+    private void replaceStoryboard(
+            DramaEpisode episode,
+            ScriptDoc doc,
+            boolean useLlm,
+            Integer requestedDuration,
+            Integer episodeBudgetSec,
+            Integer targetShots) {
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
-        int duration = resolveDraftDuration(series, requestedDuration);
-        if (!Objects.equals(series.getDefaultDurationSec(), duration)) {
-            series.setDefaultDurationSec(duration);
+        int fallback = resolveDraftDuration(series, requestedDuration);
+        if (requestedDuration != null
+                && DramaContract.DURATIONS.contains(requestedDuration)
+                && !Objects.equals(series.getDefaultDurationSec(), fallback)) {
+            series.setDefaultDurationSec(fallback);
             seriesMapper.updateById(series);
         }
         List<DramaAsset> assets = listAssets(episode.getId());
@@ -559,7 +655,8 @@ public class DramaStoryboardService {
                 .map(DramaAsset::getName)
                 .filter(StringUtils::hasText)
                 .toList();
-        ShotDraftList drafts = resolveDrafts(episode.getSeriesId(), doc, assetNames, duration, useLlm);
+        ShotDraftList drafts = resolveDrafts(
+                episode.getSeriesId(), doc, assetNames, fallback, useLlm, episodeBudgetSec, targetShots);
 
         for (DramaShot shot : listShots(episode.getId())) {
             shotMapper.deleteById(shot.getId());
@@ -623,7 +720,7 @@ public class DramaStoryboardService {
             shot.setUserId(userId);
             shot.setShotIndex(shotIndex);
             shot.setTitle(StringUtils.hasText(draft.getTitle()) ? draft.getTitle().trim() : "分镜 " + shotIndex);
-            shot.setDurationSec(duration);
+            shot.setDurationSec(resolveDraftDuration(series, draft.getDurationSec() == null ? fallback : draft.getDurationSec()));
             shot.setNarrativeGoal(blankToNull(draft.getNarrativeGoal()));
             shot.setScene(blankToNull(draft.getScene()));
             shot.setDialogue(blankToNull(draft.getDialogue()));
@@ -652,11 +749,18 @@ public class DramaStoryboardService {
         touchSeries(episode.getSeriesId());
     }
 
-    private ShotDraftList resolveDrafts(long seriesId, ScriptDoc doc, List<String> assetNames, int duration, boolean useLlm) {
+    private ShotDraftList resolveDrafts(
+            long seriesId,
+            ScriptDoc doc,
+            List<String> assetNames,
+            int duration,
+            boolean useLlm,
+            Integer episodeBudgetSec,
+            Integer targetShots) {
         DramaTextService svc = textService.getIfAvailable();
         ShotDraftList drafts = null;
         if (useLlm && svc != null) {
-            drafts = svc.draftShots(seriesId, doc, assetNames, duration);
+            drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec, targetShots);
         }
         if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
             drafts = DramaShotDrafts.fromScript(doc, assetNames, duration);
@@ -998,6 +1102,7 @@ public class DramaStoryboardService {
         board.setStatus(boardStatus(chapterResps));
         board.setCanDraft(DramaContract.STATUS_LOCKED.equals(episode.getStatus()));
         board.setDrafting(draftLock.isActive(episode));
+        board.setDraftingAt(Boolean.TRUE.equals(board.getDrafting()) ? episode.getStoryboardDraftingAt() : null);
         board.setTextServiceAvailable(textService.getIfAvailable() != null);
         board.setLockedAssetCount(locked.size());
         board.setStaleShotCount(stale);

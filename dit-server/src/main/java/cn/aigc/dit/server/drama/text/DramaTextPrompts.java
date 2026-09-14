@@ -101,7 +101,8 @@ public final class DramaTextPrompts {
               ]
             }
             规则：
-            - duration_sec 只许 5–15 的整数秒；全部镜头必须等于用户指定的秒数，不得自行改成其它秒数。
+            - duration_sec 只许 5–15 的整数秒；必须按本镜对白长短、动作节拍、剧本里的时长提示各自估计，
+              不要所有镜头填同一个秒数。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
             - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
@@ -142,13 +143,30 @@ public final class DramaTextPrompts {
     }
 
     public static String shotUser(String scriptJson, String assetNames) {
-        return shotUser(scriptJson, assetNames, DramaContract.DEFAULT_DURATION_SEC);
+        return shotUser(scriptJson, assetNames, DramaContract.DEFAULT_DURATION_SEC, null, null);
     }
 
     public static String shotUser(String scriptJson, String assetNames, int durationSec) {
-        return "为这份剧本出章节与分镜草稿 ShotDraftList。"
-                + "只允许引用下列资产名，其它名字一律不得出现：\n" + assetNames
-                + "\n每条分镜的 duration_sec 必须是 " + durationSec + "，不得改成其它秒数。"
-                + "\n\n剧本：\n" + scriptJson;
+        return shotUser(scriptJson, assetNames, durationSec, null, null);
+    }
+
+    public static String shotUser(
+            String scriptJson, String assetNames, int fallbackSec, Integer episodeBudgetSec, Integer targetShots) {
+        StringBuilder text = new StringBuilder();
+        text.append("为这份剧本出章节与分镜草稿 ShotDraftList。");
+        text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
+        text.append("\n每条分镜的 duration_sec 必须按该镜对白长短、动作节拍、剧本里的时长提示自行估计，");
+        text.append("只能是 5 到 15 的整数秒。不要所有镜头填同一个秒数。无法判断时再用 ")
+                .append(fallbackSec)
+                .append(" 秒。");
+        if (episodeBudgetSec != null && episodeBudgetSec > 0) {
+            text.append("\n本集目标总时长约 ").append(episodeBudgetSec)
+                    .append(" 秒，各镜秒数之和尽量接近该预算；内容密的镜给更长，过场给 5–8 秒，不要为凑时长灌水。");
+        }
+        if (targetShots != null && targetShots > 0) {
+            text.append("\n目标大约 ").append(targetShots).append(" 个分镜，可按场次戏量增减，不要压成少数超长镜。");
+        }
+        text.append("\n\n剧本：\n").append(scriptJson);
+        return text.toString();
     }
 }

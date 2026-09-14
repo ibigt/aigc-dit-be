@@ -179,6 +179,7 @@ class DramaStoryboardServiceTest {
         DramaStoryboardResp board = service.getStoryboard(31L);
 
         assertTrue(Boolean.TRUE.equals(board.getDrafting()));
+        assertEquals(episode.getStoryboardDraftingAt(), board.getDraftingAt());
     }
 
     @Test
@@ -220,7 +221,7 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void draftAppliesRequestedDurationToEveryShot() {
+    void draftKeepsPerShotDurationsInsteadOfUniformOverride() {
         DramaEpisode episode = ownedEpisode();
         episode.setStatus(DramaContract.STATUS_LOCKED);
         episode.setScript(ScriptDocs.toMap(detectiveDoc()));
@@ -232,8 +233,26 @@ class DramaStoryboardServiceTest {
         service.draft(31L, true, 15);
 
         assertFalse(storedShots.isEmpty());
-        assertTrue(storedShots.stream().allMatch(item -> Integer.valueOf(15).equals(item.getDurationSec())));
-        assertTrue(storedShots.stream().allMatch(item -> item.getCompiledPrompt().contains("Duration: 15 seconds")));
+        assertTrue(storedShots.stream().allMatch(item ->
+                item.getDurationSec() != null && item.getDurationSec() >= 5 && item.getDurationSec() <= 15));
+        assertTrue(storedShots.stream().allMatch(item ->
+                item.getCompiledPrompt().contains("Duration: " + item.getDurationSec() + " seconds")));
+    }
+
+    @Test
+    void enqueueAutoDraftProducesShotsAndClearsLock() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        service.enqueueAutoDraft(31L, 30, 6);
+
+        assertFalse(storedShots.isEmpty());
+        org.junit.jupiter.api.Assertions.assertNull(episode.getStoryboardDraftingAt());
     }
 
     @Test

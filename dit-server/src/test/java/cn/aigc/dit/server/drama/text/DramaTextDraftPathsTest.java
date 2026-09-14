@@ -130,7 +130,7 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
-    void shotDurationsAreClampedAndInventedNamesRemoved() {
+    void shotDurationsKeepModelValuesAndDropInventedNames() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of(SHOTS_JSON, "m", "stop"));
 
@@ -139,9 +139,8 @@ class DramaTextDraftPathsTest {
                 .getShots();
 
         ShotDraftList.ShotDraft first = shots.get(0);
-        assertTrue(shots.stream().allMatch(item -> Integer.valueOf(DramaContract.DEFAULT_DURATION_SEC).equals(item.getDurationSec())),
-                "拆镜时长必须统一成指定秒数");
-        assertEquals(DramaContract.DEFAULT_DURATION_SEC, first.getDurationSec(), "模型给的 7 秒会被统一覆盖为指定秒数");
+        assertEquals(7, first.getDurationSec(), "模型给的 7 秒应保留，不得整表覆盖");
+        assertEquals(15, shots.get(1).getDurationSec());
         assertEquals(List.of("洛白"), first.getCharacterNames(), "路人甲没有这个资产");
         assertEquals(List.of("古铜怀表"), first.getPropNames());
         assertEquals(1, first.getCastCount(), "cast_count 必须与人名数组一致");

@@ -57,12 +57,18 @@ class DramaServiceScriptTest {
     private DramaStoryboardService storyboardService;
     @Mock
     private DramaFilmService filmService;
+    @Mock
+    private DramaAssetService assetService;
+    @Mock
+    private DramaScriptAnalyzeLock analyzeLock;
 
     private DramaService service;
 
     @BeforeEach
     void setUp() {
         service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "assetService", assetService);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "analyzeLock", analyzeLock);
         org.mockito.Mockito.lenient().when(filmService.preview(any())).thenReturn(new cn.aigc.dit.server.drama.model.resp.DramaFilmResp());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
@@ -206,6 +212,32 @@ class DramaServiceScriptTest {
 
         assertEquals(DramaContract.STATUS_LOCKED, service.lockScript(31L).getStatus());
         org.mockito.Mockito.verify(episodeMapper, org.mockito.Mockito.never()).updateById(episode);
+    }
+
+    @Test
+    void analyzeScriptCommitsImportBeforeDraft() {
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
+        when(dramaTextService.parseScript(anyLong(), anyString())).thenReturn(sampleDoc());
+        when(assetService.extractFromScript(31L, false)).thenReturn(List.of());
+        cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp board = new cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp();
+        board.setDrafting(true);
+        when(storyboardService.getStoryboard(31L)).thenReturn(board);
+
+        cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq req = new cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq();
+        req.setSourceText("第一场 日 内");
+        var result = service.analyzeScript(31L, req);
+
+        assertEquals(1, result.getActualSceneCount());
+        assertEquals(0, result.getActualShotCount());
+        assertEquals(DramaContract.STATUS_LOCKED, episode.getStatus());
+        org.mockito.Mockito.verify(assetService).extractFromScript(31L, false);
+        org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(31L, 15, 8);
+        org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).draft(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
+        org.mockito.Mockito.verify(analyzeLock).claim(31L);
+        org.mockito.Mockito.verify(analyzeLock).release(31L);
     }
 
     private static DramaEpisode ownedEpisode() {

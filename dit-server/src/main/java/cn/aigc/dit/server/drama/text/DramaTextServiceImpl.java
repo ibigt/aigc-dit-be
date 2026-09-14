@@ -4,6 +4,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDurations;
+import cn.aigc.dit.server.drama.DramaShotDrafts;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -94,22 +95,34 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     @Override
     public ShotDraftList draftShots(long seriesId, ScriptDoc script, List<String> assetNames, int durationSec) {
+        return draftShots(seriesId, script, assetNames, durationSec, null, null);
+    }
+
+    @Override
+    public ShotDraftList draftShots(
+            long seriesId,
+            ScriptDoc script,
+            List<String> assetNames,
+            int durationSec,
+            Integer episodeBudgetSec,
+            Integer targetShots) {
         int duration = DramaDurations.clamp(durationSec);
         if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
-            return DramaTextService.super.draftShots(seriesId, script, assetNames, duration);
+            return DramaShotDrafts.fromScript(script, assetNames, duration);
         }
         ShotDraftList drafts = null;
         try {
             drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
-                    DramaTextPrompts.shotUser(toJson(script), String.join("、", safe(assetNames)), duration),
-                    content -> applyDuration(
+                    DramaTextPrompts.shotUser(
+                            toJson(script), String.join("、", safe(assetNames)), duration, episodeBudgetSec, targetShots),
+                    content -> clampDurations(
                             normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
                             duration),
                     "ShotDraftList", 4096);
         } catch (RuntimeException e) {
             swallowUnlessUnbound(seriesId, "分镜草稿", e);
         }
-        return drafts == null ? DramaTextService.super.draftShots(seriesId, script, assetNames, duration) : drafts;
+        return drafts == null ? DramaShotDrafts.fromScript(script, assetNames, duration) : drafts;
     }
 
     /**
@@ -285,10 +298,6 @@ public class DramaTextServiceImpl implements DramaTextService {
             shot.setChapterIndex(chapter);
             shot.setIndex(perChapter.merge(chapter, 1, Integer::sum));
             shot.setTitle(shot.getTitle().strip());
-            Integer duration = shot.getDurationSec();
-            shot.setDurationSec(duration != null && DramaContract.DURATIONS.contains(duration)
-                    ? duration
-                    : DramaContract.DEFAULT_DURATION_SEC);
             shot.setCharacterNames(retain(shot.getCharacterNames(), allowed));
             shot.setPropNames(retain(shot.getPropNames(), allowed));
             if (!allowed.contains(shot.getLocationName())) {
@@ -307,15 +316,17 @@ public class DramaTextServiceImpl implements DramaTextService {
         return list;
     }
 
-    static ShotDraftList applyDuration(ShotDraftList list, int durationSec) {
+    static ShotDraftList clampDurations(ShotDraftList list, int fallbackSec) {
         if (list == null || list.getShots() == null) {
             return list;
         }
-        int duration = DramaDurations.clamp(durationSec);
+        int fallback = DramaDurations.clamp(fallbackSec);
         for (ShotDraftList.ShotDraft shot : list.getShots()) {
-            if (shot != null) {
-                shot.setDurationSec(duration);
+            if (shot == null) {
+                continue;
             }
+            shot.setDurationSec(DramaDurations.clamp(
+                    shot.getDurationSec() == null ? fallback : shot.getDurationSec()));
         }
         return list;
     }

@@ -401,6 +401,7 @@ CREATE TABLE IF NOT EXISTS drama_episode (
     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
     storyboard_drafting_at      TIMESTAMPTZ,
+    script_analyzing_at         TIMESTAMPTZ,
     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
@@ -424,6 +425,7 @@ COMMENT ON COLUMN drama_episode.engine IS '分场引擎：pending 乙未合入�
 COMMENT ON COLUMN drama_episode.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
 COMMENT ON COLUMN drama_episode.inherited_from_episode_id IS '继承来源集ID（下一集复制资产时记录）';
 COMMENT ON COLUMN drama_episode.storyboard_drafting_at IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试';
+COMMENT ON COLUMN drama_episode.script_analyzing_at IS '正在一键分析剧本的开始时间；空表示空闲。超时视为僵死可重试';
 COMMENT ON COLUMN drama_episode.created_at IS '创建时间';
 COMMENT ON COLUMN drama_episode.updated_at IS '更新时间';
 
@@ -609,11 +611,13 @@ ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_poster_key VARCHAR(512);
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_fingerprint VARCHAR(128);
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_assembled_at TIMESTAMPTZ;
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS storyboard_drafting_at TIMESTAMPTZ;
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS script_analyzing_at TIMESTAMPTZ;
 COMMENT ON COLUMN drama_episode.film_key IS '本集成片 MP4 相对对象存储 key（按 shot_index 硬切拼接）';
 COMMENT ON COLUMN drama_episode.film_poster_key IS '成片封面（ffmpeg 抽出的 poster.webp）';
 COMMENT ON COLUMN drama_episode.film_fingerprint IS '按镜序 shotId:videoKey:durationSec 的 SHA-256；与当前分镜不一致则成片过期';
 COMMENT ON COLUMN drama_episode.film_assembled_at IS '最近一次拼接成片时间';
 COMMENT ON COLUMN drama_episode.storyboard_drafting_at IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试';
+COMMENT ON COLUMN drama_episode.script_analyzing_at IS '正在一键分析剧本的开始时间；空表示空闲。超时视为僵死可重试';
 
 ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS prompt_override VARCHAR(4000);
 ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS video_poster_key VARCHAR(512);

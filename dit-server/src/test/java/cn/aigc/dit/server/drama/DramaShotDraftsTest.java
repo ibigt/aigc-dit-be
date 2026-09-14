@@ -45,6 +45,8 @@ class DramaShotDraftsTest {
         assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("怀表")
                 && item.getPropNames().contains("古铜怀表")
                 && item.getCharacterNames().equals(List.of("洛白"))));
+        assertTrue(shots.stream().map(ShotDraftList.ShotDraft::getDurationSec).distinct().count() > 1,
+                "规则拆镜应按对白/动作估不同时长");
         for (int i = 1; i < shots.size(); i++) {
             assertEquals(shots.get(i - 1).getContinuityOut(), shots.get(i).getContinuityIn());
         }
@@ -71,6 +73,18 @@ class DramaShotDraftsTest {
         assertEquals("市中心医院ICU 夜 内", list.getShots().get(0).getScene());
         assertTrue(list.getShots().get(0).getCharacterNames().contains("洛白"));
         assertFalse(list.getShots().get(0).getCharacterNames().contains("徐医生"));
+    }
+
+    @Test
+    void estimateDurationGrowsWithDialogue() {
+        int shortShot = DramaShotDrafts.estimateDuration(null, "特写。", 5);
+        int longShot = DramaShotDrafts.estimateDuration(
+                "局长：洛老弟别睡了，这案子今晚必须结，档案都在桌上。",
+                "中景。局长摔档案，洛白坐直。",
+                5);
+        assertTrue(shortShot >= 5 && shortShot <= 8);
+        assertTrue(longShot > shortShot);
+        assertTrue(longShot <= 15);
     }
 
     private static ScriptDoc detectiveScene() {

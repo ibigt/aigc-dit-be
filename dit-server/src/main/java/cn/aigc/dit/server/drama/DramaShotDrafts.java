@@ -202,7 +202,7 @@ public final class DramaShotDrafts {
             draft.setChapterIndex(chapterIndex);
             draft.setIndex(i + 1);
             draft.setTitle(spec.title());
-            draft.setDurationSec(durationSec);
+            draft.setDurationSec(estimateDuration(spec.dialogue(), spec.narrativeGoal(), durationSec));
             draft.setNarrativeGoal(spec.narrativeGoal());
             draft.setScene(spec.scene());
             draft.setDialogue(spec.dialogue());
@@ -215,6 +215,29 @@ public final class DramaShotDrafts {
             shots.add(draft);
         }
         return shots;
+    }
+
+    static int estimateDuration(String dialogue, String narrativeGoal, int fallbackSec) {
+        int talk = visibleLength(dialogue);
+        int action = visibleLength(narrativeGoal);
+        int sec = 5;
+        if (talk > 0) {
+            sec += Math.min(8, (talk + 5) / 6);
+        }
+        if (action > 24) {
+            sec += Math.min(4, (action - 24) / 20);
+        }
+        if (talk == 0 && action <= 8) {
+            return DramaDurations.clamp(fallbackSec < 5 ? 5 : Math.min(fallbackSec, 8));
+        }
+        return DramaDurations.clamp(sec);
+    }
+
+    private static int visibleLength(String value) {
+        if (!StringUtils.hasText(value)) {
+            return 0;
+        }
+        return value.replaceAll("\\s+", "").length();
     }
 
     static int normalizeDuration(Integer value) {

@@ -72,6 +72,11 @@ public class DramaService {
     private final DramaFilmService filmService;
     @Autowired
     private DramaAssetService assetService;
+    @Autowired
+    private DramaScriptAnalyzeLock analyzeLock;
+    /** 走 Spring 代理，让 import/lock 各自提交。 */
+    @Autowired
+    private ObjectProvider<DramaService> self;
 
     public List<DramaSeriesResp> listSeries() {
         Long userId = UserContext.requireUserId();
@@ -231,49 +236,62 @@ public class DramaService {
 
     /**
      * 剧本页的一键分析闭环。各阶段仍复用现有服务，便于单独重跑和人工编辑。
+     * 不能包在同一个事务里：import 会先锁住剧集行，随后 draft 要用 REQUIRES_NEW 写拆镜锁，
+     * 会把后一次更新堵在同一行上。Java 线程再等 claim 返回，刷新看不到未提交分场，删除也会一直卡住。
      */
-    @Transactional
     public DramaScriptAnalyzeResp analyzeScript(Long id, DramaScriptAnalyzeReq req) {
-        DramaEpisode episode = requireEpisode(id);
+        requireEpisode(id);
         String raw = req.getSourceText().trim();
         DramaScriptImportReq importReq = new DramaScriptImportReq();
         importReq.setSourceText(raw);
 
-        // import 会优先使用已配置的文本模型，失败时由文本服务回落到规则分场。
-        importSource(id, importReq);
-        lockScript(id);
-        // 一键分析只调用一次文本模型；资产和分镜先走本地规则，避免串行三次 LLM 请求超时。
-        List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
-        DramaStoryboardResp storyboard = storyboardService.draft(id, false);
+        DramaService ops = scriptOps();
+        if (analyzeLock != null) {
+            analyzeLock.claim(id);
+        }
+        try {
+            // import 会优先使用已配置的文本模型，失败时由文本服务回落到规则分场。
+            ops.importSource(id, importReq);
+            ops.lockScript(id);
+            // 一键分析只同步完成分场和规则抽资产；LLM 拆镜后台跑，避免剧本页被第三次模型调用拖死。
+            List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
+            int episodeBudget = req.getEpisodeDurationSec() == null ? 15 : req.getEpisodeDurationSec();
+            int targetShots = req.getShotsPerEpisode() == null ? 8 : req.getShotsPerEpisode();
+            storyboardService.enqueueAutoDraft(id, episodeBudget, targetShots);
+            DramaStoryboardResp storyboard = storyboardService.getStoryboard(id);
 
-        DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();
-        result.setEpisode(getEpisode(id));
-        result.setAssets(assets);
-        result.setStoryboard(storyboard);
-        result.setRequestedEpisodeCount(req.getEpisodeCount() == null ? 1 : req.getEpisodeCount());
-        result.setRequestedDurationSec(req.getEpisodeDurationSec() == null ? 15 : req.getEpisodeDurationSec());
-        result.setRequestedShots(req.getShotsPerEpisode() == null ? 8 : req.getShotsPerEpisode());
-        result.setEngine(result.getEpisode().getEngine());
-        result.getWarnings().add("本次分析的资产和分镜使用规则引擎生成，可在对应页面单独进行 AI 增强。");
-        ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
-                ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
-        int sceneCount = analyzedDoc == null || analyzedDoc.getScenes() == null
-                ? 0 : analyzedDoc.getScenes().size();
-        int shotCount = storyboard.getChapters().stream()
-                .mapToInt(chapter -> chapter.getShots() == null ? 0 : chapter.getShots().size()).sum();
-        result.setActualSceneCount(sceneCount);
-        result.setActualShotCount(shotCount);
-        if (result.getRequestedEpisodeCount() > 1) {
-            result.getWarnings().add("当前接口先完成第 1 集分析，多集拆分将在剧集编排阶段接入。");
+            DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();
+            result.setEpisode(getEpisode(id));
+            result.setAssets(assets);
+            result.setStoryboard(storyboard);
+            result.setRequestedEpisodeCount(req.getEpisodeCount() == null ? 1 : req.getEpisodeCount());
+            result.setRequestedDurationSec(episodeBudget);
+            result.setRequestedShots(targetShots);
+            result.setEngine(result.getEpisode().getEngine());
+            result.getWarnings().add("分镜正在后台按剧本自动拆分，打开「分镜」页可查看进度。");
+            ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
+                    ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
+            int sceneCount = analyzedDoc == null || analyzedDoc.getScenes() == null
+                    ? 0 : analyzedDoc.getScenes().size();
+            result.setActualSceneCount(sceneCount);
+            result.setActualShotCount(0);
+            if (result.getRequestedEpisodeCount() > 1) {
+                result.getWarnings().add("当前接口先完成第 1 集分析，多集拆分将在剧集编排阶段接入。");
+            }
+            if (StringUtils.hasText(req.getRequirements())) {
+                result.getWarnings().add("补充要求已记录在本次请求中；当前解析器暂不覆盖已有结构化字段。");
+            }
+            return result;
+        } finally {
+            if (analyzeLock != null) {
+                analyzeLock.release(id);
+            }
         }
-        if (shotCount != result.getRequestedShots()) {
-            result.getWarnings().add("实际生成 " + shotCount + " 个分镜，目标为 " + result.getRequestedShots()
-                    + " 个，可在分镜页继续调整。");
-        }
-        if (StringUtils.hasText(req.getRequirements())) {
-            result.getWarnings().add("补充要求已记录在本次请求中；当前解析器暂不覆盖已有结构化字段。");
-        }
-        return result;
+    }
+
+    private DramaService scriptOps() {
+        DramaService bean = self == null ? null : self.getIfAvailable();
+        return bean != null ? bean : this;
     }
 
     /**
@@ -416,6 +434,9 @@ public class DramaService {
         resp.setInheritedFromEpisodeId(episode.getInheritedFromEpisodeId());
         resp.setCreatedAt(episode.getCreatedAt());
         resp.setUpdatedAt(episode.getUpdatedAt());
+        boolean analyzing = analyzeLock != null && analyzeLock.isActive(episode);
+        resp.setAnalyzing(analyzing);
+        resp.setAnalyzingAt(analyzing ? episode.getScriptAnalyzingAt() : null);
         if (withBody) {
             resp.setSourceText(episode.getSourceText());
             resp.setScript(episode.getScript());

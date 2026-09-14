@@ -34,4 +34,15 @@ public class SchedulingConfig implements SchedulingConfigurer {
         executor.initialize();
         return executor;
     }
+
+    @Bean(name = "storyboardDraftExecutor")
+    public Executor storyboardDraftExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(20);
+        executor.setThreadNamePrefix("dit-draft-");
+        executor.initialize();
+        return executor;
+    }
 }

@@ -22,6 +22,10 @@ public class DramaEpisodeResp {
     private Boolean textServiceAvailable;
     @Schema(description = "是否可点「生成 AI 剧本」（服务已合入且项目文本模型可用）")
     private Boolean canGenerate;
+    @Schema(description = "正在一键分析剧本（刷新后仍为 true，直到完成或超时）")
+    private Boolean analyzing;
+    @Schema(description = "本次分析开始时间，供进度条按已耗时恢复")
+    private OffsetDateTime analyzingAt;
     private Long inheritedFromEpisodeId;
     @Schema(description = "本集成片预览地址")
     private String filmUrl;
