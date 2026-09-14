@@ -2,7 +2,7 @@ package cn.aigc.dit.server.drama;
 
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.agnes.AgnesRequestMapper;
-import cn.aigc.dit.generate.comfyui.ComfyUiGeometry;
+import cn.aigc.dit.generate.minimax.MiniMaxRequestMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,7 +56,7 @@ public final class DramaDurations {
             return AgnesRequestMapper.MIN_SECONDS;
         }
         if (isMiniMax(keys)) {
-            return ComfyUiGeometry.MIN_DURATION_SEC;
+            return MiniMaxRequestMapper.MIN_SECONDS;
         }
         return 4;
     }
@@ -66,7 +66,7 @@ public final class DramaDurations {
             return AgnesRequestMapper.MAX_SECONDS;
         }
         if (isMiniMax(keys)) {
-            return ComfyUiGeometry.MAX_DURATION_SEC;
+            return MiniMaxRequestMapper.MAX_SECONDS;
         }
         return 15;
     }

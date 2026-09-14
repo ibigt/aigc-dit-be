@@ -75,7 +75,11 @@ public class FlywayConfig {
                         """);
                 statement.execute("""
                         UPDATE ai_model SET provider = 'ComfyUI', updated_at = NOW()
-                        WHERE adapter_key = 'minimax-h3' AND provider IS DISTINCT FROM 'ComfyUI'
+                        WHERE adapter_key = 'minimax-h3'
+                          AND provider = '官方API'
+                          AND (endpoint ILIKE '%8188%'
+                            OR endpoint ILIKE '%127.0.0.1%'
+                            OR endpoint ILIKE '%localhost%')
                         """);
                 statement.execute("""
                         UPDATE ai_model SET provider = 'RunningHub', updated_at = NOW()
@@ -135,6 +139,7 @@ public class FlywayConfig {
                     engine                      VARCHAR(16)  NOT NULL DEFAULT 'pending',
                     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
                     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
+                    storyboard_drafting_at      TIMESTAMPTZ,
                     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
@@ -306,6 +311,7 @@ public class FlywayConfig {
                     cast_count              INTEGER      NOT NULL DEFAULT 0,
                     compiled_prompt         TEXT,
                     compiled_fingerprint    VARCHAR(128),
+                    prompt_override         VARCHAR(4000),
                     status                  VARCHAR(16)  NOT NULL DEFAULT '待确认',
                     gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
                     video_key               VARCHAR(512),
@@ -326,6 +332,14 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS prompt_override VARCHAR(4000)
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.prompt_override
+                IS '用户手动覆盖的视频提示词；非空时优先于 compiled_prompt 出片'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
                 ADD COLUMN IF NOT EXISTS video_poster_key VARCHAR(512)
                 """);
         statement.execute("""
@@ -343,6 +357,14 @@ public class FlywayConfig {
                 ALTER TABLE drama_shot
                 ADD CONSTRAINT ck_drama_shot_duration
                 CHECK (duration_sec >= 5 AND duration_sec <= 15)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS storyboard_drafting_at TIMESTAMPTZ
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.storyboard_drafting_at
+                IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试'
                 """);
     }
 }

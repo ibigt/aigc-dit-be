@@ -11,7 +11,7 @@ import java.util.Locale;
 final class ArkErrors {
 
     static final String REAL_PERSON_MESSAGE =
-            "参考图可能包含真人，官方 Seedance 已拒绝。请更换不含真人脸的参考图，或改用 MiniMax 等本地模型。";
+            "官方 Seedance 把参考图判成了真人脸。二次元设定图也常被误伤，请再试一次或改用 MiniMax。";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -26,32 +26,34 @@ final class ArkErrors {
             JsonNode root = MAPPER.readTree(body);
             JsonNode error = root.path("error");
             if (error.isTextual()) {
-                return friendly(error.asText());
+                return error.asText();
             }
             String nested = text(error, "message");
             if (nested != null) {
-                return friendly(nested);
+                return nested;
             }
             String code = text(error, "code");
             String message = text(root, "message");
             if (code != null && message != null) {
-                return friendly(code + ": " + message);
+                return code + ": " + message;
             }
-            return friendly(message != null ? message : code);
+            return message != null ? message : code;
         } catch (Exception e) {
             return null;
         }
     }
 
-    static String friendly(String detail) {
+    static boolean isRealPerson(String detail) {
         if (detail == null || detail.isBlank()) {
-            return detail;
+            return false;
+        }
+        if (REAL_PERSON_MESSAGE.equals(detail) || detail.contains(REAL_PERSON_MESSAGE)) {
+            return true;
         }
         String lower = detail.toLowerCase(Locale.ROOT);
-        if (lower.contains("real person") || detail.contains("真人")) {
-            return REAL_PERSON_MESSAGE;
-        }
-        return detail;
+        return lower.contains("real person")
+                || lower.contains("inputimagesensitive")
+                || detail.contains("真人");
     }
 
     private static String text(JsonNode node, String field) {

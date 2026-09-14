@@ -274,7 +274,7 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.compileEpisode(id));
     }
 
-    @Operation(summary = "新增一镜；缺省挂到最后一场，人物/道具/地点沿用同场")
+    @Operation(summary = "新增一镜；可插到指定镜之后，缺省挂到最后一场，人物/道具/地点沿用前一镜")
     @PostMapping("/episodes/{id}/shots")
     public CommonResult<DramaShotResp> createShot(
             @PathVariable Long id,
@@ -282,7 +282,7 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.createShot(id, req));
     }
 
-    @Operation(summary = "删除分镜并重排序号；已出片 / 生成中 / 已确认 / 最后一镜拒绝")
+    @Operation(summary = "删除分镜并重排序号；生成中 / 已确认 / 最后一镜拒绝；已出片可删，本集成片作废")
     @DeleteMapping("/shots/{id}")
     public CommonResult<DramaStoryboardResp> deleteShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.deleteShot(id));

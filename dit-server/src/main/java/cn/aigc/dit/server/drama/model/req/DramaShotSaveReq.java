@@ -7,7 +7,7 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-@Schema(description = "更新分镜（台词 / 时长 / 衔接 / 参考资产）；视频 prompt 由编译器重算")
+@Schema(description = "更新分镜（台词 / 本镜动作 / 场景 / 时长 / 衔接 / 参考资产）；视频 prompt 由编译器重算")
 public class DramaShotSaveReq {
 
     @Size(max = 128)

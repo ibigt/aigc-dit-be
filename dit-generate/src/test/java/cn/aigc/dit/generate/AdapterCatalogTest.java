@@ -16,6 +16,7 @@ class AdapterCatalogTest {
     void infersFromProviderAndCategory() {
         assertEquals(AdapterCatalog.AGNES_IMAGE_2_5, AdapterCatalog.infer("官方API", "image", "agnes-image-2.5-flash"));
         assertEquals(AdapterCatalog.AGNES_VIDEO_2_5, AdapterCatalog.infer("官方API", "video", "agnes-video-2.5-flash"));
+        assertEquals(AdapterCatalog.MINIMAX_H3, AdapterCatalog.infer("官方API", "video", "MiniMax-H3"));
         assertEquals(AdapterCatalog.MINIMAX_H3, AdapterCatalog.infer("ComfyUI", "video", "minimax.h3"));
         assertEquals(AdapterCatalog.SEEDANCE_2, AdapterCatalog.infer("RunningHub", "video", "seedance-2.0"));
         assertEquals(AdapterCatalog.SEEDANCE_2_5, AdapterCatalog.infer("官方API", "video", "doubao-seedance-2-5-260628"));
@@ -44,6 +45,8 @@ class AdapterCatalogTest {
                 AdapterCatalog.resolveKey("seedance-2", "官方API", "video", "doubao-seedance-2.0-fast"));
         assertEquals(AdapterCatalog.TRANSPORT_ARK, AdapterCatalog.transport("seedance-2.0", "官方API"));
         assertEquals(AdapterCatalog.TRANSPORT_AGNES, AdapterCatalog.transport("agnes-video-2.5", "官方API"));
+        assertEquals(AdapterCatalog.TRANSPORT_MINIMAX, AdapterCatalog.transport("minimax-h3", "官方API"));
+        assertEquals(AdapterCatalog.TRANSPORT_COMFYUI, AdapterCatalog.transport("minimax-h3", "ComfyUI"));
         assertEquals(AdapterCatalog.TRANSPORT_RUNNINGHUB, AdapterCatalog.transport("seedance-2", "RunningHub"));
         assertThrows(BizException.class,
                 () -> AdapterCatalog.resolveKey("not-a-real-adapter", "官方API", "video", "agnes-video-2.5-flash"));
@@ -82,13 +85,22 @@ class AdapterCatalogTest {
         assertEquals("官方API", AdapterCatalog.require(AdapterCatalog.SEEDANCE_2_5).providerLabel());
         assertEquals(AdapterCatalog.ARK_DEFAULT_ENDPOINT, AdapterCatalog.require(AdapterCatalog.SEEDANCE_2_5).defaultEndpoint());
         assertEquals(AdapterCatalog.SEEDANCE_2_5_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.SEEDANCE_2_5));
-        assertEquals("http://127.0.0.1:8188", AdapterCatalog.require(AdapterCatalog.MINIMAX_H3).defaultEndpoint());
+        assertEquals(AdapterCatalog.MINIMAX_DEFAULT_ENDPOINT, AdapterCatalog.require(AdapterCatalog.MINIMAX_H3).defaultEndpoint());
+        assertEquals(AdapterCatalog.MINIMAX_H3_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.MINIMAX_H3));
+        assertTrue(AdapterCatalog.isMiniMax(AdapterCatalog.MINIMAX_H3));
+        assertEquals("官方API", AdapterCatalog.require(AdapterCatalog.MINIMAX_H3).providerLabel());
         assertTrue(AdapterCatalog.isOfficialTokenPlan("官方API（token plan）"));
         assertFalse(AdapterCatalog.isOfficialTokenPlan("官方API"));
         assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
                 AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.SEEDANCE_2_0));
         assertEquals(AdapterCatalog.PROVIDER_OFFICIAL,
                 AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.AGNES_VIDEO_2_5));
+        assertEquals(AdapterCatalog.PROVIDER_COMFYUI,
+                AdapterCatalog.officialProviderOf("ComfyUI", AdapterCatalog.MINIMAX_H3));
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL,
+                AdapterCatalog.officialProviderOf("官方API", AdapterCatalog.MINIMAX_H3));
+        assertTrue(AdapterCatalog.isMiniMaxOfficial(AdapterCatalog.MINIMAX_H3, "官方API"));
+        assertFalse(AdapterCatalog.isMiniMaxOfficial(AdapterCatalog.MINIMAX_H3, "ComfyUI"));
     }
 
     @Test

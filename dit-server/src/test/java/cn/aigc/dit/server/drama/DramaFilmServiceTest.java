@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -92,6 +93,33 @@ class DramaFilmServiceTest {
         DramaFilmResp stale = service.get(31L);
         assertTrue(stale.getStale());
         assertEquals("/api/media?key=users%2F7%2Fdrama%2F31%2Ffilm.mp4", stale.getFilmUrl());
+    }
+
+    @Test
+    void discardAssembledFilmDeletesObjectsAndClearsEpisode() throws Exception {
+        storage.put("users/7/drama/31/film.mp4", "assembled".getBytes(), "video/mp4");
+        storage.put("users/7/drama/31/film-poster.webp", "poster".getBytes(), "image/webp");
+        DramaEpisode episode = ownedEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        episode.setFilmPosterKey("users/7/drama/31/film-poster.webp");
+        episode.setFilmFingerprint("abc");
+        episode.setFilmAssembledAt(java.time.OffsetDateTime.parse("2026-09-14T04:00:00Z"));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+
+        service.discardAssembledFilm(31L);
+
+        assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film.mp4"));
+        assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film-poster.webp"));
+        assertEquals(null, episode.getFilmKey());
+        assertEquals(null, episode.getFilmFingerprint());
+        verify(episodeMapper).updateById(episode);
+    }
+
+    @Test
+    void discardAssembledFilmNoopsWhenNoFilm() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        service.discardAssembledFilm(31L);
+        verify(episodeMapper, never()).updateById(any(DramaEpisode.class));
     }
 
     @Test

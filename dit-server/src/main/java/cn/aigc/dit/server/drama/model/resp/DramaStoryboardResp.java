@@ -14,6 +14,8 @@ public class DramaStoryboardResp {
     private Long seriesId;
     private String status;
     private Boolean canDraft;
+    @Schema(description = "正在按场拆镜（刷新后仍为 true，直到完成或超时）")
+    private Boolean drafting;
     private Boolean textServiceAvailable;
     private Integer lockedAssetCount;
     private Integer staleShotCount;

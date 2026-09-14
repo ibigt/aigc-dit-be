@@ -77,10 +77,24 @@ public final class DramaStyles {
         String text = StringUtils.hasText(stylePrefix)
                 ? stylePrefix.trim()
                 : require(ANIME_COMIC).prefix();
+        text = stripFaceSafetyNegations(text);
         if (text.contains(VIDEO_SCENE_CLAUSE)) {
             return text;
         }
         return text + "，" + VIDEO_SCENE_CLAUSE;
+    }
+
+    /**
+     * 视频审图是图文一起看的。提示词里写「真实人脸 / 真人照片」反而更容易把二次元设定图判成真人。
+     */
+    static String stripFaceSafetyNegations(String text) {
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+        return text.replace("，不要真实人脸，不要真人照片", "")
+                .replace("不要真实人脸，不要真人照片，", "")
+                .replace("，不要真实人脸", "")
+                .replace("不要真实人脸，", "");
     }
 
     private DramaStyles() {

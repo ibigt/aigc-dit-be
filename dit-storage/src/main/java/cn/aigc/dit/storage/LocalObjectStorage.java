@@ -60,6 +60,33 @@ public class LocalObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public long size(String storageKey) {
+        try {
+            return Files.size(resolve(storageKey));
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
+        }
+    }
+
+    @Override
+    public InputStream getRange(String storageKey, long startInclusive, long endInclusive) {
+        Path path = resolve(storageKey);
+        try {
+            long size = Files.size(path);
+            if (startInclusive < 0 || endInclusive >= size || startInclusive > endInclusive) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "非法字节范围");
+            }
+            InputStream in = Files.newInputStream(path);
+            in.skipNBytes(startInclusive);
+            return new LimitedInputStream(in, endInclusive - startInclusive + 1);
+        } catch (BizException e) {
+            throw e;
+        } catch (IOException e) {
+            throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
+        }
+    }
+
+    @Override
     public void delete(String storageKey) {
         try {
             Files.deleteIfExists(resolve(storageKey));
@@ -78,6 +105,45 @@ public class LocalObjectStorage implements ObjectStorage {
     @Override
     public String presignPut(String storageKey, Duration expiry, String contentType) {
         return storageKey;
+    }
+
+    private static final class LimitedInputStream extends InputStream {
+        private final InputStream delegate;
+        private long remaining;
+
+        private LimitedInputStream(InputStream delegate, long remaining) {
+            this.delegate = delegate;
+            this.remaining = remaining;
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (remaining <= 0) {
+                return -1;
+            }
+            int next = delegate.read();
+            if (next >= 0) {
+                remaining--;
+            }
+            return next;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            if (remaining <= 0) {
+                return -1;
+            }
+            int read = delegate.read(buffer, offset, (int) Math.min(length, remaining));
+            if (read > 0) {
+                remaining -= read;
+            }
+            return read;
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
+        }
     }
 
     private Path resolve(String storageKey) {

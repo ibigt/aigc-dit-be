@@ -45,6 +45,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.OffsetDateTime;
@@ -73,6 +75,8 @@ public class DramaStoryboardService {
     private final GenTaskMapper genTaskMapper;
     private final GenerateService generateService;
     private final ObjectProvider<DramaTextService> textService;
+    private final DramaFilmService filmService;
+    private final DramaStoryboardDraftLock draftLock;
 
     @Transactional
     public DramaStoryboardResp getStoryboard(Long episodeId) {
@@ -121,13 +125,39 @@ public class DramaStoryboardService {
         if (existing.stream().anyMatch(item -> DramaContract.STATUS_LOCKED.equals(item.getStatus()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "已有确认分镜，锁定剧本变更过期后再重新拆镜");
         }
-        replaceStoryboard(episode, doc, useLlm, durationSec);
-        return getStoryboard(episode.getId());
+        draftLock.claim(episode.getId());
+        boolean held = true;
+        try {
+            replaceStoryboard(episode, doc, useLlm, durationSec);
+            DramaStoryboardResp board = getStoryboard(episode.getId());
+            board.setDrafting(false);
+            releaseDraftLockWhenDone(episode.getId());
+            held = false;
+            return board;
+        } finally {
+            if (held) {
+                draftLock.release(episode.getId());
+            }
+        }
+    }
+
+    private void releaseDraftLockWhenDone(Long episodeId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            draftLock.release(episodeId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                draftLock.release(episodeId);
+            }
+        });
     }
 
     @Transactional
     public DramaShotResp updateShot(Long shotId, DramaShotSaveReq req) {
         DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
         if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "已确认分镜请先等资产/剧本过期后再改");
         }
@@ -155,6 +185,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp compileShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         shot.setPromptOverride(null);
         rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, true);
@@ -169,6 +200,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaStoryboardResp compileEpisode(Long episodeId) {
         DramaEpisode episode = requireEpisode(episodeId);
+        requireNotDrafting(episode);
         Map<Long, DramaAsset> assets = assetsById(episode.getId());
         String prefix = stylePrefix(episode.getSeriesId());
         for (DramaShot shot : listShots(episode.getId())) {
@@ -187,19 +219,26 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 手工补一镜。挂到指定章节（缺省最后一场），人物 / 道具 / 地点沿用同场已有分镜，
-     * 避免新镜一进来就是空镜编不出 prompt。
+     * 手工补一镜。可插到指定镜之后（胶片条中间的 +），否则挂到指定章节末尾。
+     * 人物 / 道具 / 地点沿用前一镜，避免新镜一进来就是空镜编不出 prompt。
      */
     @Transactional
     public DramaShotResp createShot(Long episodeId, DramaShotCreateReq req) {
         DramaEpisode episode = requireEpisode(episodeId);
+        requireNotDrafting(episode);
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
         List<DramaChapter> chapters = listChapters(episodeId);
         if (chapters.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成分镜草稿再增删分镜");
         }
-        DramaChapter chapter = pickChapter(chapters, req == null ? null : req.getChapterId());
         List<DramaShot> shots = listShots(episodeId);
+        DramaShot after = resolveAfterShot(episodeId, req);
+        DramaChapter chapter = after != null
+                ? chapterOf(after.getChapterId())
+                : pickChapter(chapters, req == null ? null : req.getChapterId());
+        if (chapter == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "章节不属于本剧集");
+        }
         List<DramaShot> siblings = shots.stream()
                 .filter(item -> chapter.getId().equals(item.getChapterId()))
                 .toList();
@@ -207,9 +246,13 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.BAD_REQUEST,
                     "单场最多 " + DramaContract.MAX_SHOTS_PER_CHAPTER + " 镜");
         }
-        int index = shots.stream()
-                .mapToInt(item -> item.getShotIndex() == null ? 0 : item.getShotIndex())
-                .max().orElse(0) + 1;
+        DramaShot template = after != null
+                ? after
+                : (siblings.isEmpty() ? null : siblings.get(siblings.size() - 1));
+        int index = after != null
+                ? after.getShotIndex() + 1
+                : shots.stream().mapToInt(item -> item.getShotIndex() == null ? 0 : item.getShotIndex()).max().orElse(0) + 1;
+        shiftShotIndexes(shots, index, 1);
 
         DramaShot shot = new DramaShot();
         shot.setSeriesId(episode.getSeriesId());
@@ -221,10 +264,11 @@ public class DramaStoryboardService {
         shot.setDurationSec(DramaService.normalizeDuration(series.getDefaultDurationSec()));
         shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         shot.setReferenceAssetIds(new ArrayList<>());
-        DramaShot last = siblings.isEmpty() ? null : siblings.get(siblings.size() - 1);
-        shot.setCharacterNames(last == null ? new ArrayList<>() : new ArrayList<>(last.getCharacterNames()));
-        shot.setPropNames(last == null ? new ArrayList<>() : new ArrayList<>(last.getPropNames()));
-        shot.setLocationName(last == null ? null : last.getLocationName());
+        shot.setCharacterNames(template == null || template.getCharacterNames() == null
+                ? new ArrayList<>() : new ArrayList<>(template.getCharacterNames()));
+        shot.setPropNames(template == null || template.getPropNames() == null
+                ? new ArrayList<>() : new ArrayList<>(template.getPropNames()));
+        shot.setLocationName(template == null ? null : template.getLocationName());
         shot.setCastCount(shot.getCharacterNames().size());
 
         Map<Long, DramaAsset> assets = assetsById(episodeId);
@@ -237,14 +281,13 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 删除分镜。已出片 / 生成中 / 已确认 / 全集最后一镜都拒绝，避免拼接成片时缺段或删光。
+     * 删除分镜。生成中 / 已确认 / 全集最后一镜拒绝。
+     * 已出片可以删：本集若已拼接成片则删除成片文件并清空记录，需重新拼接。
      */
     @Transactional
     public DramaStoryboardResp deleteShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
-        if (StringUtils.hasText(shot.getVideoKey())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "该镜已出片，删除会让成片缺一段");
-        }
+        requireNotDrafting(shot.getEpisodeId());
         GenTask task = loadTask(shot.getGenTaskId());
         GenTask live = loadInFlightDramaTasks(List.of(shot)).get(shot.getId());
         if (isActiveGenerateTask(task) || isActiveGenerateTask(live)) {
@@ -271,9 +314,37 @@ public class DramaStoryboardService {
                 shotMapper.updateById(item);
             }
         }
+        filmService.discardAssembledFilm(episodeId);
         refreshChapterStatuses(listChapters(episodeId), listShots(episodeId));
         touchSeries(seriesId);
         return getStoryboard(episodeId);
+    }
+
+    private DramaShot resolveAfterShot(Long episodeId, DramaShotCreateReq req) {
+        if (req == null || req.getAfterShotId() == null) {
+            return null;
+        }
+        DramaShot after = requireShot(req.getAfterShotId());
+        if (!episodeId.equals(after.getEpisodeId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "分镜不属于本剧集");
+        }
+        return after;
+    }
+
+    private void shiftShotIndexes(List<DramaShot> shots, int fromIndex, int delta) {
+        if (shots == null || shots.isEmpty() || delta == 0) {
+            return;
+        }
+        List<DramaShot> moving = shots.stream()
+                .filter(item -> item.getShotIndex() != null && item.getShotIndex() >= fromIndex)
+                .sorted((left, right) -> delta > 0
+                        ? Integer.compare(right.getShotIndex(), left.getShotIndex())
+                        : Integer.compare(left.getShotIndex(), right.getShotIndex()))
+                .toList();
+        for (DramaShot item : moving) {
+            item.setShotIndex(item.getShotIndex() + delta);
+            shotMapper.updateById(item);
+        }
     }
 
     private DramaChapter pickChapter(List<DramaChapter> chapters, Long chapterId) {
@@ -289,6 +360,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp confirmShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         String prefix = stylePrefix(shot.getSeriesId());
         rebindAndCompile(shot, assets, prefix, false, true);
@@ -309,6 +381,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotGenerateResp generateShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
         DramaSeries series = requireOwnedSeries(shot.getSeriesId());
         AiModel model = requireBoundVideoModel(series);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
@@ -326,13 +399,21 @@ public class DramaStoryboardService {
         if (refs.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定资产参考图再出片");
         }
+        String adapter = AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        List<DramaAsset> sendRefs = refs;
+        String prompt = effectivePrompt(shot);
+        if (AdapterCatalog.isArk(adapter) && !StringUtils.hasText(shot.getPromptOverride())) {
+            sendRefs = orderRefsForArk(refs);
+            prompt = compileSubmitPrompt(shot, assets, prefix, sendRefs);
+        }
         shotMapper.updateById(shot);
 
         abandonPreviousTask(shot);
         GenerateSubmitReq req = new GenerateSubmitReq();
         req.setModelId(model.getId());
         req.setCategory(ModelCategory.VIDEO);
-        req.setPrompt(effectivePrompt(shot));
+        req.setPrompt(prompt);
         req.setRatio(series.getAspectRatio());
         req.setResolution(DramaResolutions.clamp(
                 series.getDefaultResolution(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
@@ -340,7 +421,7 @@ public class DramaStoryboardService {
                 shot.getDurationSec(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
         req.setCopies(1);
         List<GenerateSubmitReq.ReferenceInput> inputs = new ArrayList<>();
-        for (DramaAsset asset : refs) {
+        for (DramaAsset asset : sendRefs) {
             GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
             input.setType(AssetKind.IMAGE);
             if (StringUtils.hasText(asset.getImageStorageKey())) {
@@ -357,10 +438,10 @@ public class DramaStoryboardService {
         extra.put("seriesId", series.getId());
         extra.put("episodeId", shot.getEpisodeId());
         extra.put("shotId", shot.getId());
-        extra.put("adapterKey", AdapterCatalog.resolveKeyForGenerate(
-                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
-        log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={}",
-                shot.getId(), series.getId(), model.getId(), extra.get("adapterKey"), model.getModelKey());
+        extra.put("adapterKey", adapter);
+        log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={} sendRefs={}",
+                shot.getId(), series.getId(), model.getId(), extra.get("adapterKey"), model.getModelKey(),
+                sendRefs.size());
         GenerateTaskResp task = generateService.submit(req, extra);
         shot.setGenTaskId(task.getId());
         shotMapper.updateById(shot);
@@ -681,7 +762,8 @@ public class DramaStoryboardService {
             }
             return new ArrayList<>(ordered.values());
         }
-        for (String name : cleanNames(shot.getCharacterNames())) {
+        List<String> characterOrder = characterBindOrder(shot);
+        for (String name : characterOrder) {
             DramaAsset asset = findAsset(assets, name, DramaContract.ASSET_TYPE_CHARACTER, dream);
             acceptRef(ordered, asset, requireLocked);
         }
@@ -710,22 +792,65 @@ public class DramaStoryboardService {
     }
 
     private DramaAsset findAsset(Map<Long, DramaAsset> assets, String name, String type, boolean preferDream) {
+        return pickNamedAsset(assets == null ? List.of() : assets.values(), name, type, preferDream);
+    }
+
+    /**
+     * 同名多条（基础 / 入梦 / 换装，或 state_tag 空与 base 并存）时，优先用已锁定且有图的那条。
+     * 否则分镜仍按未锁定基础态判定「未锁定」，资产页却显示另一条已锁定。
+     */
+    static DramaAsset pickNamedAsset(Iterable<DramaAsset> assets, String name, String type, boolean preferDream) {
+        if (assets == null || !StringUtils.hasText(name) || !StringUtils.hasText(type)) {
+            return null;
+        }
+        DramaAsset eligibleDream = null;
+        DramaAsset eligibleBase = null;
+        DramaAsset eligibleAny = null;
         DramaAsset dream = null;
         DramaAsset base = null;
         DramaAsset any = null;
-        for (DramaAsset asset : assets.values()) {
-            if (!type.equals(asset.getType()) || !nameEquals(asset.getName(), name)) {
+        for (DramaAsset asset : assets) {
+            if (asset == null || !type.equals(asset.getType()) || !nameEquals(asset.getName(), name)) {
                 continue;
             }
             any = asset;
-            if (DramaContract.STATE_TAG_DREAM.equals(asset.getStateTag())) {
+            boolean dreamTag = DramaContract.STATE_TAG_DREAM.equals(asset.getStateTag());
+            boolean baseTag = DramaContract.STATE_TAG_BASE.equals(asset.getStateTag())
+                    || !StringUtils.hasText(asset.getStateTag());
+            if (dreamTag) {
                 dream = asset;
-            } else if (DramaContract.STATE_TAG_BASE.equals(asset.getStateTag()) || !StringUtils.hasText(asset.getStateTag())) {
+            } else if (baseTag) {
                 base = asset;
             }
+            if (isReferenceEligible(asset)) {
+                eligibleAny = asset;
+                if (dreamTag) {
+                    eligibleDream = asset;
+                } else if (baseTag) {
+                    eligibleBase = asset;
+                }
+            }
         }
-        if (preferDream && dream != null) {
-            return dream;
+        if (preferDream) {
+            if (eligibleDream != null) {
+                return eligibleDream;
+            }
+            if (eligibleBase != null) {
+                return eligibleBase;
+            }
+            if (eligibleAny != null) {
+                return eligibleAny;
+            }
+            if (dream != null) {
+                return dream;
+            }
+            return base != null ? base : any;
+        }
+        if (eligibleBase != null) {
+            return eligibleBase;
+        }
+        if (eligibleAny != null) {
+            return eligibleAny;
         }
         if (base != null) {
             return base;
@@ -733,7 +858,7 @@ public class DramaStoryboardService {
         return dream != null ? dream : any;
     }
 
-    private boolean nameEquals(String left, String right) {
+    private static boolean nameEquals(String left, String right) {
         if (!StringUtils.hasText(left) || !StringUtils.hasText(right)) {
             return false;
         }
@@ -872,6 +997,7 @@ public class DramaStoryboardService {
         board.setSeriesId(episode.getSeriesId());
         board.setStatus(boardStatus(chapterResps));
         board.setCanDraft(DramaContract.STATUS_LOCKED.equals(episode.getStatus()));
+        board.setDrafting(draftLock.isActive(episode));
         board.setTextServiceAvailable(textService.getIfAvailable() != null);
         board.setLockedAssetCount(locked.size());
         board.setStaleShotCount(stale);
@@ -989,13 +1115,9 @@ public class DramaStoryboardService {
     private DramaShotGenerateResp toGenerateResp(
             DramaShot shot, DramaChapter chapter, Map<Long, DramaAsset> assets, String prefix, GenerateTaskResp task) {
         DramaShotGenerateResp resp = new DramaShotGenerateResp();
-        GenTask snapshot = new GenTask();
-        if (task != null) {
-            snapshot.setStatus(task.getStatus());
-            snapshot.setErrorMessage(task.getErrorMessage());
-        }
-        resp.setShot(toShotResp(shot, chapter, assets, prefix, task == null ? null : snapshot));
-        if (resp.getShot() != null && task != null) {
+        GenTask live = task == null ? null : loadTask(shot.getGenTaskId());
+        resp.setShot(toShotResp(shot, chapter, assets, prefix, live));
+        if (resp.getShot() != null && task != null && live == null) {
             resp.getShot().setGenerating(isGeneratingStatus(task.getStatus()));
             resp.getShot().setGenTaskStatus(task.getStatus());
             resp.getShot().setGenErrorMessage(task.getErrorMessage());
@@ -1198,6 +1320,7 @@ public class DramaStoryboardService {
 
     private DramaStoryboardCompiler.ShotContent toShotContent(
             DramaShot shot, Map<Long, DramaAsset> assets, List<DramaAsset> pictured) {
+        List<String> characterOrder = characterBindOrder(shot);
         return new DramaStoryboardCompiler.ShotContent(
                 shot.getScene(),
                 shot.getNarrativeGoal(),
@@ -1205,14 +1328,30 @@ public class DramaStoryboardService {
                 shot.getContinuityIn(),
                 shot.getContinuityOut(),
                 shot.getDurationSec() == null ? DramaContract.DEFAULT_DURATION_SEC : shot.getDurationSec(),
-                cleanNames(shot.getCharacterNames()),
-                shot.getCastCount() == null ? 0 : shot.getCastCount(),
-                unnamedAppearances(shot, assets, pictured));
+                characterOrder,
+                characterOrder.size(),
+                unnamedAppearances(characterOrder, assets, pictured, isDreamContext(shot)));
+    }
+
+    private static List<String> characterBindOrder(DramaShot shot) {
+        List<String> namedCharacters = cleanNames(shot.getCharacterNames());
+        List<String> onScreen = DramaNameMentions.mentionedInOrder(
+                namedCharacters,
+                shot.getNarrativeGoal(),
+                shot.getDialogue(),
+                shot.getContinuityIn(),
+                shot.getContinuityOut());
+        List<String> characterOrder = new ArrayList<>(onScreen);
+        for (String name : namedCharacters) {
+            if (!characterOrder.contains(name)) {
+                characterOrder.add(name);
+            }
+        }
+        return characterOrder;
     }
 
     private List<DramaStoryboardCompiler.NamedAppearance> unnamedAppearances(
-            DramaShot shot, Map<Long, DramaAsset> assets, List<DramaAsset> pictured) {
-        boolean dream = isDreamContext(shot);
+            List<String> characterOrder, Map<Long, DramaAsset> assets, List<DramaAsset> pictured, boolean dream) {
         Set<String> picturedNames = new LinkedHashSet<>();
         if (pictured != null) {
             for (DramaAsset asset : pictured) {
@@ -1224,7 +1363,7 @@ public class DramaStoryboardService {
             }
         }
         List<DramaStoryboardCompiler.NamedAppearance> unnamed = new ArrayList<>();
-        for (String name : cleanNames(shot.getCharacterNames())) {
+        for (String name : characterOrder) {
             if (picturedNames.contains(name)) {
                 continue;
             }
@@ -1324,6 +1463,45 @@ public class DramaStoryboardService {
         return DramaDurations.clamp(want, adapter, modelKey);
     }
 
+    private String compileSubmitPrompt(
+            DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix, List<DramaAsset> pictured) {
+        List<DramaStoryboardCompiler.ActiveReference> active = new ArrayList<>();
+        if (pictured != null) {
+            for (DramaAsset asset : pictured) {
+                active.add(toActive(asset));
+            }
+        }
+        return DramaStoryboardCompiler.compile(stylePrefix, active, toShotContent(shot, assets, pictured)).prompt();
+    }
+
+    /**
+     * 官方 Seedance 报错指向 content[1]，即第一张参考图。角色设定图正脸放第一张最容易被拒，场景/道具先行。
+     */
+    static List<DramaAsset> orderRefsForArk(List<DramaAsset> refs) {
+        List<DramaAsset> scenes = new ArrayList<>();
+        List<DramaAsset> props = new ArrayList<>();
+        List<DramaAsset> rest = new ArrayList<>();
+        if (refs != null) {
+            for (DramaAsset asset : refs) {
+                if (asset == null) {
+                    continue;
+                }
+                if (DramaContract.ASSET_TYPE_SCENE.equals(asset.getType())) {
+                    scenes.add(asset);
+                } else if (DramaContract.ASSET_TYPE_PROP.equals(asset.getType())) {
+                    props.add(asset);
+                } else {
+                    rest.add(asset);
+                }
+            }
+        }
+        List<DramaAsset> ordered = new ArrayList<>(scenes.size() + props.size() + rest.size());
+        ordered.addAll(scenes);
+        ordered.addAll(props);
+        ordered.addAll(rest);
+        return ordered;
+    }
+
     private static String stylePrefixOf(DramaSeries series) {
         String prefix;
         if (series != null && StringUtils.hasText(series.getStylePrefix())) {
@@ -1332,6 +1510,16 @@ public class DramaStoryboardService {
             prefix = DramaStyles.require(series == null ? DramaStyles.ANIME_COMIC : series.getStyleKey()).prefix();
         }
         return DramaStyles.withVideoSceneClause(prefix);
+    }
+
+    private void requireNotDrafting(Long episodeId) {
+        requireNotDrafting(episodeMapper.selectById(episodeId));
+    }
+
+    private void requireNotDrafting(DramaEpisode episode) {
+        if (draftLock.isActive(episode)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, DramaStoryboardDraftLock.BUSY_MESSAGE);
+        }
     }
 
     private DramaEpisode requireEpisode(Long id) {

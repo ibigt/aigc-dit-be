@@ -30,6 +30,22 @@ public interface ObjectStorage {
         }
     }
 
+    default long size(String storageKey) {
+        return getBytes(storageKey).length;
+    }
+
+    /**
+     * 闭区间字节切片，供视频预览 HTTP Range / 进度条拖动。
+     */
+    default InputStream getRange(String storageKey, long startInclusive, long endInclusive) {
+        byte[] all = getBytes(storageKey);
+        if (startInclusive < 0 || endInclusive >= all.length || startInclusive > endInclusive) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "非法字节范围");
+        }
+        int length = (int) (endInclusive - startInclusive + 1);
+        return new ByteArrayInputStream(all, (int) startInclusive, length);
+    }
+
     void delete(String storageKey);
 
     /**

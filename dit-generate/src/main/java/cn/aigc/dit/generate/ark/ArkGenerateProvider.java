@@ -80,14 +80,38 @@ public class ArkGenerateProvider implements GenerateProvider {
             images = mediaUris(request, "image");
         }
         List<String> videos = GenerateMode.R2V.equalsIgnoreCase(mode) ? mediaUris(request, "video") : List.of();
+        try {
+            return createTask(request, apiKey, v3Base, mode, first, last, images, videos);
+        } catch (BizException e) {
+            if (!ArkErrors.isRealPerson(e.getMessage())
+                    || !GenerateMode.R2V.equalsIgnoreCase(mode)
+                    || images.isEmpty()) {
+                throw e;
+            }
+            log.warn("Seedance rejected reference images as real person, retrying text-only t2v taskId={}",
+                    request.getTaskId());
+            return createTask(request, apiKey, v3Base, GenerateMode.T2V, null, null, List.of(), List.of());
+        }
+    }
+
+    private SubmitResult createTask(
+            GenerateRequest request,
+            String apiKey,
+            String v3Base,
+            String mode,
+            String first,
+            String last,
+            List<String> images,
+            List<String> videos) {
         Map<String, Object> body = ArkRequestMapper.toCreateBody(request, first, last, images, videos);
-        log.info("Seedance posting taskId={}, model={}, mode={}, endpoint={}",
-                request.getTaskId(), ArkRequestMapper.modelName(request), mode, v3Base);
+        log.info("Seedance posting taskId={}, model={}, mode={}, images={}, endpoint={}",
+                request.getTaskId(), ArkRequestMapper.modelName(request), mode,
+                images == null ? 0 : images.size(), v3Base);
         JsonNode response = postJson(ArkUrls.toUri(ArkUrls.createTask(v3Base)), apiKey, body);
         String status = ArkResponses.status(response);
         if (ArkResponses.failed(status)) {
-            throw new BizException(ErrorCode.INTERNAL,
-                    firstNonBlank(ArkResponses.errorMessage(response), "Seedance 提交失败"));
+            String err = firstNonBlank(ArkResponses.errorMessage(response), "Seedance 提交失败");
+            throw new BizException(ArkErrors.isRealPerson(err) ? ErrorCode.BAD_REQUEST : ErrorCode.INTERNAL, err);
         }
         String jobId = ArkResponses.taskId(response);
         if (!StringUtils.hasText(jobId)) {

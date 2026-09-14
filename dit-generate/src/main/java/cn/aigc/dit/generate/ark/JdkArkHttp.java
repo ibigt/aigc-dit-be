@@ -157,9 +157,6 @@ public class JdkArkHttp implements ArkHttp {
 
     static String arkError(int status, String body, boolean submit) {
         String detail = ArkErrors.message(body);
-        if (ArkErrors.REAL_PERSON_MESSAGE.equals(detail)) {
-            return detail;
-        }
         String prefix = submit ? "Seedance HTTP " : "Seedance 查询 HTTP ";
         if (status == 401) {
             return prefix + "401: 方舟拒绝了 API Key。请确认接入来源与 Key 一致：官方API 走 /api/v3，官方API（token plan）走 /api/plan/v3；不要用账号 AK/SK。";

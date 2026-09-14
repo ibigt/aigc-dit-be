@@ -33,8 +33,8 @@ class DramaStoryboardCompilerTest {
         DramaStoryboardCompiler.Result result = DramaStoryboardCompiler.compile(prefix, refs, shot);
         String prompt = result.prompt();
 
-        assertTrue(prompt.startsWith(DramaStyles.withVideoSceneClause(prefix)));
-        assertTrue(prompt.contains(DramaStyles.VIDEO_SCENE_CLAUSE));
+        assertTrue(prompt.startsWith("<Picture 1>"));
+        assertTrue(prompt.contains(DramaStyles.withVideoSceneClause(prefix)));
         assertTrue(prompt.contains("<Picture 1> 洛白"));
         assertTrue(prompt.contains("<Picture 2> 夏安"));
         assertTrue(prompt.contains("<Picture 3> 古铜怀表"));
@@ -49,8 +49,13 @@ class DramaStoryboardCompilerTest {
         assertTrue(prompt.contains("必须在戏里被使用"));
         assertTrue(prompt.contains("必须有人在此演戏"));
         assertTrue(prompt.contains(DramaStoryboardCompiler.MOVIE_SCENE_MUST));
+        assertFalse(prompt.contains("定妆"));
+        assertFalse(prompt.contains("Identity lock"));
+        assertFalse(prompt.contains("真实人脸"));
+        assertFalse(prompt.contains("真人照片"));
+        assertFalse(prompt.contains("real people"));
         assertTrue(prompt.contains("本镜恰好 3 人，不得增删角色"));
-        assertTrue(prompt.contains("出场：洛白、夏安。"));
+        assertTrue(prompt.contains("出场：洛白=<Picture 1>、夏安=<Picture 2>。"));
         assertTrue(prompt.contains("未出图角色按外貌出演：中年男性；浓眉；灰西装。"));
         assertFalse(prompt.contains("出场：洛白、夏安、局长"));
         assertTrue(prompt.contains("Duration: 5 seconds"));
@@ -67,6 +72,28 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
+    void actionBindsActorNameToMatchingPicture() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"),
+                ref(2, "夏安", DramaContract.ASSET_TYPE_CHARACTER, "夏安身份", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "特写。洛白在桌后用书盖脸装睡。",
+                "",
+                "书盖住脸",
+                "洛白仍闭眼",
+                8,
+                List.of("洛白"),
+                1);
+        String prompt = DramaStoryboardCompiler.compile(prefix, refs, shot).prompt();
+        assertTrue(prompt.contains("Action: 特写。洛白（<Picture 1>）在桌后用书盖脸装睡。"));
+        assertTrue(prompt.contains("出场：洛白=<Picture 1>。"));
+        assertFalse(prompt.contains("出场：夏安"));
+        assertFalse(prompt.contains("Identity lock"));
+    }
+
+    @Test
     void fullIdentityKeepsOnlyIdentityInvariants() {
         DramaStoryboardCompiler.ActiveReference ref = ref(
                 1, "洛白", DramaContract.ASSET_TYPE_CHARACTER,
@@ -77,6 +104,18 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
+    void captionLinesStripSpeakerNamesAndSkipEmpty() {
+        assertEquals(List.of("洛老弟，别睡了。"),
+                DramaStoryboardCompiler.captionLines("局长：洛老弟，别睡了。"));
+        assertEquals(List.of("风很大。", "走吧。"),
+                DramaStoryboardCompiler.captionLines("旁白：风很大。\n洛白：走吧。"));
+        assertEquals(List.of("没有冒号的台词"),
+                DramaStoryboardCompiler.captionLines("没有冒号的台词"));
+        assertEquals(List.of(), DramaStoryboardCompiler.captionLines("局长：  \n  "));
+        assertEquals(List.of(), DramaStoryboardCompiler.captionLines(null));
+    }
+
+    @Test
     void omitsSpokenDialogueWhenNoLines() {
         String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
         DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
@@ -84,7 +123,7 @@ class DramaStoryboardCompilerTest {
         String prompt = DramaStoryboardCompiler.compile(prefix, List.of(ref(
                 1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "完整人物描述永不缩写")), shot).prompt();
         assertFalse(prompt.contains("对白执行"));
-        assertTrue(prompt.contains("出场：洛白。"));
+        assertTrue(prompt.contains("出场：洛白=<Picture 1>。"));
         assertFalse(prompt.contains("完整人物描述永不缩写"));
     }
 

@@ -37,14 +37,36 @@ class GenerateTaskViewsTest {
 
         assertFalse(GenerateTaskViews.shouldKeepPolling(task));
         assertEquals(TaskStatus.FAILED, GenerateTaskViews.publicStatus(task));
-        assertEquals(GenerateTaskViews.REAL_PERSON_MESSAGE, GenerateTaskViews.publicError(task));
+        assertEquals("Seedance HTTP 400: content may contain real person", GenerateTaskViews.publicError(task));
     }
 
     @Test
-    void mapsRealPersonEnglishToChinese() {
-        assertEquals(GenerateTaskViews.REAL_PERSON_MESSAGE,
+    void keepsOfficialRealPersonWording() {
+        assertEquals("Seedance HTTP 400: The request failed because the input image may contain real person.",
                 GenerateTaskViews.friendlySeedanceError(
                         "Seedance HTTP 400: The request failed because the input image may contain real person."));
+    }
+
+    @Test
+    void hidesForeignAgnesErrorOnOfficialSeedance() {
+        GenTask failed = seedanceTask();
+        failed.setStatus(TaskStatus.FAILED);
+        failed.setErrorMessage("Agnes HTTP 404");
+        assertNull(GenerateTaskViews.publicError(failed));
+
+        GenTask running = seedanceTask();
+        running.setStatus(TaskStatus.RUNNING);
+        running.setProviderJobId("cgt-seedance");
+        running.setErrorMessage("Agnes 查询 HTTP 404");
+        assertEquals(TaskStatus.RUNNING, GenerateTaskViews.publicStatus(running));
+        assertNull(GenerateTaskViews.publicError(running));
+    }
+
+    @Test
+    void mapsQuotaExceededToChinese() {
+        assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
+                GenerateTaskViews.friendlySeedanceError(
+                        "Seedance HTTP 429: The request has exceeded the quota."));
     }
 
     private static GenTask seedanceTask() {

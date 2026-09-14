@@ -16,6 +16,8 @@ import cn.aigc.dit.generate.ark.ArkGenerateProvider;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
+import cn.aigc.dit.generate.minimax.MiniMaxGenerateProvider;
+import cn.aigc.dit.generate.minimax.MiniMaxUrls;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
 import cn.aigc.dit.server.entity.AiModel;
@@ -23,6 +25,7 @@ import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.drama.DramaContract;
+import cn.aigc.dit.server.drama.DramaShotCaptionService;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.generate.GenerateTaskViews;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
@@ -77,12 +80,15 @@ public class GenerateWorker {
     private final CreationSessionMapper creationSessionMapper;
     private final GenerateProviderRegistry providerRegistry;
     private final PosterExtractor posterExtractor;
+    private final DramaShotCaptionService dramaShotCaptionService;
     private final CreditService creditService;
     private final AesGcmEncryptor encryptor;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final ConcurrentHashMap<Long, Object> taskLocks = new ConcurrentHashMap<>();
     private final Object dramaShotSlots = new Object();
+    private final AtomicBoolean arkSubmitting = new AtomicBoolean(false);
+    private volatile long arkBusyUntilMs;
     private Thread workerThread;
 
     @PostConstruct
@@ -120,7 +126,17 @@ public class GenerateWorker {
         if (!pending.isEmpty()) {
             log.info("submit pending generate tasks: {}", pending.stream().map(GenTask::getId).toList());
         }
+        boolean arkSubmitStarted = false;
         for (GenTask task : pending) {
+            if (shouldDelayRetry(task)) {
+                continue;
+            }
+            if (isArkTask(task)) {
+                if (arkSubmitStarted || System.currentTimeMillis() < arkBusyUntilMs) {
+                    continue;
+                }
+                arkSubmitStarted = true;
+            }
             try {
                 process(Map.of("taskId", String.valueOf(task.getId())));
             } catch (Exception e) {
@@ -145,6 +161,8 @@ public class GenerateWorker {
                 .and(w -> w.eq(GenTask::getErrorMessage, "生成超时")
                         .or().like(GenTask::getErrorMessage, "下载 RunningHub")
                         .or().like(GenTask::getErrorMessage, "下载 Agnes")
+                        .or().like(GenTask::getErrorMessage, "下载 MiniMax")
+                        .or().like(GenTask::getErrorMessage, "下载 Seedance")
                         .or().like(GenTask::getErrorMessage, "成片回收")
                         .or().like(GenTask::getErrorMessage, "成片为空")
                         .or().like(GenTask::getErrorMessage, "成片 URL"))
@@ -266,17 +284,27 @@ public class GenerateWorker {
                 && task.getUpdatedAt().isAfter(OffsetDateTime.now().minusSeconds(30))) {
             return;
         }
+        if (shouldDelayRetry(task)) {
+            return;
+        }
         if (!tryAcquireDramaShotSlot(task)) {
             return;
         }
-        AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
-        String modelKey = model == null ? null : model.getModelKey();
-        GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
-        GenerateProvider provider = bindAndResolve(task, model, request);
-        task.setStatus(TaskStatus.RUNNING);
-        task.setProgress(5);
-        genTaskMapper.updateById(task);
+        boolean ark = isArkTask(task);
+        if (ark) {
+            long now = System.currentTimeMillis();
+            if (now < arkBusyUntilMs || !arkSubmitting.compareAndSet(false, true)) {
+                return;
+            }
+        }
         try {
+            AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
+            String modelKey = model == null ? null : model.getModelKey();
+            GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
+            GenerateProvider provider = bindAndResolve(task, model, request);
+            task.setStatus(TaskStatus.RUNNING);
+            task.setProgress(5);
+            genTaskMapper.updateById(task);
             SubmitResult submitted = provider.submit(request);
             task.setProviderJobId(submitted.getJobId());
             genTaskMapper.updateById(task);
@@ -292,6 +320,10 @@ public class GenerateWorker {
             }
             log.error("generate task {} failed", taskId, e);
             finishFailed(task, message);
+        } finally {
+            if (ark) {
+                arkSubmitting.set(false);
+            }
         }
     }
 
@@ -412,6 +444,9 @@ public class GenerateWorker {
             if (keys.isEmpty()) {
                 finishFailed(latest, "未返回成片");
                 return;
+            }
+            if (GenerateRequests.isDramaShot(latest.getParams())) {
+                keys = dramaShotCaptionService.burnIfNeeded(latest, keys);
             }
             String firstPoster = null;
             boolean recordCreation = GenerateRequests.bindsQuickCreate(latest.getParams());
@@ -573,6 +608,11 @@ public class GenerateWorker {
                     request.getEndpoint(), generateProperties.getArk().getBaseUrl(),
                     model == null ? null : model.getProvider());
             ark.remember(task.getProviderJobId(), request, v3Base, resolveApiKey(model, request.getAdapterKey()));
+            return;
+        }
+        if (provider instanceof MiniMaxGenerateProvider miniMax) {
+            String origin = MiniMaxUrls.origin(request.getEndpoint(), generateProperties.getMinimax().getBaseUrl());
+            miniMax.remember(task.getProviderJobId(), request, origin, resolveApiKey(model, request.getAdapterKey()));
         }
     }
 
@@ -670,6 +710,7 @@ public class GenerateWorker {
         return message.contains("下载 RunningHub")
                 || message.contains("下载 Agnes")
                 || message.contains("下载 Seedance")
+                || message.contains("下载 MiniMax")
                 || message.contains("下载 ComfyUI")
                 || message.contains("ComfyUI 成片")
                 || message.contains("成片回收")
@@ -706,19 +747,85 @@ public class GenerateWorker {
             finishFailed(latest, friendlyBusyMessage(message));
             return;
         }
+        int retries = nextSubmitRetry(latest);
+        long backoffMs = quotaBackoffMs(retries);
+        long retryAt = System.currentTimeMillis() + backoffMs;
+        if (isArkTask(latest) || isQuotaMessage(message)) {
+            arkBusyUntilMs = Math.max(arkBusyUntilMs, retryAt);
+        }
+        Map<String, Object> params = latest.getParams() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(latest.getParams());
+        params.put("submitRetries", retries);
+        params.put("retryAfterEpochMs", retryAt);
+        latest.setParams(params);
         latest.setStatus(TaskStatus.PENDING);
         latest.setProviderJobId(null);
         latest.setFinishedAt(null);
-        latest.setErrorMessage(null);
+        latest.setErrorMessage(friendlyBusyMessage(message));
         latest.setProgress(Math.max(5, latest.getProgress() == null ? 5 : latest.getProgress()));
         genTaskMapper.updateById(latest);
+        log.info("generate task {} deferred {}ms retries={}", latest.getId(), backoffMs, retries);
     }
 
     static String friendlyBusyMessage(String message) {
+        if (isQuotaMessage(message)) {
+            return GenerateTaskViews.QUOTA_MESSAGE;
+        }
         if (message != null && message.toLowerCase().contains("queue is full")) {
             return "Agnes 视频队列繁忙，请稍后重试";
         }
         return message == null || message.isBlank() ? "生成失败" : message;
+    }
+
+    static boolean isQuotaMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("exceeded the quota")
+                || lower.contains("http 429")
+                || lower.contains("rate limit");
+    }
+
+    static long quotaBackoffMs(int retries) {
+        int n = Math.max(1, retries);
+        long seconds = Math.min(120L, 20L * (1L << Math.min(n - 1, 3)));
+        return seconds * 1000L;
+    }
+
+    static boolean shouldDelayRetry(GenTask task) {
+        if (task == null || task.getParams() == null || task.getParams().get("retryAfterEpochMs") == null) {
+            return false;
+        }
+        try {
+            long retryAt = Long.parseLong(String.valueOf(task.getParams().get("retryAfterEpochMs")).trim());
+            return retryAt > System.currentTimeMillis();
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private static int nextSubmitRetry(GenTask task) {
+        if (task.getParams() == null || task.getParams().get("submitRetries") == null) {
+            return 1;
+        }
+        try {
+            return Integer.parseInt(String.valueOf(task.getParams().get("submitRetries")).trim()) + 1;
+        } catch (NumberFormatException e) {
+            return 1;
+        }
+    }
+
+    private boolean isArkTask(GenTask task) {
+        if (task == null) {
+            return false;
+        }
+        String adapter = null;
+        if (task.getParams() != null && task.getParams().get("adapterKey") != null) {
+            adapter = String.valueOf(task.getParams().get("adapterKey"));
+        }
+        return AdapterCatalog.isArk(adapter) || GenerateTaskViews.isOfficialSeedance(task);
     }
 
     private void claimIdlePending(String stream, String group, String consumerName) {
@@ -781,7 +888,11 @@ public class GenerateWorker {
             request.setAdapterConfig(model.getAdapterConfig());
             request.setApiKey(resolveApiKey(model, adapterKey));
         }
-        GenerateProvider provider = providerRegistry.resolveByAdapter(adapterKey, null, null, null);
+        GenerateProvider provider = providerRegistry.resolveByAdapter(
+                adapterKey,
+                model == null ? null : model.getProvider(),
+                model == null ? null : model.getCategory(),
+                modelKey);
         log.info("generate task {} routed adapter={} transport={} modelId={} modelKey={} provider={}",
                 task.getId(),
                 adapterKey,
@@ -812,6 +923,9 @@ public class GenerateWorker {
         }
         if (AdapterCatalog.isArk(resolved)) {
             return generateProperties.getArk().getApiKey();
+        }
+        if (AdapterCatalog.isMiniMaxOfficial(resolved, model == null ? null : model.getProvider())) {
+            return generateProperties.getMinimax().getApiKey();
         }
         if (AdapterCatalog.isRunningHub(resolved)
                 || (model != null && model.getProvider() != null

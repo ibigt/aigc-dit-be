@@ -116,6 +116,10 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
             }
             return PollResult.succeeded(jobId, job.outputKeys);
         } catch (BizException e) {
+            if (isRetryablePollError(e.getMessage())) {
+                log.warn("ComfyUI poll busy jobId={}, will retry: {}", jobId, e.getMessage());
+                return PollResult.running(jobId, 40);
+            }
             log.warn("ComfyUI poll/ingest failed jobId={}: {}", jobId, e.getMessage());
             return PollResult.failed(jobId, e.getMessage());
         }
@@ -132,6 +136,21 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
             }
         }
         log.info("ComfyUI cancel jobId={}", jobId);
+    }
+
+    static boolean isRetryablePollError(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return message.contains("请求超时")
+                || message.contains("请求失败")
+                || message.contains("请求被中断")
+                || message.contains("下载 ComfyUI 成片超时")
+                || message.contains("下载 ComfyUI 成片失败")
+                || lower.contains("http 502")
+                || lower.contains("http 503")
+                || lower.contains("http 504");
     }
 
     private void assertSupported(GenerateRequest request) {

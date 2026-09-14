@@ -18,10 +18,10 @@ spring:
       password: ${REDIS_PASSWORD:}
       timeout: 15s
   flyway:
-    enabled: ${SPRING_FLYWAY_ENABLED:false}
+    enabled: ${SPRING_FLYWAY_ENABLED:true}
     locations: classpath:db/migration
     baseline-on-migrate: true
-    # V1 内容调整后忽略旧 checksum；若曾执行过已删除的 V2，忽略 missing
+    # V1 合入后忽略旧 checksum；曾执行过已删除的 V2/V3/V4 时忽略 missing
     validate-on-migrate: false
     ignore-migration-patterns:
       - "*:checksum"
@@ -101,7 +101,7 @@ dit:
       enabled: ${COMFYUI_ENABLED:false}
       base-url: ${COMFYUI_BASE_URL:http://127.0.0.1:8188}
       connect-timeout-seconds: 15
-      request-timeout-seconds: 60
+      request-timeout-seconds: ${COMFYUI_REQUEST_TIMEOUT_SECONDS:180}
       download-timeout-seconds: 600
     runninghub:
       base-url: ${RUNNINGHUB_BASE_URL:https://www.runninghub.ai}
@@ -134,9 +134,22 @@ dit:
       rate-limit-backoff-seconds: ${ARK_RATE_LIMIT_BACKOFF_SECONDS:8}
       download-timeout-seconds: ${ARK_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${ARK_DOWNLOAD_RETRIES:3}
+    minimax:
+      base-url: ${MINIMAX_BASE_URL:https://api.minimax.cn}
+      api-key: ${MINIMAX_API_KEY:}
+      connect-timeout-seconds: 15
+      request-timeout-seconds: ${MINIMAX_REQUEST_TIMEOUT_SECONDS:120}
+      poll-timeout-seconds: 30
+      poll-interval-seconds: ${MINIMAX_POLL_INTERVAL_SECONDS:10}
+      rate-limit-backoff-seconds: ${MINIMAX_RATE_LIMIT_BACKOFF_SECONDS:8}
+      download-timeout-seconds: ${MINIMAX_DOWNLOAD_TIMEOUT_SECONDS:600}
+      download-retries: ${MINIMAX_DOWNLOAD_RETRIES:3}
     ffmpeg:
       concat-copy-timeout-seconds: ${FFMPEG_CONCAT_COPY_TIMEOUT_SECONDS:180}
       concat-encode-timeout-seconds: ${FFMPEG_CONCAT_ENCODE_TIMEOUT_SECONDS:900}
+      caption-burn-enabled: ${FFMPEG_CAPTION_BURN_ENABLED:true}
+      caption-font: ${FFMPEG_CAPTION_FONT:}
+      caption-timeout-seconds: ${FFMPEG_CAPTION_TIMEOUT_SECONDS:180}
   s3:
     endpoint: ${S3_ENDPOINT:http://172.171.113.250:9000}
     bucket: ${S3_BUCKET:dit}

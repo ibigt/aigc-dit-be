@@ -40,10 +40,11 @@ public class GenerateProviderRegistry {
         if (key == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "未配置适配协议，请在管理端选择已接入的适配协议");
         }
-        AdapterCatalog.Spec spec = AdapterCatalog.require(key);
-        GenerateProvider found = providers.get(spec.transport());
+        AdapterCatalog.require(key);
+        String transport = AdapterCatalog.transport(key, provider);
+        GenerateProvider found = providers.get(transport);
         if (found == null) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "未实现的运输层: " + spec.transport());
+            throw new BizException(ErrorCode.BAD_REQUEST, "未实现的运输层: " + transport);
         }
         return found;
     }

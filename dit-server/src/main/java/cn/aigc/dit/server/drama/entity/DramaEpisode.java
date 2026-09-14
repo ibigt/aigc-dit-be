@@ -2,6 +2,7 @@ package cn.aigc.dit.server.drama.entity;
 
 import cn.aigc.dit.server.mybatis.JsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -30,10 +31,21 @@ public class DramaEpisode {
     private String engine;
     private String status;
     private Long inheritedFromEpisodeId;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String filmKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String filmPosterKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String filmFingerprint;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private OffsetDateTime filmAssembledAt;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private OffsetDateTime storyboardDraftingAt;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

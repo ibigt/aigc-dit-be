@@ -8,12 +8,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ArkErrorsTest {
 
     @Test
-    void mapsRealPersonBodyToChinese() {
+    void keepsRealPersonBodyFromArk() {
         String message = ArkErrors.message("""
                 {"error":{"code":"InputImageSensitiveContentDetected",\
                 "message":"The request failed because the input image 'content[1]' may contain real person."}}
                 """);
-        assertEquals(ArkErrors.REAL_PERSON_MESSAGE, message);
+        assertEquals("The request failed because the input image 'content[1]' may contain real person.", message);
+        assertTrue(JdkArkHttp.arkError(400, """
+                {"error":{"code":"InputImageSensitiveContentDetected",\
+                "message":"The request failed because the input image 'content[1]' may contain real person."}}
+                """, true).contains("may contain real person"));
     }
 
     @Test

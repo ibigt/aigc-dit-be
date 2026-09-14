@@ -15,6 +15,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.nio.file.Files;
@@ -92,6 +93,34 @@ public class DramaFilmService {
         }
     }
 
+    /**
+     * 分镜增删改切后作废已拼接成片：删对象存储文件，并清空 episode 上的成片字段。
+     */
+    @Transactional
+    public void discardAssembledFilm(Long episodeId) {
+        if (episodeId == null) {
+            return;
+        }
+        DramaEpisode episode = episodeMapper.selectById(episodeId);
+        if (episode == null) {
+            return;
+        }
+        boolean hadFilm = StringUtils.hasText(episode.getFilmKey())
+                || StringUtils.hasText(episode.getFilmPosterKey())
+                || StringUtils.hasText(episode.getFilmFingerprint());
+        if (!hadFilm) {
+            return;
+        }
+        deleteObjectQuietly(episode.getFilmKey());
+        deleteObjectQuietly(episode.getFilmPosterKey());
+        episode.setFilmKey(null);
+        episode.setFilmPosterKey(null);
+        episode.setFilmFingerprint(null);
+        episode.setFilmAssembledAt(null);
+        episodeMapper.updateById(episode);
+        log.info("discarded assembled film for episode {}", episodeId);
+    }
+
     private List<DramaShot> listShots(Long episodeId) {
         return shotMapper.selectList(new LambdaQueryWrapper<DramaShot>()
                 .eq(DramaShot::getEpisodeId, episodeId)
@@ -112,6 +141,17 @@ public class DramaFilmService {
         }
         int dot = storageKey.lastIndexOf('.');
         return dot > 0 ? storageKey.substring(dot) : ".mp4";
+    }
+
+    private void deleteObjectQuietly(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return;
+        }
+        try {
+            objectStorage.delete(storageKey);
+        } catch (Exception e) {
+            log.warn("delete film object failed, key={}", storageKey, e);
+        }
     }
 
     private static void deleteQuietly(Path path) {

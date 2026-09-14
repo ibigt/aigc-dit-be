@@ -138,6 +138,15 @@ class ComfyUiGenerateProviderTest {
     }
 
     @Test
+    void pollTreatsTimeoutAsRunning() {
+        http.promptResponse = "{\"prompt_id\":\"c7\",\"node_errors\":{}}";
+        SubmitResult submitted = provider.submit(video("t2v"));
+        http.historyError = new BizException(cn.aigc.dit.common.exception.ErrorCode.INTERNAL, "ComfyUI 请求超时");
+        PollResult result = provider.poll(submitted.getJobId());
+        assertEquals(PollResult.RUNNING, result.getStatus());
+    }
+
+    @Test
     void pollTreatsMissingHistoryAsRunning() {
         http.promptResponse = "{\"prompt_id\":\"c9\",\"node_errors\":{}}";
         SubmitResult submitted = provider.submit(video("t2v"));
@@ -191,6 +200,7 @@ class ComfyUiGenerateProviderTest {
         private URI lastUri;
         private URI lastGetUri;
         private String lastJson;
+        private BizException historyError;
         private final List<URI> posts = new ArrayList<>();
         private final List<String> uploads = new ArrayList<>();
 
@@ -208,6 +218,9 @@ class ComfyUiGenerateProviderTest {
         @Override
         public String getJson(URI uri, String bearerToken) {
             lastGetUri = uri;
+            if (historyError != null) {
+                throw historyError;
+            }
             return historyResponse;
         }
 

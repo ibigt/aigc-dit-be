@@ -14,6 +14,8 @@ import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
+import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
@@ -72,6 +74,8 @@ class DramaStoryboardServiceTest {
     private GenerateService generateService;
     @Mock
     private ObjectProvider<DramaTextService> textService;
+    @Mock
+    private DramaFilmService filmService;
 
     private DramaStoryboardService service;
     private final List<DramaChapter> storedChapters = new ArrayList<>();
@@ -82,11 +86,13 @@ class DramaStoryboardServiceTest {
     void setUp() {
         service = new DramaStoryboardService(
                 seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper,
-                aiModelMapper, genTaskMapper, generateService, textService);
+                aiModelMapper, genTaskMapper, generateService, textService, filmService,
+                new DramaStoryboardDraftLock(episodeMapper));
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         storedChapters.clear();
         storedShots.clear();
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
+        org.mockito.Mockito.lenient().when(episodeMapper.updateById(any(DramaEpisode.class))).thenReturn(1);
         org.mockito.Mockito.lenient().when(chapterMapper.insert(any(DramaChapter.class))).thenAnswer(invocation -> {
             DramaChapter chapter = invocation.getArgument(0);
             chapter.setId(ids.incrementAndGet());
@@ -109,6 +115,12 @@ class DramaStoryboardServiceTest {
             Long id = invocation.getArgument(0);
             return storedShots.stream().filter(item -> id.equals(item.getId())).findFirst().orElse(null);
         });
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            Long id = ((Number) invocation.getArgument(0)).longValue();
+            boolean removed = storedShots.removeIf(item -> id.equals(item.getId()));
+            return removed ? 1 : 0;
+        }).when(shotMapper).deleteById(org.mockito.ArgumentMatchers.any(java.io.Serializable.class));
+        org.mockito.Mockito.lenient().doNothing().when(filmService).discardAssembledFilm(org.mockito.ArgumentMatchers.anyLong());
         org.mockito.Mockito.lenient().when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
         org.mockito.Mockito.lenient().when(genTaskMapper.selectList(any())).thenReturn(List.of());
         org.mockito.Mockito.lenient().when(genTaskMapper.selectBatchIds(any())).thenReturn(List.of());
@@ -145,13 +157,66 @@ class DramaStoryboardServiceTest {
 
         assertTrue(storedShots.size() >= 4 && storedShots.size() <= 8);
         DramaShot first = storedShots.get(0);
-        assertTrue(first.getCompiledPrompt().startsWith(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix()));
+        assertTrue(first.getCompiledPrompt().contains(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix()));
+        assertTrue(first.getCompiledPrompt().startsWith("<Picture 1>"));
         assertTrue(first.getReferenceAssetIds().contains(1L));
+        assertEquals(2L, first.getReferenceAssetIds().get(0));
         assertFalse(first.getReferenceAssetIds().contains(3L));
         assertTrue(first.getCompiledPrompt().contains("<Picture 1>"));
         assertEquals(first.getCastCount(), first.getCharacterNames().size());
         assertEquals(1, board.getChapters().size());
         assertTrue(board.getChapters().get(0).getShots().size() >= 4);
+        org.junit.jupiter.api.Assertions.assertNull(episode.getStoryboardDraftingAt());
+        assertFalse(Boolean.TRUE.equals(board.getDrafting()));
+    }
+
+    @Test
+    void getStoryboardReportsDraftingWhileLockIsHeld() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStoryboardDraftingAt(java.time.OffsetDateTime.now());
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        assertTrue(Boolean.TRUE.equals(board.getDrafting()));
+    }
+
+    @Test
+    void getStoryboardIgnoresStaleDraftingLock() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStoryboardDraftingAt(java.time.OffsetDateTime.now().minusMinutes(11));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        assertFalse(Boolean.TRUE.equals(board.getDrafting()));
+    }
+
+    @Test
+    void draftRejectsWhenAlreadyDrafting() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        episode.setStoryboardDraftingAt(java.time.OffsetDateTime.now());
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+
+        BizException error = assertThrows(BizException.class, () -> service.draft(31L));
+        assertEquals(DramaStoryboardDraftLock.BUSY_MESSAGE, error.getMessage());
+        assertTrue(storedShots.isEmpty());
+    }
+
+    @Test
+    void updateShotRejectsWhenDrafting() {
+        storedChapters.add(pendingChapter());
+        storedShots.add(pendingShot());
+        DramaEpisode episode = ownedEpisode();
+        episode.setStoryboardDraftingAt(java.time.OffsetDateTime.now());
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setNarrativeGoal("中景。夏安往白板贴照片。");
+
+        BizException error = assertThrows(BizException.class, () -> service.updateShot(201L, req));
+        assertEquals(DramaStoryboardDraftLock.BUSY_MESSAGE, error.getMessage());
     }
 
     @Test
@@ -181,6 +246,43 @@ class DramaStoryboardServiceTest {
 
         BizException error = assertThrows(BizException.class, () -> service.confirmShot(201L));
         assertTrue(error.getMessage().contains("未锁定不能进分镜参考"));
+    }
+
+    @Test
+    void pickNamedAssetPrefersLockedVariantOverUnlockedBase() {
+        DramaAsset unlockedBase = pendingAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER);
+        DramaAsset lockedCostume = lockedAsset(2L, "洛白", DramaContract.ASSET_TYPE_CHARACTER);
+        lockedCostume.setStateTag(DramaContract.STATE_TAG_COSTUME);
+
+        DramaAsset picked = DramaStoryboardService.pickNamedAsset(
+                List.of(unlockedBase, lockedCostume),
+                "洛白",
+                DramaContract.ASSET_TYPE_CHARACTER,
+                false);
+        assertEquals(2L, picked.getId());
+        assertEquals(DramaContract.STATUS_LOCKED, picked.getStatus());
+    }
+
+    @Test
+    void storyboardDoesNotFlagUnboundWhenSameNameLockedExists() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setCharacterNames(List.of("洛白"));
+        storedShots.add(shot);
+        DramaAsset unlockedBase = pendingAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER);
+        DramaAsset lockedCostume = lockedAsset(2L, "洛白", DramaContract.ASSET_TYPE_CHARACTER);
+        lockedCostume.setStateTag(DramaContract.STATE_TAG_COSTUME);
+        when(assetMapper.selectList(any())).thenReturn(List.of(unlockedBase, lockedCostume));
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        DramaShotResp item = board.getChapters().get(0).getShots().get(0);
+        assertTrue(item.getUnboundNames() == null || item.getUnboundNames().isEmpty());
+        assertEquals(1, item.getReferences().size());
+        assertEquals(2L, item.getReferences().get(0).getAssetId());
+        assertEquals(true, item.getReferences().get(0).getLocked());
+        assertEquals(1, board.getLockedAssets().size());
     }
 
     @Test
@@ -332,6 +434,47 @@ class DramaStoryboardServiceTest {
         assertEquals(1, resp.getShot().getReferences().get(0).getPictureIndex());
         assertEquals("洛白", resp.getShot().getReferences().get(0).getName());
         assertEquals("幻梦侦探社", resp.getShot().getReferences().get(1).getName());
+    }
+
+    @Test
+    void generateOnOfficialSeedanceKeepsCharacterAndSceneImages() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        storedShots.add(shot);
+        shot.setPropNames(List.of("古铜怀表"));
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE),
+                lockedAsset(8L, "古铜怀表", DramaContract.ASSET_TYPE_PROP)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setAspectRatio("16:9");
+        series.setStylePrefix("二次元漫画风，干净线稿，赛璐璐平涂，清晰分色，电影分镜构图，不要写实摄影质感，不要真实人脸，不要真人照片");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        GenerateSubmitReq req = reqCaptor.getValue();
+        assertEquals(3, req.getReferences().size());
+        assertEquals("users/7/assets/5.png", req.getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/8.png", req.getReferences().get(1).getStorageKey());
+        assertEquals("users/7/assets/1.png", req.getReferences().get(2).getStorageKey());
+        assertTrue(req.getPrompt().contains("<Picture 1> 幻梦侦探社"));
+        assertTrue(req.getPrompt().contains("<Picture 2> 古铜怀表"));
+        assertTrue(req.getPrompt().contains("<Picture 3> 洛白"));
+        assertFalse(req.getPrompt().contains("真实人脸"));
+        assertFalse(req.getPrompt().contains("真人照片"));
+        assertFalse(req.getPrompt().contains("real people"));
+        assertEquals(List.of(1L, 8L, 5L), shot.getReferenceAssetIds());
     }
 
     @Test
@@ -497,6 +640,31 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void createShotInsertsAfterGivenShotAndRenumbers() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        storedChapters.add(pendingChapter());
+        for (int i = 1; i <= 3; i++) {
+            DramaShot shot = pendingShot();
+            shot.setId(200L + i);
+            shot.setShotIndex(i);
+            shot.setTitle("镜 " + i);
+            storedShots.add(shot);
+        }
+        DramaShotCreateReq req = new DramaShotCreateReq();
+        req.setAfterShotId(201L);
+
+        DramaShotResp resp = service.createShot(31L, req);
+
+        assertEquals(Integer.valueOf(2), resp.getShotIndex());
+        assertEquals(4, storedShots.size());
+        assertEquals(1, storedShots.stream().filter(item -> item.getId() == 201L).findFirst().orElseThrow().getShotIndex());
+        assertEquals(3, storedShots.stream().filter(item -> item.getId() == 202L).findFirst().orElseThrow().getShotIndex());
+        assertEquals(4, storedShots.stream().filter(item -> item.getId() == 203L).findFirst().orElseThrow().getShotIndex());
+        assertEquals(List.of("洛白"), resp.getCharacterNames());
+    }
+
+    @Test
     void createShotRejectsWhenChapterIsFull() {
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
         storedChapters.add(pendingChapter());
@@ -532,18 +700,36 @@ class DramaStoryboardServiceTest {
                 .map(DramaShot::getShotIndex)
                 .toList();
         assertEquals(List.of(1, 2), indexes);
+        verify(filmService).discardAssembledFilm(31L);
     }
 
     @Test
-    void deleteShotRejectsGeneratedConfirmedAndLast() {
+    void deleteShotAllowsGeneratedVideoAndDiscardsFilm() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
         storedChapters.add(pendingChapter());
-
         DramaShot generated = pendingShot();
+        generated.setId(201L);
+        generated.setShotIndex(1);
         generated.setVideoKey("users/7/videos/1.mp4");
         storedShots.add(generated);
-        assertEquals("该镜已出片，删除会让成片缺一段",
-                assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
-        storedShots.clear();
+        DramaShot other = pendingShot();
+        other.setId(202L);
+        other.setShotIndex(2);
+        storedShots.add(other);
+
+        DramaStoryboardResp board = service.deleteShot(201L);
+
+        assertNotNull(board);
+        assertEquals(1, storedShots.size());
+        assertEquals(202L, storedShots.get(0).getId());
+        assertEquals(1, storedShots.get(0).getShotIndex());
+        verify(filmService).discardAssembledFilm(31L);
+    }
+
+    @Test
+    void deleteShotRejectsConfirmedAndLast() {
+        storedChapters.add(pendingChapter());
 
         DramaShot confirmed = pendingShot();
         confirmed.setStatus(DramaContract.STATUS_LOCKED);
@@ -555,6 +741,53 @@ class DramaStoryboardServiceTest {
         storedShots.add(pendingShot());
         assertEquals("至少保留一个分镜",
                 assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
+        verify(filmService, never()).discardAssembledFilm(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void updateShotRecompilesActionFromNarrativeGoal() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCompiledPrompt("旧prompt");
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setNarrativeGoal("中景。夏安往白板贴照片。");
+        req.setScene("幻梦侦探社 日 内");
+        DramaShotResp resp = service.updateShot(201L, req);
+
+        assertEquals("中景。夏安往白板贴照片。", resp.getNarrativeGoal());
+        assertEquals("幻梦侦探社 日 内", resp.getScene());
+        assertTrue(resp.getCompiledPrompt().contains("Action: 中景。夏安往白板贴照片。"));
+        assertTrue(resp.getCompiledPrompt().contains("Scene: 幻梦侦探社 日 内"));
+        assertFalse(resp.getCompiledPrompt().contains("交代空间"));
+    }
+
+    @Test
+    void updateShotKeepsAddedCharacterReferenceEvenIfActionOmitsName() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setNarrativeGoal("特写。洛白在桌后装睡。");
+        shot.setCharacterNames(List.of("洛白"));
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(2L, "夏安", DramaContract.ASSET_TYPE_CHARACTER)));
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setCharacterNames(List.of("洛白", "夏安"));
+        DramaShotResp resp = service.updateShot(201L, req);
+
+        assertEquals(List.of("洛白", "夏安"), resp.getCharacterNames());
+        assertEquals(List.of(1L, 2L), resp.getReferenceAssetIds());
+        assertEquals("洛白", resp.getReferences().get(0).getName());
+        assertEquals("夏安", resp.getReferences().get(1).getName());
     }
 
     private static DramaEpisode ownedEpisode() {
@@ -665,6 +898,19 @@ class DramaStoryboardServiceTest {
         model.setProvider("ComfyUI");
         model.setModelKey("minimax-h3");
         model.setCapabilities(List.of("video", "t2v", "r2v", "i2v"));
+        return model;
+    }
+
+    private static AiModel seedanceModel() {
+        AiModel model = new AiModel();
+        model.setId(88L);
+        model.setName("Seedance 2.0 Fast");
+        model.setCategory("video");
+        model.setEnabled(true);
+        model.setAdapterKey("seedance-2.0");
+        model.setProvider("官方API");
+        model.setModelKey("doubao-seedance-2.0-fast");
+        model.setCapabilities(List.of("video", "t2v", "r2v"));
         return model;
     }
 }

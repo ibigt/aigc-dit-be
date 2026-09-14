@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -158,7 +159,24 @@ class DetectiveClubRegressionTest {
         }
         assertTrue(first.stream().anyMatch(item -> item.getPropNames().contains(spec.get("scene_one_must_reference_prop").asText())),
                 "第一场必须引用古铜怀表");
-        assertTrue(first.get(0).getCharacterNames().containsAll(toStringList(spec.get("scene_one_must_reference_characters"))));
+        java.util.Set<String> firstCast = first.stream()
+                .flatMap(item -> item.getCharacterNames().stream())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        assertTrue(firstCast.containsAll(toStringList(spec.get("scene_one_must_reference_characters"))),
+                "第一场整体应覆盖洛白/夏安/局长，而不是每一镜都全员出场");
+        assertFalse(first.get(0).getCharacterNames().contains("局长"), "开场不应点名尚未入画的局长");
+        assertTrue(drafts.getShots().stream().noneMatch(item -> plotSpeak(item.getNarrativeGoal())),
+                "narrative_goal 应是可见动作，不能是交代关系/推进对白");
+        assertTrue(first.stream().anyMatch(item -> item.getNarrativeGoal() != null && item.getNarrativeGoal().contains("怀表")));
+        for (ShotDraftList.ShotDraft shot : first) {
+            boolean usesWatch = (shot.getNarrativeGoal() != null && shot.getNarrativeGoal().contains("怀表"))
+                    || (shot.getDialogue() != null && shot.getDialogue().contains("怀表"));
+            if (usesWatch) {
+                assertTrue(shot.getPropNames().contains("古铜怀表"), "用到怀表的镜头应引用该道具：" + shot.getTitle());
+            } else {
+                assertTrue(!shot.getPropNames().contains("古铜怀表"), "未用到怀表的镜头不应带该道具：" + shot.getTitle());
+            }
+        }
 
         for (ShotDraftList.ShotDraft shot : drafts.getShots()) {
             assertTrue(DramaContract.DURATIONS.contains(shot.getDurationSec()),
@@ -212,5 +230,13 @@ class DetectiveClubRegressionTest {
 
     private static boolean notBlank(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static boolean plotSpeak(String goal) {
+        if (goal == null || goal.isBlank()) {
+            return true;
+        }
+        return goal.contains("交代") || goal.contains("推进对白") || goal.contains("关键道具出场")
+                || goal.contains("收住本场");
     }
 }

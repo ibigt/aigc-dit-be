@@ -155,6 +155,31 @@ class AdminModelServiceTest {
     }
 
     @Test
+    void createMiniMaxComfyUiKeepsLocalSourceAndEndpoint() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(22L);
+            assertEquals(AdapterCatalog.PROVIDER_COMFYUI, model.getProvider());
+            assertEquals(AdapterCatalog.MINIMAX_COMFY_ENDPOINT, model.getEndpoint());
+            assertEquals(AdapterCatalog.MINIMAX_H3, model.getAdapterKey());
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("MiniMax-H3 Comfy");
+        req.setModelKey("minimax-h3");
+        req.setAdapterKey("minimax-h3");
+        req.setProvider("ComfyUI");
+        req.setCategory(ModelCategory.VIDEO);
+        req.setCapabilities(List.of("video", "t2v", "r2v", "i2v"));
+
+        var resp = service.create(req);
+        assertEquals(AdapterCatalog.PROVIDER_COMFYUI, resp.getProvider());
+        assertEquals(AdapterCatalog.MINIMAX_COMFY_ENDPOINT, resp.getEndpoint());
+    }
+
+    @Test
     void updateKeepsExistingKeyWhenBlank() {
         AiModel existing = new AiModel();
         existing.setId(3L);

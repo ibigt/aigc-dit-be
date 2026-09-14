@@ -136,6 +136,8 @@ services:
       RUNNINGHUB_API_KEY: ${RUNNINGHUB_API_KEY:-}
       RUNNINGHUB_BASE_URL: ${RUNNINGHUB_BASE_URL:-https://www.runninghub.ai}
       RUNNINGHUB_MAX_CALLS: ${RUNNINGHUB_MAX_CALLS:-0}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_BASE_URL: ${MINIMAX_BASE_URL:-https://api.minimax.cn}
       GENERATE_TIMEOUT_SECONDS: ${GENERATE_TIMEOUT_SECONDS:-600}
       JAVA_OPTS: "${JAVA_OPTS:--Xms256m -Xmx512m}"
     ports:
@@ -180,7 +182,13 @@ services:
     restart: unless-stopped
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:

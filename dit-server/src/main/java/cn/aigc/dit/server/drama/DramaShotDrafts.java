@@ -59,68 +59,84 @@ public final class DramaShotDrafts {
         int min = first ? DramaContract.FIRST_SCENE_MIN_SHOTS : DramaContract.MIN_SHOTS_PER_CHAPTER;
         int max = first ? DramaContract.FIRST_SCENE_MAX_SHOTS : DramaContract.MAX_SHOTS_PER_CHAPTER;
 
+        String furnishings = sceneFurnishings(scene);
         List<ShotSpec> specs = new ArrayList<>();
-        specs.add(new ShotSpec(
+        String openingGoal = openingAction(beats, scene, characters);
+        specs.add(clipSpec(
                 first ? "侦探社开场" : headingOr("开场", scene),
-                "交代空间与人物关系",
-                sceneLine(scene, beats, 0),
-                firstLine(lines),
-                "开场",
-                first && hasName(characters, "局长") ? "局长将至" : "环境立住",
+                openingGoal,
+                furnishings,
+                lineMatching(lines, namesIn(characters, openingGoal)),
+                hookIn(openingGoal, "画面起幅"),
+                hookOut(openingGoal, "画面落幅"),
                 characters,
                 props,
-                location));
+                location,
+                null));
 
         if (hasName(characters, "夏安") || containsAny(scene.getAction(), "白板", "照片", "红线")) {
-            specs.add(new ShotSpec(
+            String goal = beatAction(beats, 1, "中景", "白板", "照片", "红线", "夏安");
+            String line = lineOf(lines, "夏安");
+            specs.add(clipSpec(
                     "夏安整理线索",
-                    "交代夏安在白板前的工作",
-                    sceneLine(scene, beats, 1),
-                    lineOf(lines, "夏安"),
+                    goal,
+                    furnishings,
+                    line,
                     specs.get(specs.size() - 1).continuityOut(),
-                    "白板线索立住",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    "夏安"));
         }
 
         if (hasName(characters, "局长") || containsAny(scene.getAction(), "闯入", "摔", "档案")) {
-            specs.add(new ShotSpec(
+            String matched = matchBeat(beats, "闯入", "摔", "档案");
+            ScriptDoc.Dialogue directorLine = dialogueOf(lines, "局长");
+            String goal = StringUtils.hasText(matched)
+                    ? visibleAction(matched, "中景")
+                    : speakingAction(directorLine, List.of(), 0);
+            specs.add(clipSpec(
                     "局长闯入",
-                    "局长闯入打破日常",
-                    sceneLine(scene, beats, Math.min(2, Math.max(0, beats.size() - 1))),
-                    lineOf(lines, "局长"),
+                    goal,
+                    furnishings,
+                    formatLine(directorLine),
                     specs.get(specs.size() - 1).continuityOut(),
-                    hasName(props, "古铜怀表") || containsAny(scene.getAction(), "怀表")
-                            ? "洛白被叫醒" : "冲突立住",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    "局长"));
         } else if (!lines.isEmpty()) {
             ScriptDoc.Dialogue line = lines.get(0);
-            specs.add(new ShotSpec(
+            String goal = speakingAction(line, beats, 1);
+            specs.add(clipSpec(
                     speakerTitle(line, "对白"),
-                    "推进对白",
-                    sceneLine(scene, beats, 1),
+                    goal,
+                    furnishings,
                     formatLine(line),
                     specs.get(specs.size() - 1).continuityOut(),
-                    "对白落点",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    line.getSpeaker()));
         }
 
         if (hasName(props, "古铜怀表") || containsAny(scene.getAction(), "怀表", "掏表")) {
-            specs.add(new ShotSpec(
+            String goal = watchAction(beats);
+            String line = lineOf(lines, "洛白");
+            specs.add(clipSpec(
                     "掏出古铜怀表",
-                    "关键道具出场",
-                    containsAny(scene.getAction(), "怀表") ? clip(scene.getAction(), 80) : "洛白掏出古铜怀表。",
-                    lineOf(lines, "洛白"),
+                    goal,
+                    furnishings,
+                    line,
                     specs.get(specs.size() - 1).continuityOut(),
-                    "怀表特写",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
-                    List.of("古铜怀表"),
-                    location));
+                    props,
+                    location,
+                    "洛白"));
         }
 
         int lineCursor = 0;
@@ -129,44 +145,50 @@ public final class DramaShotDrafts {
             if (alreadyHasDialogue(specs, formatLine(line))) {
                 continue;
             }
-            specs.add(new ShotSpec(
+            String goal = speakingAction(line, beats, Math.min(lineCursor, Math.max(0, beats.size() - 1)));
+            specs.add(clipSpec(
                     speakerTitle(line, "对白"),
-                    "推进对白",
-                    sceneLine(scene, beats, Math.min(lineCursor, Math.max(0, beats.size() - 1))),
+                    goal,
+                    furnishings,
                     formatLine(line),
                     specs.get(specs.size() - 1).continuityOut(),
-                    "对白落点",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    line.getSpeaker()));
         }
 
         int beatCursor = 1;
         while (specs.size() < min && beatCursor < beats.size()) {
             String beat = beats.get(beatCursor++);
-            specs.add(new ShotSpec(
+            String goal = visibleAction(beat, "中景");
+            specs.add(clipSpec(
                     "动作",
-                    beat,
-                    beat,
+                    goal,
+                    furnishings,
                     null,
                     specs.get(specs.size() - 1).continuityOut(),
-                    "动作落点",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    null));
         }
 
         while (specs.size() < min) {
-            specs.add(new ShotSpec(
+            String goal = visibleAction(beatAt(beats, Math.max(0, beats.size() - 1)), "中景");
+            specs.add(clipSpec(
                     first ? "日常收束" : "场次收束",
-                    "收住本场空间与人物",
-                    sceneLine(scene, beats, 0),
+                    goal,
+                    furnishings,
                     null,
                     specs.get(specs.size() - 1).continuityOut(),
-                    "切下一场",
+                    hookOut(goal, specs.get(specs.size() - 1).continuityOut()),
                     characters,
                     props,
-                    location));
+                    location,
+                    null));
         }
 
         if (specs.size() > max) {
@@ -191,9 +213,6 @@ public final class DramaShotDrafts {
             draft.setLocationName(spec.location());
             draft.setCastCount(spec.characters().size());
             shots.add(draft);
-        }
-        if (shots.size() >= 2) {
-            shots.get(shots.size() - 1).setContinuityOut("切下一场");
         }
         return shots;
     }
@@ -298,38 +317,267 @@ public final class DramaShotDrafts {
         return beats;
     }
 
-    private static String sceneLine(ScriptDoc.Scene scene, List<String> beats, int beatIndex) {
-        if (beats != null && beatIndex >= 0 && beatIndex < beats.size()) {
-            return headingOr("", scene) + (StringUtils.hasText(headingOr("", scene)) ? "，" : "")
-                    + beats.get(beatIndex);
-        }
-        if (StringUtils.hasText(scene.getHeading())) {
+    private static String sceneFurnishings(ScriptDoc.Scene scene) {
+        if (scene != null && StringUtils.hasText(scene.getHeading())) {
             return scene.getHeading().trim();
         }
-        if (StringUtils.hasText(scene.getLocation())) {
+        if (scene != null && StringUtils.hasText(scene.getLocation())) {
             return scene.getLocation().trim();
         }
         return "场景";
+    }
+
+    private static String openingAction(List<String> beats, ScriptDoc.Scene scene, List<String> characters) {
+        if (beats == null || beats.isEmpty()) {
+            String fallback = clip(scene == null ? null : scene.getAction(), 80);
+            return visibleAction(fallback, sizeFor(namesIn(characters, fallback)));
+        }
+        List<String> parts = new ArrayList<>();
+        for (String beat : beats) {
+            if (containsAny(beat, "闯入", "摔", "档案", "怀表", "掏表")) {
+                if (parts.isEmpty()) {
+                    parts.add(stripEnding(beat));
+                }
+                break;
+            }
+            parts.add(stripEnding(beat));
+            if (parts.size() >= 3) {
+                break;
+            }
+        }
+        if (parts.isEmpty()) {
+            parts.add(stripEnding(beats.get(0)));
+        }
+        String packed = String.join("，", parts);
+        return visibleAction(packed, sizeFor(namesIn(characters, packed)));
+    }
+
+    private static String beatAction(List<String> beats, int fallbackIndex, String shotSize, String... needles) {
+        List<String> parts = new ArrayList<>();
+        for (String beat : beats == null ? List.<String>of() : beats) {
+            if (containsAny(beat, needles)) {
+                parts.add(stripEnding(beat));
+                if (parts.size() >= 3) {
+                    break;
+                }
+            } else if (!parts.isEmpty()) {
+                break;
+            }
+        }
+        if (parts.isEmpty()) {
+            return visibleAction(beatAt(beats, fallbackIndex), shotSize);
+        }
+        return visibleAction(String.join("，", parts), shotSize);
+    }
+
+    private static String watchAction(List<String> beats) {
+        String matched = matchBeat(beats, "怀表", "掏表");
+        if (!StringUtils.hasText(matched)) {
+            matched = "洛白掏出古铜怀表";
+        }
+        return visibleAction(matched, "特写");
+    }
+
+    private static String speakingAction(ScriptDoc.Dialogue line, List<String> beats, int beatIndex) {
+        String beat = beatAt(beats, beatIndex);
+        if (StringUtils.hasText(beat)) {
+            return visibleAction(beat, "中景");
+        }
+        String speaker = line != null && StringUtils.hasText(line.getSpeaker()) ? line.getSpeaker().trim() : "角色";
+        return visibleAction(speaker + "开口说话", "中景");
+    }
+
+    private static String visibleAction(String action, String shotSize) {
+        String size = StringUtils.hasText(shotSize) ? shotSize.trim() : "中景";
+        String text = stripEnding(action);
+        if (!StringUtils.hasText(text)) {
+            return size + "。";
+        }
+        if (startsWithShotSize(text)) {
+            return ensurePeriod(text);
+        }
+        return size + "。" + ensurePeriod(text);
+    }
+
+    private static String matchBeat(List<String> beats, String... needles) {
+        if (beats == null || beats.isEmpty() || needles == null) {
+            return "";
+        }
+        for (String beat : beats) {
+            if (containsAny(beat, needles)) {
+                return beat;
+            }
+        }
+        return "";
+    }
+
+    private static String beatAt(List<String> beats, int index) {
+        if (beats == null || beats.isEmpty()) {
+            return "";
+        }
+        int i = Math.min(Math.max(index, 0), beats.size() - 1);
+        return beats.get(i);
+    }
+
+    private static String stripEnding(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String text = value.trim();
+        while (text.endsWith("。") || text.endsWith(".") || text.endsWith("！") || text.endsWith("!")) {
+            text = text.substring(0, text.length() - 1).trim();
+        }
+        return text;
+    }
+
+    private static String ensurePeriod(String value) {
+        String text = value.trim();
+        if (text.endsWith("。") || text.endsWith(".") || text.endsWith("！") || text.endsWith("!")
+                || text.endsWith("？") || text.endsWith("?")) {
+            return text;
+        }
+        return text + "。";
+    }
+
+    private static boolean startsWithShotSize(String text) {
+        return text.startsWith("特写") || text.startsWith("近景") || text.startsWith("中景")
+                || text.startsWith("全景") || text.startsWith("远景") || text.startsWith("过肩")
+                || text.startsWith("跟镜头") || text.startsWith("中近景");
+    }
+
+    private static String sizeFor(List<String> cast) {
+        return cast != null && cast.size() >= 2 ? "全景" : "中景";
+    }
+
+    private static ShotSpec clipSpec(
+            String title,
+            String goal,
+            String furnishings,
+            String dialogue,
+            String continuityIn,
+            String continuityOut,
+            List<String> characters,
+            List<String> props,
+            String location,
+            String ensureCharacter) {
+        List<String> cast = namesIn(characters, goal, dialogue);
+        if (StringUtils.hasText(ensureCharacter)) {
+            cast = ensureName(cast, characters, ensureCharacter);
+        }
+        List<String> shotProps = namesIn(props, goal, dialogue);
+        if (containsAny(goal, "怀表", "掏表")) {
+            shotProps = ensureName(shotProps, props, "古铜怀表");
+        }
+        return new ShotSpec(
+                title,
+                goal,
+                furnishings,
+                dialogue,
+                continuityIn,
+                continuityOut,
+                cast,
+                shotProps,
+                location);
+    }
+
+    private static List<String> namesIn(List<String> pool, String... texts) {
+        return new ArrayList<>(DramaNameMentions.mentionedInOrder(pool, texts));
+    }
+
+    private static List<String> ensureName(List<String> current, List<String> pool, String wanted) {
+        List<String> next = current == null ? new ArrayList<>() : new ArrayList<>(current);
+        if (!StringUtils.hasText(wanted) || hasName(next, wanted)) {
+            return next;
+        }
+        String hit = matchFromPool(pool, wanted);
+        if (hit != null) {
+            next.add(hit);
+        }
+        return next;
+    }
+
+    private static String matchFromPool(List<String> pool, String wanted) {
+        if (pool == null || !StringUtils.hasText(wanted)) {
+            return null;
+        }
+        for (String name : pool) {
+            if (wanted.equals(name) || (name != null && name.contains(wanted))) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    private static String hookIn(String action, String fallback) {
+        return firstOrLastHook(action, fallback, true);
+    }
+
+    private static String hookOut(String action, String fallback) {
+        return firstOrLastHook(action, fallback, false);
+    }
+
+    private static String firstOrLastHook(String action, String fallback, boolean first) {
+        String text = stripShotSizePrefix(stripEnding(action));
+        if (!StringUtils.hasText(text)) {
+            return StringUtils.hasText(fallback) ? fallback : "画面起幅";
+        }
+        String[] parts = text.split("[，；;、]+");
+        String pick = first ? parts[0].trim() : parts[parts.length - 1].trim();
+        if (!StringUtils.hasText(pick)) {
+            pick = text;
+        }
+        return clip(pick, 24);
+    }
+
+    private static String stripShotSizePrefix(String value) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
+        String text = value.trim();
+        if (!startsWithShotSize(text)) {
+            return text;
+        }
+        int cut = text.indexOf('。');
+        int comma = text.indexOf('，');
+        if (cut < 0 || (comma >= 0 && comma < cut)) {
+            cut = comma;
+        }
+        if (cut >= 0 && cut + 1 < text.length()) {
+            return text.substring(cut + 1).trim();
+        }
+        return text;
     }
 
     private static String headingOr(String fallback, ScriptDoc.Scene scene) {
         return scene != null && StringUtils.hasText(scene.getHeading()) ? scene.getHeading().trim() : fallback;
     }
 
-    private static String firstLine(List<ScriptDoc.Dialogue> lines) {
-        return lines == null || lines.isEmpty() ? null : formatLine(lines.get(0));
-    }
-
-    private static String lineOf(List<ScriptDoc.Dialogue> lines, String speaker) {
-        if (lines == null) {
+    private static String lineMatching(List<ScriptDoc.Dialogue> lines, List<String> cast) {
+        if (lines == null || cast == null || cast.isEmpty()) {
             return null;
         }
         for (ScriptDoc.Dialogue line : lines) {
-            if (line != null && speaker.equals(line.getSpeaker())) {
+            if (line != null && hasName(cast, line.getSpeaker())) {
                 return formatLine(line);
             }
         }
         return null;
+    }
+
+    private static ScriptDoc.Dialogue dialogueOf(List<ScriptDoc.Dialogue> lines, String speaker) {
+        if (lines == null || !StringUtils.hasText(speaker)) {
+            return null;
+        }
+        for (ScriptDoc.Dialogue line : lines) {
+            if (line != null && speaker.equals(line.getSpeaker())) {
+                return line;
+            }
+        }
+        return null;
+    }
+
+    private static String lineOf(List<ScriptDoc.Dialogue> lines, String speaker) {
+        return formatLine(dialogueOf(lines, speaker));
     }
 
     private static String formatLine(ScriptDoc.Dialogue line) {
@@ -392,6 +640,9 @@ public final class DramaShotDrafts {
     }
 
     private static String clip(String value, int max) {
+        if (!StringUtils.hasText(value)) {
+            return "";
+        }
         String text = value.trim().replaceAll("\\s+", " ");
         return text.length() <= max ? text : text.substring(0, max);
     }

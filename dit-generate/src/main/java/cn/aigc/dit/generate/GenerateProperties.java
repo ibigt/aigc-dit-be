@@ -13,6 +13,7 @@ public class GenerateProperties {
     private Runninghub runninghub = new Runninghub();
     private Agnes agnes = new Agnes();
     private Ark ark = new Ark();
+    private Minimax minimax = new Minimax();
     private Ffmpeg ffmpeg = new Ffmpeg();
 
     /**
@@ -24,7 +25,7 @@ public class GenerateProperties {
         private boolean enabled = false;
         private String baseUrl = "http://127.0.0.1:8188";
         private int connectTimeoutSeconds = 15;
-        private int requestTimeoutSeconds = 60;
+        private int requestTimeoutSeconds = 180;
         private int downloadTimeoutSeconds = 600;
     }
 
@@ -106,11 +107,34 @@ public class GenerateProperties {
     }
 
     /**
+     * MiniMax 官方视频 V2：{@code POST /v2/video_generation}，再 {@code GET /v2/query/video_generation/{id}}。
+     * 默认地址 {@code https://api.minimax.cn}；模型记录上的按量 API Key 优先。不要用 Token Plan 订阅 Key。
+     */
+    @Data
+    public static class Minimax {
+        private String baseUrl = "https://api.minimax.cn";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        private int requestTimeoutSeconds = 120;
+        private int pollTimeoutSeconds = 30;
+        /** 官方建议约 10 秒轮询一次。 */
+        private int pollIntervalSeconds = 10;
+        private int rateLimitBackoffSeconds = 8;
+        private int downloadTimeoutSeconds = 600;
+        private int downloadRetries = 3;
+    }
+
+    /**
      * 成片拼接超时。stream copy 通常几十秒；编码不一致回退重编码时需更长。
+     * 分镜出片烧字幕：有对白才烧；缺中文字体或 ffmpeg 失败时保留原片。
      */
     @Data
     public static class Ffmpeg {
         private int concatCopyTimeoutSeconds = 180;
         private int concatEncodeTimeoutSeconds = 900;
+        private boolean captionBurnEnabled = true;
+        /** 可选。不配则按 Linux Noto / Windows 微软雅黑等常见路径探测。 */
+        private String captionFont = "";
+        private int captionTimeoutSeconds = 180;
     }
 }

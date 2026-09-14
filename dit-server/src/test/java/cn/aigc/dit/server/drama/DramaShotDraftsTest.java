@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DramaShotDraftsTest {
@@ -21,10 +22,32 @@ class DramaShotDraftsTest {
         assertTrue(shots.size() <= DramaContract.FIRST_SCENE_MAX_SHOTS);
         assertTrue(shots.stream().allMatch(item -> DramaContract.DURATIONS.contains(item.getDurationSec())));
         assertTrue(shots.stream().allMatch(item -> item.getCastCount() == item.getCharacterNames().size()));
-        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("开场") || "交代空间与人物关系".equals(item.getNarrativeGoal())));
-        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("局长") || item.getNarrativeGoal().contains("局长")));
-        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("怀表") || item.getNarrativeGoal().contains("道具")));
-        assertTrue(shots.stream().allMatch(item -> item.getCharacterNames().contains("洛白")));
+        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("开场")));
+        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("夏安")));
+        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("局长")));
+        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("怀表")));
+        assertTrue(shots.stream().anyMatch(item -> item.getCharacterNames().contains("洛白")));
+        assertTrue(shots.stream().anyMatch(item -> item.getCharacterNames().contains("夏安")));
+        assertTrue(shots.stream().anyMatch(item -> item.getCharacterNames().contains("局长")));
+        assertFalse(shots.get(0).getCharacterNames().contains("局长"));
+        assertTrue(shots.get(0).getCharacterNames().containsAll(List.of("夏安", "洛白")));
+        assertEquals(List.of("夏安", "洛白"), shots.get(0).getCharacterNames());
+        assertTrue(shots.stream().noneMatch(item -> plotSpeak(item.getNarrativeGoal())));
+        assertTrue(shots.stream().noneMatch(item -> plotSpeakHook(item.getContinuityIn()) || plotSpeakHook(item.getContinuityOut())));
+        assertTrue(shots.get(0).getNarrativeGoal().startsWith("全景"));
+        assertTrue(shots.get(0).getNarrativeGoal().contains("风扇") || shots.get(0).getNarrativeGoal().contains("夏安"));
+        assertTrue(shots.stream().anyMatch(item -> item.getNarrativeGoal().contains("夏安") && item.getNarrativeGoal().contains("白板")));
+        assertTrue(shots.stream().anyMatch(item -> item.getNarrativeGoal().contains("局长")));
+        assertTrue(shots.stream().anyMatch(item -> item.getNarrativeGoal().contains("怀表") && item.getNarrativeGoal().startsWith("特写")));
+        assertTrue(shots.stream().allMatch(item -> "幻梦侦探社 日 内".equals(item.getScene())));
+        assertTrue(shots.stream().noneMatch(item -> item.getPropNames().contains("古铜怀表")
+                && item.getNarrativeGoal() != null && !item.getNarrativeGoal().contains("怀表")));
+        assertTrue(shots.stream().anyMatch(item -> item.getTitle().contains("怀表")
+                && item.getPropNames().contains("古铜怀表")
+                && item.getCharacterNames().equals(List.of("洛白"))));
+        for (int i = 1; i < shots.size(); i++) {
+            assertEquals(shots.get(i - 1).getContinuityOut(), shots.get(i).getContinuityIn());
+        }
     }
 
     @Test
@@ -42,6 +65,12 @@ class DramaShotDraftsTest {
         assertTrue(list.getShots().size() >= DramaContract.MIN_SHOTS_PER_CHAPTER);
         assertTrue(list.getShots().size() <= DramaContract.MAX_SHOTS_PER_CHAPTER);
         assertEquals(Integer.valueOf(2), list.getShots().get(0).getChapterIndex());
+        assertTrue(list.getShots().stream().noneMatch(item -> plotSpeak(item.getNarrativeGoal())));
+        assertTrue(list.getShots().get(0).getNarrativeGoal().contains("入梦")
+                || list.getShots().get(0).getNarrativeGoal().contains("光点"));
+        assertEquals("市中心医院ICU 夜 内", list.getShots().get(0).getScene());
+        assertTrue(list.getShots().get(0).getCharacterNames().contains("洛白"));
+        assertFalse(list.getShots().get(0).getCharacterNames().contains("徐医生"));
     }
 
     private static ScriptDoc detectiveScene() {
@@ -60,5 +89,22 @@ class DramaShotDraftsTest {
         scene.setDialogue(List.of(line));
         doc.setScenes(List.of(scene));
         return doc;
+    }
+
+    private static boolean plotSpeak(String goal) {
+        if (goal == null || goal.isBlank()) {
+            return true;
+        }
+        return goal.contains("交代") || goal.contains("推进对白") || goal.contains("关键道具出场")
+                || goal.contains("收住本场");
+    }
+
+    private static boolean plotSpeakHook(String value) {
+        if (value == null || value.isBlank()) {
+            return true;
+        }
+        return value.contains("环境立住") || value.contains("局长将至") || value.contains("白板线索")
+                || value.contains("冲突立住") || value.contains("对白落点") || value.contains("动作落点")
+                || value.contains("切下一场") || value.contains("洛白被叫醒") || value.contains("怀表特写");
     }
 }

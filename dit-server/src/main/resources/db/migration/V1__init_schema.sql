@@ -362,7 +362,7 @@ CREATE TABLE IF NOT EXISTS drama_series (
     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
     CONSTRAINT ck_drama_series_resolution CHECK (default_resolution IN ('480P', '720P')),
-    CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec IN (5, 10, 15)),
+    CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec >= 5 AND default_duration_sec <= 15),
     CONSTRAINT ck_drama_series_planned CHECK (planned_episode_count >= 1 AND planned_episode_count <= 99)
 );
 
@@ -376,7 +376,7 @@ COMMENT ON COLUMN drama_series.style_key IS '风格键（anime-comic / ancient-r
 COMMENT ON COLUMN drama_series.style_prefix IS '风格前缀（仅分镜编译注入，由 style_key 在服务端解析，不暴露编辑）';
 COMMENT ON COLUMN drama_series.aspect_ratio IS '画幅（16:9 / 9:16 / 1:1）';
 COMMENT ON COLUMN drama_series.default_resolution IS '默认清晰度（480P / 720P）；验收默认 720P';
-COMMENT ON COLUMN drama_series.default_duration_sec IS '默认单镜时长秒（仅 5 / 10 / 15，对齐 MiniMax）';
+COMMENT ON COLUMN drama_series.default_duration_sec IS '默认单镜时长秒（5–15）';
 COMMENT ON COLUMN drama_series.planned_episode_count IS '规划集数';
 COMMENT ON COLUMN drama_series.text_model_id IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，乙走规则引擎';
 COMMENT ON COLUMN drama_series.image_model_id IS '资产页全局图像模型（ai_model.id，category=image）；空则不可 t2i，仍可上传';
@@ -400,6 +400,7 @@ CREATE TABLE IF NOT EXISTS drama_episode (
     engine                      VARCHAR(16)  NOT NULL DEFAULT 'pending',
     status                      VARCHAR(16)  NOT NULL DEFAULT '未开始',
     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
+    storyboard_drafting_at      TIMESTAMPTZ,
     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
@@ -422,12 +423,14 @@ COMMENT ON COLUMN drama_episode.script IS '分场剧本文档 JSON（ScriptDoc�
 COMMENT ON COLUMN drama_episode.engine IS '分场引擎：pending 乙未合入；rules 规则分场；llm 文本模型';
 COMMENT ON COLUMN drama_episode.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
 COMMENT ON COLUMN drama_episode.inherited_from_episode_id IS '继承来源集ID（下一集复制资产时记录）';
+COMMENT ON COLUMN drama_episode.storyboard_drafting_at IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试';
 COMMENT ON COLUMN drama_episode.created_at IS '创建时间';
 COMMENT ON COLUMN drama_episode.updated_at IS '更新时间';
 
 -- 已有库 CREATE IF NOT EXISTS 不会加列，这里幂等补齐。
 -- 更旧的已执行 V1 不会重跑本脚本；启动时由 FlywayConfig.ensureDramaTables 再幂等建
--- drama_asset / drama_chapter / drama_shot，并补 image_model_id / video_model_id。
+-- drama_asset / drama_chapter / drama_shot，并补 image_model_id / video_model_id /
+-- prompt_override / storyboard_drafting_at / 时长约束。
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS text_model_id BIGINT REFERENCES ai_model (id);
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_model_id BIGINT REFERENCES ai_model (id);
 ALTER TABLE drama_series ADD COLUMN IF NOT EXISTS image_adapter_key VARCHAR(64);
@@ -555,14 +558,16 @@ CREATE TABLE IF NOT EXISTS drama_shot (
     cast_count              INTEGER      NOT NULL DEFAULT 0,
     compiled_prompt         TEXT,
     compiled_fingerprint    VARCHAR(128),
+    prompt_override         VARCHAR(4000),
     status                  VARCHAR(16)  NOT NULL DEFAULT '待确认',
     gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
     video_key               VARCHAR(512),
+    video_poster_key        VARCHAR(512),
     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
     CONSTRAINT ck_drama_shot_index CHECK (shot_index >= 1),
-    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec IN (5, 10, 15)),
+    CONSTRAINT ck_drama_shot_duration CHECK (duration_sec >= 5 AND duration_sec <= 15),
     CONSTRAINT ck_drama_shot_cast CHECK (cast_count >= 0),
     CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
 );
@@ -578,7 +583,7 @@ COMMENT ON COLUMN drama_shot.chapter_id IS '所属章节ID';
 COMMENT ON COLUMN drama_shot.user_id IS '所属用户ID';
 COMMENT ON COLUMN drama_shot.shot_index IS '集内镜序号（从 1 起）';
 COMMENT ON COLUMN drama_shot.title IS '分镜标题';
-COMMENT ON COLUMN drama_shot.duration_sec IS '时长秒（仅 5 / 10 / 15）';
+COMMENT ON COLUMN drama_shot.duration_sec IS '时长秒（5–15）';
 COMMENT ON COLUMN drama_shot.narrative_goal IS '本镜叙事目标';
 COMMENT ON COLUMN drama_shot.scene IS '场景/空间描述';
 COMMENT ON COLUMN drama_shot.dialogue IS '台词';
@@ -591,9 +596,11 @@ COMMENT ON COLUMN drama_shot.location_name IS '场景名';
 COMMENT ON COLUMN drama_shot.cast_count IS '人数，必须等于 character_names.length';
 COMMENT ON COLUMN drama_shot.compiled_prompt IS '编译后的自包含视频 prompt；资产或剧本过期则作废';
 COMMENT ON COLUMN drama_shot.compiled_fingerprint IS '风格前缀 + 资产 identity_version + 镜字段哈希；不匹配则 compiled_prompt 作废';
+COMMENT ON COLUMN drama_shot.prompt_override IS '用户手动覆盖的视频提示词；非空时优先于 compiled_prompt 出片';
 COMMENT ON COLUMN drama_shot.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';
 COMMENT ON COLUMN drama_shot.gen_task_id IS '阶段 6 出片任务（关联 gen_task.id）';
 COMMENT ON COLUMN drama_shot.video_key IS '阶段 6 镜头成片相对对象存储 key';
+COMMENT ON COLUMN drama_shot.video_poster_key IS '成片首帧（ffmpeg 抽出的 poster.webp）；底片条预览用，未出片为空';
 COMMENT ON COLUMN drama_shot.created_at IS '创建时间';
 COMMENT ON COLUMN drama_shot.updated_at IS '更新时间';
 
@@ -601,7 +608,25 @@ ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_key VARCHAR(512);
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_poster_key VARCHAR(512);
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_fingerprint VARCHAR(128);
 ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS film_assembled_at TIMESTAMPTZ;
+ALTER TABLE drama_episode ADD COLUMN IF NOT EXISTS storyboard_drafting_at TIMESTAMPTZ;
 COMMENT ON COLUMN drama_episode.film_key IS '本集成片 MP4 相对对象存储 key（按 shot_index 硬切拼接）';
 COMMENT ON COLUMN drama_episode.film_poster_key IS '成片封面（ffmpeg 抽出的 poster.webp）';
 COMMENT ON COLUMN drama_episode.film_fingerprint IS '按镜序 shotId:videoKey:durationSec 的 SHA-256；与当前分镜不一致则成片过期';
 COMMENT ON COLUMN drama_episode.film_assembled_at IS '最近一次拼接成片时间';
+COMMENT ON COLUMN drama_episode.storyboard_drafting_at IS '正在按场拆镜的开始时间；空表示空闲。超时视为僵死可重试';
+
+ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS prompt_override VARCHAR(4000);
+ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS video_poster_key VARCHAR(512);
+COMMENT ON COLUMN drama_shot.prompt_override IS '用户手动覆盖的视频提示词；非空时优先于 compiled_prompt 出片';
+COMMENT ON COLUMN drama_shot.video_poster_key IS '成片首帧（ffmpeg 抽出的 poster.webp）；底片条预览用，未出片为空';
+
+ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_duration;
+ALTER TABLE drama_series
+    ADD CONSTRAINT ck_drama_series_duration
+    CHECK (default_duration_sec >= 5 AND default_duration_sec <= 15);
+ALTER TABLE drama_shot DROP CONSTRAINT IF EXISTS ck_drama_shot_duration;
+ALTER TABLE drama_shot
+    ADD CONSTRAINT ck_drama_shot_duration
+    CHECK (duration_sec >= 5 AND duration_sec <= 15);
+COMMENT ON COLUMN drama_series.default_duration_sec IS '默认单镜时长秒（5–15）';
+COMMENT ON COLUMN drama_shot.duration_sec IS '时长秒（5–15）';

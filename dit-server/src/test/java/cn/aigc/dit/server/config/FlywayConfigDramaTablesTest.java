@@ -32,5 +32,7 @@ class FlywayConfigDramaTablesTest {
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS image_model_id"), "应补 image_model_id");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS video_model_id"), "应补 video_model_id");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS video_poster_key"), "应补 video_poster_key");
+        assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS prompt_override"), "应补 prompt_override");
+        assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS storyboard_drafting_at"), "应补 storyboard_drafting_at");
     }
 }

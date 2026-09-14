@@ -107,6 +107,23 @@ class ArkGenerateProviderTest {
     }
 
     @Test
+    void submitR2vRetriesT2vWhenReferenceLooksLikeRealPerson() throws Exception {
+        http.postError = new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
+        http.postBody = """
+                {"id":"cgt-t2v-fallback","status":"queued"}
+                """;
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+
+        SubmitResult submitted = provider.submit(
+                video("r2v").setReferences(List.of(new ReferenceAsset("image", "users/8/assets/a.png"))));
+        assertEquals("cgt-t2v-fallback", submitted.getJobId());
+        assertEquals(2, http.postCount);
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals(1, body.get("content").size());
+        assertEquals("text", body.get("content").get(0).get("type").asText());
+    }
+
+    @Test
     void submitI2vSendsFirstAndLastFrame() throws Exception {
         http.postBody = """
                 {"id":"cgt-i2v","status":"queued"}
@@ -195,13 +212,21 @@ class ArkGenerateProviderTest {
         private URI lastPollUri;
         private String lastJson;
         private int pollCount;
+        private int postCount;
+        private BizException postError;
         private BizException pollError;
         private String pollErrorForHostPath;
 
         @Override
         public String postJson(URI uri, String bearerToken, String jsonBody) {
+            postCount++;
             lastUri = uri;
             lastJson = jsonBody;
+            if (postError != null) {
+                BizException error = postError;
+                postError = null;
+                throw error;
+            }
             return postBody;
         }
 

@@ -28,16 +28,22 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_COMFYUI = "comfyui";
     public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_ARK = "ark";
+    public static final String TRANSPORT_MINIMAX = "minimax";
     public static final String TRANSPORT_MOCK = "mock";
 
     public static final String PROVIDER_OFFICIAL = "官方API";
     public static final String PROVIDER_OFFICIAL_TOKEN_PLAN = "官方API（token plan）";
+    public static final String PROVIDER_COMFYUI = "ComfyUI";
     public static final String AGNES_DEFAULT_ENDPOINT = "https://api.agnes-ai.cn/v1";
     public static final String AGNES_IMAGE_MODEL = "agnes-image-2.5-flash";
     public static final String AGNES_VIDEO_MODEL = "agnes-video-2.5-flash";
     public static final String ARK_DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3";
     public static final String SEEDANCE_2_0_MODEL = "doubao-seedance-2-0-260128";
     public static final String SEEDANCE_2_5_MODEL = "doubao-seedance-2-5-260628";
+    public static final String MINIMAX_DEFAULT_ENDPOINT = "https://api.minimax.cn";
+    public static final String MINIMAX_COMFY_ENDPOINT = "http://127.0.0.1:8188";
+    public static final String MINIMAX_H3_MODEL = "MiniMax-H3";
+    public static final String MINIMAX_H3_MAX_MODEL = "MiniMax-H3-Max";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
@@ -54,8 +60,8 @@ public final class AdapterCatalog {
             new Spec(SEEDANCE_2_5, "Seedance 2.5", ModelCategory.VIDEO, TRANSPORT_ARK, PROVIDER_OFFICIAL,
                     ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
-            new Spec(MINIMAX_H3, "MiniMax-H3", ModelCategory.VIDEO, TRANSPORT_COMFYUI, "ComfyUI",
-                    "http://127.0.0.1:8188", List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+            new Spec(MINIMAX_H3, "MiniMax-H3", ModelCategory.VIDEO, TRANSPORT_MINIMAX, PROVIDER_OFFICIAL,
+                    MINIMAX_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
             new Spec(AGNES_IMAGE_2_5, "Agnes Image 2.5", ModelCategory.IMAGE, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
                     AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
@@ -146,7 +152,7 @@ public final class AdapterCatalog {
         if (key.contains("agnes")) {
             return AGNES_VIDEO_2_5;
         }
-        if (key.contains("minimax") || (prov.contains("comfy") && ModelCategory.VIDEO.equals(cat))) {
+        if (key.contains("minimax") || key.contains("hailuo") || key.contains("mini-max")) {
             return MINIMAX_H3;
         }
         if (key.contains("seedance") || (prov.contains("running") && ModelCategory.VIDEO.equals(cat))) {
@@ -163,6 +169,9 @@ public final class AdapterCatalog {
 
     public static String transport(String adapterKey, String provider) {
         String key = resolveKey(adapterKey, provider, null, null);
+        if (MINIMAX_H3.equals(key) && isComfyUiProvider(provider)) {
+            return TRANSPORT_COMFYUI;
+        }
         Spec spec = find(key);
         if (spec != null) {
             return spec.transport();
@@ -199,6 +208,22 @@ public final class AdapterCatalog {
         return spec != null && TRANSPORT_ARK.equals(spec.transport());
     }
 
+    public static boolean isMiniMax(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && MINIMAX_H3.equals(spec.key());
+    }
+
+    public static boolean isMiniMaxOfficial(String adapterKey, String provider) {
+        return isMiniMax(adapterKey) && !isComfyUiProvider(provider);
+    }
+
+    public static boolean isComfyUiProvider(String provider) {
+        if (provider == null || provider.isBlank()) {
+            return false;
+        }
+        return provider.toLowerCase(Locale.ROOT).contains("comfy");
+    }
+
     /** 模型标识是火山官方 Seedance，不能再落到 Agnes / RunningHub。 */
     public static boolean looksLikeOfficialSeedance(String modelKey) {
         String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
@@ -225,6 +250,9 @@ public final class AdapterCatalog {
     }
 
     public static String officialProviderOf(String requested, String adapterKey) {
+        if (MINIMAX_H3.equals(adapterKey)) {
+            return isComfyUiProvider(requested) ? PROVIDER_COMFYUI : PROVIDER_OFFICIAL;
+        }
         if (isArk(adapterKey) && isOfficialTokenPlan(requested)) {
             return PROVIDER_OFFICIAL_TOKEN_PLAN;
         }
@@ -297,6 +325,9 @@ public final class AdapterCatalog {
         }
         if (SEEDANCE_2_5.equals(adapterKey)) {
             return SEEDANCE_2_5_MODEL;
+        }
+        if (MINIMAX_H3.equals(adapterKey)) {
+            return MINIMAX_H3_MODEL;
         }
         return "";
     }

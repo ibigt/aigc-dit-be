@@ -168,7 +168,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         if (StringUtils.hasText(req.getEndpoint())) {
             model.setEndpoint(trimToNull(req.getEndpoint()));
         } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
-            model.setEndpoint(spec.defaultEndpoint());
+            model.setEndpoint(defaultEndpoint(spec, model.getProvider()));
         }
         if (AdapterCatalog.isOfficialTokenPlan(model.getProvider()) && AdapterCatalog.isArk(spec.key())) {
             model.setEndpoint(ArkUrls.v3Base(model.getEndpoint(), spec.defaultEndpoint(), model.getProvider()));
@@ -320,6 +320,13 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
             rows.add(TextAdapterCatalog.toAdminView(spec));
         }
         return rows;
+    }
+
+    private static String defaultEndpoint(AdapterCatalog.Spec spec, String provider) {
+        if (AdapterCatalog.isMiniMax(spec.key()) && AdapterCatalog.isComfyUiProvider(provider)) {
+            return AdapterCatalog.MINIMAX_COMFY_ENDPOINT;
+        }
+        return spec.defaultEndpoint();
     }
 
     private AdapterCatalog.Spec resolveSpec(AdminModelSaveReq req, AiModel model, String category, String modelKey,

@@ -7,13 +7,16 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * 分镜视频 prompt 编译器。每镜自包含：Style Prefix + Active References（只注入短身份）
- * + 电影场面硬约束 + 场景/动作/台词 + Cast（只点名已锁定出图角色）+ 对白口型。
+ * 分镜视频 prompt 编译器。每镜自包含：Picture 锚点 + 风格前缀 + Active References（完整身份短句）
+ * + 电影场面硬约束 + 场景/动作/台词（角色名绑到 Picture）+ Cast + 对白口型。
+ * 官方 Seedance 按参考图像素审图，不靠提示词里删「脸/五官」或写「不是真人」绕过。
  */
 public final class DramaStoryboardCompiler {
 
@@ -81,6 +84,15 @@ public final class DramaStoryboardCompiler {
                 : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
 
         StringBuilder prompt = new StringBuilder();
+        if (!refs.isEmpty()) {
+            for (int i = 1; i <= refs.size(); i++) {
+                if (i > 1) {
+                    prompt.append(' ');
+                }
+                prompt.append("<Picture ").append(i).append('>');
+            }
+            prompt.append('\n');
+        }
         prompt.append(prefix);
         if (!prefix.endsWith("。") && !prefix.endsWith(".")) {
             prompt.append('。');
@@ -110,11 +122,12 @@ public final class DramaStoryboardCompiler {
         }
 
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
-        appendLine(prompt, "Scene", content.scene());
-        appendLine(prompt, "Action", content.narrativeGoal());
-        appendLine(prompt, "Dialogue", content.dialogue());
-        appendLine(prompt, "Continuity in", content.continuityIn());
-        appendLine(prompt, "Continuity out", content.continuityOut());
+        Map<String, Integer> pictures = pictureIndexByName(refs);
+        appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
+        appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
+        appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
+        appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
+        appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
         prompt.append(castConstraint(content, refs)).append('\n');
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
         String spoken = spokenDialogueConstraint(content.dialogue());
@@ -154,6 +167,41 @@ public final class DramaStoryboardCompiler {
             }
         }
         return sha256(raw.toString());
+    }
+
+    static Map<String, Integer> pictureIndexByName(List<ActiveReference> references) {
+        Map<String, Integer> pictures = new LinkedHashMap<>();
+        if (references == null) {
+            return pictures;
+        }
+        for (int i = 0; i < references.size(); i++) {
+            ActiveReference ref = references.get(i);
+            if (ref != null && StringUtils.hasText(ref.name())) {
+                pictures.putIfAbsent(ref.name().trim(), i + 1);
+            }
+        }
+        return pictures;
+    }
+
+    static String bindPictureNames(String text, Map<String, Integer> pictures) {
+        if (!StringUtils.hasText(text) || pictures == null || pictures.isEmpty()) {
+            return text;
+        }
+        String result = text;
+        List<String> names = new ArrayList<>(pictures.keySet());
+        names.sort((left, right) -> Integer.compare(right.length(), left.length()));
+        for (String name : names) {
+            Integer picture = pictures.get(name);
+            if (picture == null || !result.contains(name)) {
+                continue;
+            }
+            String token = name + "（<Picture " + picture + ">）";
+            if (result.contains(token)) {
+                continue;
+            }
+            result = result.replace(name, token);
+        }
+        return result;
     }
 
     static String fullIdentity(ActiveReference ref) {
@@ -201,7 +249,14 @@ public final class DramaStoryboardCompiler {
         StringBuilder line = new StringBuilder();
         line.append("Cast: 本镜恰好 ").append(count).append(" 人，不得增删角色。");
         if (!picturedNames.isEmpty()) {
-            line.append("出场：").append(String.join("、", picturedNames)).append("。");
+            line.append("出场：");
+            List<String> labeled = new ArrayList<>();
+            Map<String, Integer> pictures = pictureIndexByName(references);
+            for (String name : picturedNames) {
+                Integer picture = pictures.get(name);
+                labeled.add(picture == null ? name : name + "=<Picture " + picture + ">");
+            }
+            line.append(String.join("、", labeled)).append("。");
         }
         if (!unnamedLooks.isEmpty()) {
             line.append("未出图角色按外貌出演：").append(String.join("；", unnamedLooks)).append("。");
@@ -209,11 +264,44 @@ public final class DramaStoryboardCompiler {
         return line.toString();
     }
 
+    /**
+     * 烧字幕用的台词正文：去掉「角色名：」，空行与空对白丢弃。无台词返回空列表。
+     */
+    public static List<String> captionLines(String dialogue) {
+        List<String> lines = new ArrayList<>();
+        for (SpokenUtterance spoken : spokenUtterances(dialogue)) {
+            lines.add(spoken.words());
+        }
+        return lines;
+    }
+
     static String spokenDialogueConstraint(String dialogue) {
         if (!StringUtils.hasText(dialogue)) {
             return "";
         }
         List<String> contracts = new ArrayList<>();
+        for (SpokenUtterance spoken : spokenUtterances(dialogue)) {
+            String speaker = spoken.speaker();
+            String words = spoken.words();
+            if ("旁白".equals(speaker) || "画外音".equals(speaker) || "解说".equals(speaker)) {
+                contracts.add("使用清晰自然的" + speaker + "逐字念出：“" + words + "”");
+            } else {
+                contracts.add("角色“" + speaker + "”逐字说出：“" + words + "”，口型与每个字严格同步");
+            }
+        }
+        StringBuilder line = new StringBuilder("对白执行：");
+        if (!contracts.isEmpty()) {
+            line.append(String.join("；", contracts)).append("。");
+        }
+        line.append(DIALOGUE_EXECUTION_TAIL);
+        return line.toString();
+    }
+
+    static List<SpokenUtterance> spokenUtterances(String dialogue) {
+        if (!StringUtils.hasText(dialogue)) {
+            return List.of();
+        }
+        List<SpokenUtterance> utterances = new ArrayList<>();
         for (String rawLine : dialogue.split("\\r?\\n")) {
             String line = rawLine.trim();
             if (!StringUtils.hasText(line)) {
@@ -232,18 +320,12 @@ public final class DramaStoryboardCompiler {
             if (!StringUtils.hasText(words)) {
                 continue;
             }
-            if ("旁白".equals(speaker) || "画外音".equals(speaker) || "解说".equals(speaker)) {
-                contracts.add("使用清晰自然的" + speaker + "逐字念出：“" + words + "”");
-            } else {
-                contracts.add("角色“" + speaker + "”逐字说出：“" + words + "”，口型与每个字严格同步");
-            }
+            utterances.add(new SpokenUtterance(speaker, words));
         }
-        StringBuilder line = new StringBuilder("对白执行：");
-        if (!contracts.isEmpty()) {
-            line.append(String.join("；", contracts)).append("。");
-        }
-        line.append(DIALOGUE_EXECUTION_TAIL);
-        return line.toString();
+        return utterances;
+    }
+
+    record SpokenUtterance(String speaker, String words) {
     }
 
     private static List<String> unnamedLooks(
@@ -262,7 +344,7 @@ public final class DramaStoryboardCompiler {
                     break;
                 }
             }
-            looks.add(StringUtils.hasText(identity) ? identity : "外貌普通、五官不可识别的配角");
+            looks.add(StringUtils.hasText(identity) ? identity : "外貌普通的配角");
         }
         return looks;
     }

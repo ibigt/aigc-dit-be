@@ -1,4 +1,4 @@
-# dit-server 多阶段构建：Maven 打包 → JRE + ffmpeg（抽封面）
+# dit-server 多阶段构建：Maven 打包 → JRE + ffmpeg（抽封面 / 烧字幕）+ 中文字体
 # 日常更新若已在本机 Maven 打包，可用 deploy/Dockerfile.prebuilt 只替换 /app/app.jar，见 deploy/update-backend-image.sh
 FROM maven:3.9.9-eclipse-temurin-17 AS builder
 WORKDIR /build
@@ -23,7 +23,8 @@ FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates tzdata fontconfig fonts-noto-cjk fonts-wqy-microhei \
+    && fc-cache -f \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /mnt/ai-gc/logs
 

@@ -14,10 +14,8 @@ import java.util.Map;
 public final class GenerateTaskViews {
 
     public static final String OFFICIAL_ERROR_KEY = "officialError";
-    public static final String REAL_PERSON_MESSAGE =
-            "参考图可能包含真人，官方 Seedance 已拒绝。请更换不含真人脸的参考图，或改用 MiniMax 等本地模型。";
-    public static final String FOREIGN_SUBMIT_FALLBACK =
-            "官方 Seedance 未接受这次提交。参考图若含真人脸会被接口拒绝，请换图后重试，或改用 MiniMax。";
+    public static final String QUOTA_MESSAGE =
+            "官方 Seedance 额度繁忙或请求过密。请等一两分钟再点生成，不要连续点多镜。";
 
     private GenerateTaskViews() {
     }
@@ -68,7 +66,7 @@ public final class GenerateTaskViews {
             if (StringUtils.hasText(official)) {
                 return friendlySeedanceError(official);
             }
-            return FOREIGN_SUBMIT_FALLBACK;
+            return null;
         }
         return friendlySeedanceError(task.getErrorMessage());
     }
@@ -86,8 +84,8 @@ public final class GenerateTaskViews {
             return message;
         }
         String lower = message.toLowerCase(Locale.ROOT);
-        if (lower.contains("real person") || message.contains("真人")) {
-            return REAL_PERSON_MESSAGE;
+        if (lower.contains("http 429") || lower.contains("exceeded the quota") || lower.contains("rate limit")) {
+            return QUOTA_MESSAGE;
         }
         return message;
     }

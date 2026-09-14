@@ -88,25 +88,34 @@ public final class DramaTextPrompts {
                   "index": 1,
                   "title": "侦探社开场",
                   "duration_sec": 15,
-                  "narrative_goal": "交代空间与二人关系，局长闯入",
+                  "narrative_goal": "全景。风扇转动，夏安往白板贴照片，洛白用书盖脸。",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "局长：洛老弟，别睡了。",
-                  "continuity_in": "开场",
-                  "continuity_out": "洛白坐起掏表",
-                  "character_names": ["洛白", "夏安", "局长"],
-                  "prop_names": ["古铜怀表"],
+                  "dialogue": "",
+                  "continuity_in": "风扇叶片入画",
+                  "continuity_out": "洛白用书盖脸",
+                  "character_names": ["夏安", "洛白"],
+                  "prop_names": ["白板"],
                   "location_name": "幻梦侦探社",
-                  "cast_count": 3
+                  "cast_count": 2
                 }
               ]
             }
             规则：
             - duration_sec 只许 5–15 的整数秒；全部镜头必须等于用户指定的秒数，不得自行改成其它秒数。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
+            - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
+            - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
+            - 动作只写一个人时，character_names 只放这一个人。
+            - 谁做动作就写谁的名字，不要把 A 的动作写到 B 身上。
+            - prop_names 只列本镜被使用或被拿在手上的道具，不要每镜都带全场道具。
             - cast_count 必须等于 character_names 元素个数。
             - chapter_index 对应 scene_index，一场至少 2 镜；不要压成少数超长镜。
-            - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上。
-            - 不要写 compiled_prompt、镜头语言套话或最终视频提示词，那是下游编译器的活。
+            - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
+              （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
+            - narrative_goal 写一个景别或主运镜，接着 2～3 个连续可见动作。
+              不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，不要把整场情节塞进一镜。
+            - scene 只写空间陈设与光线，不要写人物动作。
+            - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
             """;
 
     private DramaTextPrompts() {
