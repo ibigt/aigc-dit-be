@@ -56,6 +56,9 @@ public final class MediaUrls {
         if (lower.endsWith(".opus")) {
             return "audio/opus";
         }
+        if (lower.endsWith(".pcm")) {
+            return "audio/L16";
+        }
         return fallback == null ? "application/octet-stream" : fallback;
     }
 }

@@ -17,6 +17,7 @@ import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
 import cn.aigc.dit.generate.minimax.MiniMaxGenerateProvider;
+import cn.aigc.dit.generate.minimax.MiniMaxSpeechProvider;
 import cn.aigc.dit.generate.minimax.MiniMaxUrls;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
@@ -621,6 +622,10 @@ public class GenerateWorker {
             miniMax.remember(task.getProviderJobId(), request, origin, resolveApiKey(model, request.getAdapterKey()));
             return;
         }
+        if (provider instanceof MiniMaxSpeechProvider speech) {
+            speech.remember(task.getProviderJobId(), request);
+            return;
+        }
         if (provider instanceof OpenAiSpeechProvider speech) {
             speech.remember(task.getProviderJobId(), request);
         }
@@ -935,6 +940,9 @@ public class GenerateWorker {
             return generateProperties.getArk().getApiKey();
         }
         if (AdapterCatalog.isMiniMaxOfficial(resolved, model == null ? null : model.getProvider())) {
+            return generateProperties.getMinimax().getApiKey();
+        }
+        if (AdapterCatalog.isMiniMaxSpeech(resolved)) {
             return generateProperties.getMinimax().getApiKey();
         }
         if (AdapterCatalog.isOpenAiSpeech(resolved)) {

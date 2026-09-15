@@ -22,6 +22,7 @@ public final class AdapterCatalog {
     public static final String MINIMAX_H3 = "minimax-h3";
     public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
     public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
+    public static final String MINIMAX_SPEECH = "minimax-speech";
     public static final String OPENAI_SPEECH = "openai-speech";
     public static final String MOCK = "mock";
 
@@ -30,6 +31,7 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_ARK = "ark";
     public static final String TRANSPORT_MINIMAX = "minimax";
+    public static final String TRANSPORT_MINIMAX_SPEECH = "minimax-speech";
     public static final String TRANSPORT_OPENAI_SPEECH = "openai-speech";
     public static final String TRANSPORT_MOCK = "mock";
 
@@ -46,6 +48,8 @@ public final class AdapterCatalog {
     public static final String MINIMAX_COMFY_ENDPOINT = "http://127.0.0.1:8188";
     public static final String MINIMAX_H3_MODEL = "MiniMax-H3";
     public static final String MINIMAX_H3_MAX_MODEL = "MiniMax-H3-Max";
+    public static final String MINIMAX_SPEECH_DEFAULT_ENDPOINT = "https://api.minimax.cn/v1/t2a_v2";
+    public static final String MINIMAX_SPEECH_DEFAULT_MODEL = "speech-2.8-hd";
     public static final String OPENAI_SPEECH_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
     public static final String OPENAI_SPEECH_DEFAULT_MODEL = "gpt-4o-mini-tts";
 
@@ -73,6 +77,8 @@ public final class AdapterCatalog {
             new Spec(AGNES_VIDEO_2_5, "Agnes Video 2.5", ModelCategory.VIDEO, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
                     AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
+            new Spec(MINIMAX_SPEECH, "MiniMax Speech", ModelCategory.AUDIO, TRANSPORT_MINIMAX_SPEECH, PROVIDER_OFFICIAL,
+                    MINIMAX_SPEECH_DEFAULT_ENDPOINT, List.of(GenerateMode.T2A), Map.of(), true),
             new Spec(OPENAI_SPEECH, "OpenAI 兼容语音", ModelCategory.AUDIO, TRANSPORT_OPENAI_SPEECH, "自定义配置",
                     OPENAI_SPEECH_DEFAULT_ENDPOINT, List.of(GenerateMode.T2A), Map.of(), true),
             new Spec(MOCK, "Mock 占位", null, TRANSPORT_MOCK, "mock",
@@ -158,7 +164,12 @@ public final class AdapterCatalog {
         if (key.contains("agnes")) {
             return AGNES_VIDEO_2_5;
         }
-        if (key.contains("minimax") || key.contains("hailuo") || key.contains("mini-max")) {
+        if (ModelCategory.AUDIO.equals(cat) && (key.startsWith("speech-")
+                || key.contains("minimax-speech") || prov.contains("minimax") || prov.contains("稀宇"))) {
+            return MINIMAX_SPEECH;
+        }
+        if (ModelCategory.VIDEO.equals(cat)
+                && (key.contains("minimax") || key.contains("hailuo") || key.contains("mini-max"))) {
             return MINIMAX_H3;
         }
         if (key.contains("seedance") || (prov.contains("running") && ModelCategory.VIDEO.equals(cat))) {
@@ -228,6 +239,11 @@ public final class AdapterCatalog {
         return spec != null && OPENAI_SPEECH.equals(spec.key());
     }
 
+    public static boolean isMiniMaxSpeech(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && MINIMAX_SPEECH.equals(spec.key());
+    }
+
     public static boolean isMiniMaxOfficial(String adapterKey, String provider) {
         return isMiniMax(adapterKey) && !isComfyUiProvider(provider);
     }
@@ -265,7 +281,7 @@ public final class AdapterCatalog {
     }
 
     public static String officialProviderOf(String requested, String adapterKey) {
-        if (MINIMAX_H3.equals(adapterKey)) {
+        if (MINIMAX_H3.equals(adapterKey) || MINIMAX_SPEECH.equals(adapterKey)) {
             return isComfyUiProvider(requested) ? PROVIDER_COMFYUI : PROVIDER_OFFICIAL;
         }
         if (isArk(adapterKey) && isOfficialTokenPlan(requested)) {
@@ -348,6 +364,9 @@ public final class AdapterCatalog {
         }
         if (MINIMAX_H3.equals(adapterKey)) {
             return MINIMAX_H3_MODEL;
+        }
+        if (MINIMAX_SPEECH.equals(adapterKey)) {
+            return MINIMAX_SPEECH_DEFAULT_MODEL;
         }
         if (OPENAI_SPEECH.equals(adapterKey)) {
             return OPENAI_SPEECH_DEFAULT_MODEL;

@@ -345,7 +345,8 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 return ModelCategory.VIDEO;
             }
             if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".m4a")
-                    || lower.endsWith(".aac") || lower.endsWith(".flac") || lower.endsWith(".opus")) {
+                    || lower.endsWith(".aac") || lower.endsWith(".flac") || lower.endsWith(".opus")
+                    || lower.endsWith(".pcm")) {
                 return ModelCategory.AUDIO;
             }
         }

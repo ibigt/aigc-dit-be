@@ -13,5 +13,6 @@ class MediaUrlsAudioTest {
         assertEquals("audio/aac", MediaUrls.contentType("voice.aac", null));
         assertEquals("audio/flac", MediaUrls.contentType("voice.flac", null));
         assertEquals("audio/opus", MediaUrls.contentType("voice.opus", null));
+        assertEquals("audio/L16", MediaUrls.contentType("voice.pcm", null));
     }
 }
