@@ -20,6 +20,8 @@ public class ModelPublicResp {
     private Integer maxAudioReferences;
     private Boolean supportsAudioOnlyReference;
     private Map<String, Object> pricing;
+    /** 可安全下发的语音选项：voices/formats/defaultVoice/defaultFormat/minSpeed/maxSpeed。 */
+    private Map<String, Object> audioOptions;
     private Boolean enabled;
     private String description;
     private String badge;

@@ -16,6 +16,7 @@ public final class GenerateMode {
     public static final String I2I = "i2i";
     public static final String R2V = "r2v";
     public static final String I2V = "i2v";
+    public static final String T2A = "t2a";
 
     /** @deprecated 旧称，读入时规范为 {@link #I2V} */
     public static final String V2V = "v2v";
@@ -32,6 +33,9 @@ public final class GenerateMode {
         boolean hasRefs = references != null && !references.isEmpty();
         if (ModelCategory.IMAGE.equalsIgnoreCase(category)) {
             return hasRefs ? I2I : T2I;
+        }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            return T2A;
         }
         return hasRefs ? R2V : T2V;
     }
@@ -56,7 +60,8 @@ public final class GenerateMode {
                 || I2I.equalsIgnoreCase(value)
                 || T2V.equalsIgnoreCase(value)
                 || R2V.equalsIgnoreCase(value)
-                || I2V.equalsIgnoreCase(value);
+                || I2V.equalsIgnoreCase(value)
+                || T2A.equalsIgnoreCase(value);
     }
 
     public static List<String> canonicalizeCapabilities(List<String> capabilities) {

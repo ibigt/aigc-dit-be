@@ -22,13 +22,17 @@ public final class CreditCalculator {
                                  Integer durationSec, int copies) {
         double unitPrice = saleOutput(pricing);
         if (unitPrice <= 0) {
-            unitPrice = ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D : 2D;
+            unitPrice = ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
+                    : ModelCategory.AUDIO.equalsIgnoreCase(category) ? 3D : 2D;
         }
         double multiplier = parameterMultiplier(category, resolution, quality);
         double quantity = unitPrice;
         if (ModelCategory.VIDEO.equalsIgnoreCase(category) && isPerSecond(pricing)) {
             int duration = durationSec == null ? 1 : Math.max(1, durationSec);
             quantity = unitPrice * duration;
+        }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            quantity = unitPrice * characterUnits(pricing, durationSec);
         }
         int safeCopies = Math.min(4, Math.max(1, copies));
         return (long) Math.ceil(quantity * multiplier * safeCopies);
@@ -76,6 +80,22 @@ public final class CreditCalculator {
             return false;
         }
         return "秒".equals(String.valueOf(pricing.get("unit")).trim());
+    }
+
+    /** audio 调用时 quantity 参数表示字符数；图片/视频仍表示时长。 */
+    static double characterUnits(Map<String, Object> pricing, Integer characterCount) {
+        int count = characterCount == null ? 1 : Math.max(1, characterCount);
+        String unit = pricing == null || pricing.get("unit") == null ? "" : String.valueOf(pricing.get("unit")).trim();
+        if ("万字符".equals(unit)) {
+            return count / 10000D;
+        }
+        if ("千字符".equals(unit)) {
+            return count / 1000D;
+        }
+        if ("字符".equals(unit)) {
+            return count;
+        }
+        return 1D;
     }
 
     static double parseAmount(Object value) {

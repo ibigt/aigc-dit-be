@@ -20,6 +20,8 @@ import cn.aigc.dit.generate.minimax.MiniMaxGenerateProvider;
 import cn.aigc.dit.generate.minimax.MiniMaxUrls;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
+import cn.aigc.dit.generate.speech.OpenAiSpeechProvider;
+import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
@@ -461,7 +463,8 @@ public class GenerateWorker {
             long perCopy = Math.max(0, (latest.getCreditCost() == null ? 0 : latest.getCreditCost()) / Math.max(1, keys.size()));
             int index = 1;
             for (String key : keys) {
-                String poster = posterExtractor.extract(key);
+                String poster = ModelCategory.AUDIO.equalsIgnoreCase(latest.getCategory())
+                        ? null : posterExtractor.extract(key);
                 if (firstPoster == null) {
                     firstPoster = poster;
                 }
@@ -616,6 +619,10 @@ public class GenerateWorker {
         if (provider instanceof MiniMaxGenerateProvider miniMax) {
             String origin = MiniMaxUrls.origin(request.getEndpoint(), generateProperties.getMinimax().getBaseUrl());
             miniMax.remember(task.getProviderJobId(), request, origin, resolveApiKey(model, request.getAdapterKey()));
+            return;
+        }
+        if (provider instanceof OpenAiSpeechProvider speech) {
+            speech.remember(task.getProviderJobId(), request);
         }
     }
 
@@ -929,6 +936,9 @@ public class GenerateWorker {
         }
         if (AdapterCatalog.isMiniMaxOfficial(resolved, model == null ? null : model.getProvider())) {
             return generateProperties.getMinimax().getApiKey();
+        }
+        if (AdapterCatalog.isOpenAiSpeech(resolved)) {
+            return generateProperties.getSpeech().getApiKey();
         }
         if (AdapterCatalog.isRunningHub(resolved)
                 || (model != null && model.getProvider() != null

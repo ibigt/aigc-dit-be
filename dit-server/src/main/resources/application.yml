@@ -144,6 +144,11 @@ dit:
       rate-limit-backoff-seconds: ${MINIMAX_RATE_LIMIT_BACKOFF_SECONDS:8}
       download-timeout-seconds: ${MINIMAX_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${MINIMAX_DOWNLOAD_RETRIES:3}
+    speech:
+      base-url: ${SPEECH_BASE_URL:https://api.openai.com/v1}
+      api-key: ${SPEECH_API_KEY:}
+      connect-timeout-seconds: ${SPEECH_CONNECT_TIMEOUT_SECONDS:15}
+      request-timeout-seconds: ${SPEECH_REQUEST_TIMEOUT_SECONDS:180}
     ffmpeg:
       concat-copy-timeout-seconds: ${FFMPEG_CONCAT_COPY_TIMEOUT_SECONDS:180}
       concat-encode-timeout-seconds: ${FFMPEG_CONCAT_ENCODE_TIMEOUT_SECONDS:900}

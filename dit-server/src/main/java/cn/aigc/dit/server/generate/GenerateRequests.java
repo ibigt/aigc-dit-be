@@ -31,8 +31,7 @@ public final class GenerateRequests {
     }
 
     public static GenerateRequest fromSubmit(Long userId, String modelKey, GenerateSubmitReq req, AssetService assetService) {
-        String category = ModelCategory.IMAGE.equalsIgnoreCase(req.getCategory())
-                ? ModelCategory.IMAGE : ModelCategory.VIDEO;
+        String category = normalizeCategory(req.getCategory());
         List<ReferenceAsset> references = resolveReferences(req, assetService);
         FramePair frames = resolveFrames(req, assetService);
         String mode = GenerateMode.derive(category, references, frames);
@@ -46,6 +45,9 @@ public final class GenerateRequests {
                 .setResolution(blankToNull(req.getResolution()))
                 .setQuality(blankToNull(req.getQuality()))
                 .setDurationSec(req.getDurationSec())
+                .setVoiceId(blankToNull(req.getVoiceId()))
+                .setSpeed(req.getSpeed())
+                .setAudioFormat(blankToNull(req.getAudioFormat()))
                 .setCopies(req.getCopies() == null ? 1 : req.getCopies())
                 .setReferences(references)
                 .setFrames(frames);
@@ -104,6 +106,9 @@ public final class GenerateRequests {
         params.put("resolution", request.getResolution());
         params.put("quality", request.getQuality());
         params.put("durationSec", request.getDurationSec());
+        params.put("voiceId", request.getVoiceId());
+        params.put("speed", request.getSpeed());
+        params.put("audioFormat", request.getAudioFormat());
         params.put("copies", request.resolvedCopies());
         if (request.getAdapterKey() != null && !request.getAdapterKey().isBlank()) {
             params.put("adapterKey", request.getAdapterKey());
@@ -163,6 +168,9 @@ public final class GenerateRequests {
                 .setResolution(stringVal(params.get("resolution"), null))
                 .setQuality(stringVal(params.get("quality"), null))
                 .setDurationSec(intVal(params.get("durationSec")))
+                .setVoiceId(stringVal(params.get("voiceId"), null))
+                .setSpeed(doubleVal(params.get("speed")))
+                .setAudioFormat(stringVal(params.get("audioFormat"), null))
                 .setCopies(task.getCopies() == null ? intVal(params.get("copies")) : task.getCopies())
                 .setReferences(references)
                 .setFrames(frames);
@@ -208,6 +216,9 @@ public final class GenerateRequests {
         }
         if (GenerateMode.I2V.equalsIgnoreCase(canonical)) {
             return "当前模型不支持首尾帧，请移除首尾帧后再创作";
+        }
+        if (GenerateMode.T2A.equalsIgnoreCase(canonical)) {
+            return "当前模型不支持文本生成语音";
         }
         return "该模型不支持当前生成模式";
     }
@@ -277,5 +288,32 @@ public final class GenerateRequests {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static Double doubleVal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String normalizeCategory(String category) {
+        if (ModelCategory.IMAGE.equalsIgnoreCase(category)) {
+            return ModelCategory.IMAGE;
+        }
+        if (ModelCategory.VIDEO.equalsIgnoreCase(category)) {
+            return ModelCategory.VIDEO;
+        }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            return ModelCategory.AUDIO;
+        }
+        throw new BizException(ErrorCode.BAD_REQUEST, "创作类型仅支持 image / video / audio");
     }
 }

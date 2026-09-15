@@ -63,7 +63,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
     public List<ModelPublicResp> listEnabledPublic() {
         return list(new LambdaQueryWrapper<AiModel>()
                 .eq(AiModel::getEnabled, true)
-                .in(AiModel::getCategory, ModelCategory.IMAGE, ModelCategory.VIDEO)
+                .in(AiModel::getCategory, ModelCategory.IMAGE, ModelCategory.VIDEO, ModelCategory.AUDIO)
                 .orderByAsc(AiModel::getId))
                 .stream()
                 .map(this::toPublicResp)
@@ -293,6 +293,9 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         pricing.remove("instanceType");
         pricing.remove("proxy");
         resp.setPricing(pricing);
+        if (ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory())) {
+            resp.setAudioOptions(publicAudioOptions(model.getAdapterConfig()));
+        }
         resp.setEnabled(model.getEnabled());
         resp.setDescription(model.getDescription());
         resp.setBadge(model.getBadge());
@@ -310,6 +313,19 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         supported.accept(value.supported());
         maxReferences.accept(value.maxReferences());
         audioOnly.accept(value.audioOnly());
+    }
+
+    private static Map<String, Object> publicAudioOptions(Map<String, Object> config) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (config == null) {
+            return result;
+        }
+        for (String key : List.of("voices", "formats", "defaultVoice", "defaultFormat", "minSpeed", "maxSpeed")) {
+            if (config.get(key) != null) {
+                result.put(key, config.get(key));
+            }
+        }
+        return result;
     }
 
     static Map<String, Object> mergePricing(AdminModelSaveReq req) {
@@ -396,10 +412,13 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         if (ModelCategory.TEXT.equalsIgnoreCase(category)) {
             return ModelCategory.TEXT;
         }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            return ModelCategory.AUDIO;
+        }
         if (ModelCategory.TOOL.equalsIgnoreCase(category)) {
             return ModelCategory.TOOL;
         }
-        throw new BizException(ErrorCode.BAD_REQUEST, "模型类型仅支持 image / video / text / tool");
+        throw new BizException(ErrorCode.BAD_REQUEST, "模型类型仅支持 image / video / audio / text / tool");
     }
 
     static String defaultBadge(String category) {
@@ -408,6 +427,9 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         }
         if (ModelCategory.TEXT.equals(category)) {
             return "文本";
+        }
+        if (ModelCategory.AUDIO.equals(category)) {
+            return "语音";
         }
         if (ModelCategory.TOOL.equals(category)) {
             return "工具";

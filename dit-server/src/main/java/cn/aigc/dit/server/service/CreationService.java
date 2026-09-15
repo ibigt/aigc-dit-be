@@ -329,6 +329,9 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         if (ModelCategory.IMAGE.equalsIgnoreCase(category)) {
             return ModelCategory.IMAGE;
         }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            return ModelCategory.AUDIO;
+        }
         return null;
     }
 
@@ -340,6 +343,10 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             }
             if (lower.endsWith(".mp4") || lower.endsWith(".webm")) {
                 return ModelCategory.VIDEO;
+            }
+            if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".m4a")
+                    || lower.endsWith(".aac") || lower.endsWith(".flac") || lower.endsWith(".opus")) {
+                return ModelCategory.AUDIO;
             }
         }
         return category;

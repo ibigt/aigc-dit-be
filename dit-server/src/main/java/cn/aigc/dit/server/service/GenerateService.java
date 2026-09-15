@@ -79,6 +79,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         String adapterKey = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         request.setAdapterKey(adapterKey);
+        validateAudioRequest(request);
         validatePromptAndAudio(model, request);
         if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
@@ -100,7 +101,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getCategory(),
                 request.getResolution(),
                 request.getQuality(),
-                request.getDurationSec(),
+                ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
+                        ? request.getPrompt().length() : request.getDurationSec(),
                 request.resolvedCopies());
         boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
         CreationSession session = bindSession
@@ -127,7 +129,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         save(task);
         request.setTaskId(task.getId());
         creditService.change(userId, -cost, CreditReason.GENERATE, String.valueOf(task.getId()),
-                model.getName() + " · " + (ModelCategory.VIDEO.equals(request.getCategory()) ? "视频生成" : "图片生成"));
+                model.getName() + " · " + creationLabel(request.getCategory()));
         afterCommit(() -> {
             publisher.publish(task.getId());
             GenerateWorker worker = generateWorker.getIfAvailable();
@@ -165,6 +167,38 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (!hasVisualReference && !capability.audioOnly()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型的参考音频必须搭配图片或视频");
         }
+    }
+
+    private static void validateAudioRequest(GenerateRequest request) {
+        if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
+            return;
+        }
+        if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "待朗读文本不能为空");
+        }
+        if (request.getReferences() != null && !request.getReferences().isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "文本生成语音暂不支持参考素材");
+        }
+        if (request.getFrames() != null && request.getFrames().hasAny()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "文本生成语音不支持首尾帧");
+        }
+        request.setCopies(1);
+        if (request.getSpeed() == null) {
+            request.setSpeed(1.0);
+        }
+        if (request.getAudioFormat() == null || request.getAudioFormat().isBlank()) {
+            request.setAudioFormat("mp3");
+        }
+    }
+
+    private static String creationLabel(String category) {
+        if (ModelCategory.VIDEO.equalsIgnoreCase(category)) {
+            return "视频生成";
+        }
+        if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
+            return "语音生成";
+        }
+        return "图片生成";
     }
 
     public GenerateTaskResp getMine(Long taskId) {

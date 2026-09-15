@@ -36,10 +36,10 @@ public class AdminModelSaveReq {
     private String apiKey;
 
     @NotBlank(message = "模型类型不能为空")
-    @Schema(description = "image / video / text / tool")
+    @Schema(description = "image / video / audio / text / tool")
     private String category;
 
-    @Schema(description = "能力：t2i/i2i/t2v/r2v/i2v；r2v=参考生视频（图或视频），i2v=首尾帧。旧值 v2v/frames 写入时会规范为 i2v")
+    @Schema(description = "能力：t2i/i2i/t2v/r2v/i2v/t2a；t2a=文本生成语音")
     private List<String> capabilities;
 
     @Schema(description = "协议附加配置（如 t2iPath / t2vPath / r2vPath / i2vPath），厂商字段翻译在 Adapter")

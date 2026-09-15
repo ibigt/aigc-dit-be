@@ -14,6 +14,7 @@ public class GenerateProperties {
     private Agnes agnes = new Agnes();
     private Ark ark = new Ark();
     private Minimax minimax = new Minimax();
+    private Speech speech = new Speech();
     private Ffmpeg ffmpeg = new Ffmpeg();
 
     /**
@@ -122,6 +123,15 @@ public class GenerateProperties {
         private int rateLimitBackoffSeconds = 8;
         private int downloadTimeoutSeconds = 600;
         private int downloadRetries = 3;
+    }
+
+    /** OpenAI {@code POST /v1/audio/speech} 兼容语音合成接口。 */
+    @Data
+    public static class Speech {
+        private String baseUrl = "https://api.openai.com/v1";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        private int requestTimeoutSeconds = 180;
     }
 
     /**

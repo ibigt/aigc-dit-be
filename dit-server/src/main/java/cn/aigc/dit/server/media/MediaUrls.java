@@ -38,6 +38,24 @@ public final class MediaUrls {
         if (lower.endsWith(".webm")) {
             return "video/webm";
         }
+        if (lower.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (lower.endsWith(".wav")) {
+            return "audio/wav";
+        }
+        if (lower.endsWith(".m4a")) {
+            return "audio/mp4";
+        }
+        if (lower.endsWith(".aac")) {
+            return "audio/aac";
+        }
+        if (lower.endsWith(".flac")) {
+            return "audio/flac";
+        }
+        if (lower.endsWith(".opus")) {
+            return "audio/opus";
+        }
         return fallback == null ? "application/octet-stream" : fallback;
     }
 }

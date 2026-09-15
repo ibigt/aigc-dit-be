@@ -15,6 +15,12 @@ class GenerateModeTest {
     }
 
     @Test
+    void derivesTextToAudio() {
+        assertEquals(GenerateMode.T2A, GenerateMode.derive("audio", List.of(), null));
+        assertTrue(GenerateMode.isSpecificMode("t2a"));
+    }
+
+    @Test
     void derivesReferenceToVideoWhenHasImageOrVideoReference() {
         assertEquals(GenerateMode.R2V, GenerateMode.derive("video",
                 List.of(new ReferenceAsset("image", "users/1/assets/a.png")), null));

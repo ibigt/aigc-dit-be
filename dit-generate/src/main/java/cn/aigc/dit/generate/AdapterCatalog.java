@@ -22,6 +22,7 @@ public final class AdapterCatalog {
     public static final String MINIMAX_H3 = "minimax-h3";
     public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
     public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
+    public static final String OPENAI_SPEECH = "openai-speech";
     public static final String MOCK = "mock";
 
     public static final String TRANSPORT_RUNNINGHUB = "runninghub";
@@ -29,6 +30,7 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_ARK = "ark";
     public static final String TRANSPORT_MINIMAX = "minimax";
+    public static final String TRANSPORT_OPENAI_SPEECH = "openai-speech";
     public static final String TRANSPORT_MOCK = "mock";
 
     public static final String PROVIDER_OFFICIAL = "官方API";
@@ -44,6 +46,8 @@ public final class AdapterCatalog {
     public static final String MINIMAX_COMFY_ENDPOINT = "http://127.0.0.1:8188";
     public static final String MINIMAX_H3_MODEL = "MiniMax-H3";
     public static final String MINIMAX_H3_MAX_MODEL = "MiniMax-H3-Max";
+    public static final String OPENAI_SPEECH_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
+    public static final String OPENAI_SPEECH_DEFAULT_MODEL = "gpt-4o-mini-tts";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
@@ -69,8 +73,10 @@ public final class AdapterCatalog {
             new Spec(AGNES_VIDEO_2_5, "Agnes Video 2.5", ModelCategory.VIDEO, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
                     AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
+            new Spec(OPENAI_SPEECH, "OpenAI 兼容语音", ModelCategory.AUDIO, TRANSPORT_OPENAI_SPEECH, "自定义配置",
+                    OPENAI_SPEECH_DEFAULT_ENDPOINT, List.of(GenerateMode.T2A), Map.of(), true),
             new Spec(MOCK, "Mock 占位", null, TRANSPORT_MOCK, "mock",
-                    "/mock-api", List.of(GenerateMode.T2I, GenerateMode.I2I, GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+                    "/mock-api", List.of(GenerateMode.T2I, GenerateMode.I2I, GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V, GenerateMode.T2A),
                     Map.of(), false)
     );
 
@@ -161,6 +167,10 @@ public final class AdapterCatalog {
         if (key.contains("gpt-image") || (prov.contains("running") && ModelCategory.IMAGE.equals(cat))) {
             return GPT_IMAGE_2;
         }
+        if (ModelCategory.AUDIO.equals(cat)
+                && (key.contains("tts") || key.contains("speech") || prov.contains("openai") || prov.contains("自定义"))) {
+            return OPENAI_SPEECH;
+        }
         if (prov.contains("mock") || key.startsWith("mock")) {
             return MOCK;
         }
@@ -211,6 +221,11 @@ public final class AdapterCatalog {
     public static boolean isMiniMax(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && MINIMAX_H3.equals(spec.key());
+    }
+
+    public static boolean isOpenAiSpeech(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && OPENAI_SPEECH.equals(spec.key());
     }
 
     public static boolean isMiniMaxOfficial(String adapterKey, String provider) {
@@ -333,6 +348,9 @@ public final class AdapterCatalog {
         }
         if (MINIMAX_H3.equals(adapterKey)) {
             return MINIMAX_H3_MODEL;
+        }
+        if (OPENAI_SPEECH.equals(adapterKey)) {
+            return OPENAI_SPEECH_DEFAULT_MODEL;
         }
         return "";
     }

@@ -33,6 +33,7 @@ class AdapterCatalogTest {
         assertEquals(null, AdapterCatalog.infer("官方API", "video", "unknown-official-video"));
         assertEquals(AdapterCatalog.GPT_IMAGE_2, AdapterCatalog.infer("RunningHub", "image", "gpt-image-2"));
         assertEquals(AdapterCatalog.MOCK, AdapterCatalog.infer("mock", "video", "mock-video"));
+        assertEquals(AdapterCatalog.OPENAI_SPEECH, AdapterCatalog.infer("自定义配置", "audio", "gpt-4o-mini-tts"));
     }
 
     @Test
@@ -101,6 +102,10 @@ class AdapterCatalogTest {
                 AdapterCatalog.officialProviderOf("官方API", AdapterCatalog.MINIMAX_H3));
         assertTrue(AdapterCatalog.isMiniMaxOfficial(AdapterCatalog.MINIMAX_H3, "官方API"));
         assertFalse(AdapterCatalog.isMiniMaxOfficial(AdapterCatalog.MINIMAX_H3, "ComfyUI"));
+        assertTrue(AdapterCatalog.isOpenAiSpeech(AdapterCatalog.OPENAI_SPEECH));
+        assertEquals(AdapterCatalog.TRANSPORT_OPENAI_SPEECH,
+                AdapterCatalog.transport(AdapterCatalog.OPENAI_SPEECH, "自定义配置"));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.OPENAI_SPEECH, GenerateMode.T2A));
     }
 
     @Test

@@ -7,12 +7,14 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import lombok.Data;
 
 import java.util.List;
 
 @Data
-@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端按参考/首尾帧推导为 t2i/i2i/t2v/r2v/i2v。")
+@Schema(description = "提交生成。前端不传厂商接口名；mode 由后端推导为 t2i/i2i/t2v/r2v/i2v/t2a。")
 public class GenerateSubmitReq {
 
     @NotNull(message = "模型不能为空")
@@ -20,11 +22,11 @@ public class GenerateSubmitReq {
 
     private Long sessionId;
 
-    @Size(max = 4000)
+    @Size(max = 4096)
     private String prompt;
 
     @NotBlank(message = "类型不能为空")
-    @Schema(description = "image / video")
+    @Schema(description = "image / video / audio")
     private String category;
 
     private String ratio;
@@ -34,6 +36,19 @@ public class GenerateSubmitReq {
     @Min(1)
     @Max(30)
     private Integer durationSec;
+
+    @Size(max = 128)
+    @Schema(description = "语音音色标识；category=audio 时使用")
+    private String voiceId;
+
+    @DecimalMin("0.25")
+    @DecimalMax("4.0")
+    @Schema(description = "语速倍率，默认 1.0")
+    private Double speed;
+
+    @Size(max = 16)
+    @Schema(description = "音频格式：mp3 / wav / aac / flac / opus / pcm")
+    private String audioFormat;
 
     @Min(1)
     @Max(4)

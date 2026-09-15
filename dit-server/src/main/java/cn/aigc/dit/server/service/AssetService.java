@@ -59,7 +59,8 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         String storedName = assetName(name, file == null ? null : file.getOriginalFilename());
         String key = putOwnedFile(file, "assets");
         String kind = AssetKind.fromMime(mime);
-        String posterKey = AssetKind.VIDEO.equals(kind) ? posterExtractor.extract(key) : key;
+        String posterKey = AssetKind.VIDEO.equals(kind) ? posterExtractor.extract(key)
+                : AssetKind.AUDIO.equals(kind) ? null : key;
         Asset asset = new Asset();
         asset.setUserId(userId);
         asset.setName(storedName);
@@ -155,7 +156,8 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         asset.setKind(category);
         asset.setMimeType(MediaUrls.contentType(storageKey, null));
         asset.setStorageKey(storageKey);
-        asset.setPosterKey(posterKey == null ? storageKey : posterKey);
+        asset.setPosterKey(AssetKind.AUDIO.equalsIgnoreCase(category) ? null
+                : posterKey == null ? storageKey : posterKey);
         save(asset);
         return toResp(asset);
     }

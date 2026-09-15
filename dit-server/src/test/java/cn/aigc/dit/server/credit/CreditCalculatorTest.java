@@ -34,4 +34,20 @@ class CreditCalculatorTest {
         // 12 * 4s * 0.75(720P) * 1 = 36
         assertEquals(36L, CreditCalculator.calculate(pricing, "video", "720P", null, 4, 1));
     }
+
+    @Test
+    void audioCanChargeByThousandCharacters() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "千字符",
+                "sale", Map.of("output", "3 积分"));
+        assertEquals(5L, CreditCalculator.calculate(pricing, "audio", null, null, 1500, 1));
+    }
+
+    @Test
+    void audioCanChargeByTenThousandCharacters() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "万字符",
+                "sale", Map.of("output", "20 积分"));
+        assertEquals(5L, CreditCalculator.calculate(pricing, "audio", null, null, 2500, 1));
+    }
 }

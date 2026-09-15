@@ -22,6 +22,10 @@ public class GenerateRequest {
     private String resolution;
     private String quality;
     private Integer durationSec;
+    /** 语音生成参数；仅 category=audio/t2a 使用。 */
+    private String voiceId;
+    private Double speed;
+    private String audioFormat;
     private Integer copies = 1;
     private List<ReferenceAsset> references = new ArrayList<>();
     private FramePair frames;
@@ -132,6 +136,33 @@ public class GenerateRequest {
 
     public GenerateRequest setDurationSec(Integer durationSec) {
         this.durationSec = durationSec;
+        return this;
+    }
+
+    public String getVoiceId() {
+        return voiceId;
+    }
+
+    public GenerateRequest setVoiceId(String voiceId) {
+        this.voiceId = voiceId;
+        return this;
+    }
+
+    public Double getSpeed() {
+        return speed;
+    }
+
+    public GenerateRequest setSpeed(Double speed) {
+        this.speed = speed;
+        return this;
+    }
+
+    public String getAudioFormat() {
+        return audioFormat;
+    }
+
+    public GenerateRequest setAudioFormat(String audioFormat) {
+        this.audioFormat = audioFormat;
         return this;
     }
 
