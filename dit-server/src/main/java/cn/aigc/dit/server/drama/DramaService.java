@@ -164,6 +164,23 @@ public class DramaService {
         return getSeries(series.getId());
     }
 
+    /**
+     * 章节列表「删除」：删除本集，资产/章节/分镜/成片随 DB 级联清除；至少保留一集。返回更新后的项目详情。
+     */
+    @Transactional
+    public DramaSeriesResp deleteEpisode(Long id) {
+        DramaEpisode episode = requireEpisode(id);
+        Long seriesId = episode.getSeriesId();
+        long remaining = episodeMapper.selectCount(new LambdaQueryWrapper<DramaEpisode>()
+                .eq(DramaEpisode::getSeriesId, seriesId));
+        if (remaining <= 1) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "至少保留一集，无法删除最后一集");
+        }
+        episodeMapper.deleteById(episode.getId());
+        touchSeries(seriesId);
+        return getSeries(seriesId);
+    }
+
     @Transactional
     public DramaSeriesResp updateSeries(Long id, DramaSeriesUpdateReq req) {
         DramaSeries series = requireSeries(id);

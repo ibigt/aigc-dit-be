@@ -132,6 +132,12 @@ public class DramaController {
         return CommonResult.success(dramaService.updateEpisode(id, req));
     }
 
+    @Operation(summary = "删除一集（级联资产/章节/分镜/成片），至少保留一集；返回更新后的项目详情")
+    @DeleteMapping("/episodes/{id}")
+    public CommonResult<DramaSeriesResp> deleteEpisode(@PathVariable Long id) {
+        return CommonResult.success(dramaService.deleteEpisode(id));
+    }
+
     @Operation(summary = "导入剧本原文；乙未合入时只存 source_text")
     @PostMapping("/episodes/{id}/script/import")
     public CommonResult<DramaEpisodeResp> importSource(
