@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS asset (
     poster_key   VARCHAR(512),
     size_bytes   BIGINT,
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_asset_kind CHECK (kind IS NULL OR kind IN ('image', 'video'))
+    CONSTRAINT ck_asset_kind CHECK (kind IS NULL OR kind IN ('image', 'video', 'audio'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_user ON asset (user_id, created_at DESC);
@@ -219,7 +219,7 @@ COMMENT ON COLUMN asset.id IS '主键ID';
 COMMENT ON COLUMN asset.user_id IS '所属用户ID（关联 sys_user.id）';
 COMMENT ON COLUMN asset.name IS '素材名称';
 COMMENT ON COLUMN asset.mime_type IS 'MIME 类型（如 image/png、video/mp4）';
-COMMENT ON COLUMN asset.kind IS '素材种类（image 图像、video 视频）；由 mime_type 推导或上传时写入';
+COMMENT ON COLUMN asset.kind IS '素材种类（image 图像、video 视频、audio 音频）；由 mime_type 推导或上传时写入';
 COMMENT ON COLUMN asset.storage_key IS '原文件相对对象存储 key';
 COMMENT ON COLUMN asset.poster_key IS '封面相对对象存储 key（视频抽帧；图片可与原文件相同或为空）';
 COMMENT ON COLUMN asset.size_bytes IS '文件大小（字节）';

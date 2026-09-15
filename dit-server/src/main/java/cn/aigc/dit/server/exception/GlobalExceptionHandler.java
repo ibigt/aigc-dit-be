@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
+import java.sql.SQLException;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -62,7 +63,26 @@ public class GlobalExceptionHandler {
     public ResponseEntity<CommonResult<Void>> handleIntegrity(DataIntegrityViolationException e) {
         log.warn("Data integrity: {}", e.getMostSpecificCause() == null ? e.getMessage() : e.getMostSpecificCause().getMessage());
         return ResponseEntity.badRequest()
-                .body(CommonResult.failed(ErrorCode.BAD_REQUEST, "仍有数据引用该记录，无法删除"));
+                .body(CommonResult.failed(ErrorCode.BAD_REQUEST, integrityMessage(e)));
+    }
+
+    static String integrityMessage(DataIntegrityViolationException e) {
+        for (Throwable current = e; current != null; current = current.getCause()) {
+            if (!(current instanceof SQLException sqlException)) {
+                continue;
+            }
+            String sqlState = sqlException.getSQLState();
+            if (sqlState == null) {
+                return "数据操作违反完整性约束";
+            }
+            return switch (sqlState) {
+                case "23503" -> "仍有数据引用该记录，无法删除";
+                case "23505" -> "该记录已存在，请勿重复提交";
+                case "23502", "23514" -> "提交的数据不符合约束要求";
+                default -> "数据操作违反完整性约束";
+            };
+        }
+        return "数据操作违反完整性约束";
     }
 
     @ExceptionHandler(Exception.class)
