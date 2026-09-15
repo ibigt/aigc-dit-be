@@ -33,6 +33,12 @@ public class DramaSeriesResp {
     private Long videoModelId;
     private String videoModelName;
     private String videoAdapterKey;
+    @Schema(description = "全局出片方式：r2v 参考图 / i2v 首尾帧")
+    private String videoGenerateMode;
+    @Schema(description = "参考图模式下是否衔接上一镜落幅")
+    private Boolean videoChainPrevTail;
+    @Schema(description = "正在按当前生成方式后台重编译分镜提示词")
+    private Boolean promptRecompiling;
     private Integer episodeCount;
     private DramaEpisodeResp latestEpisode;
     private List<DramaEpisodeResp> episodes;

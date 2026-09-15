@@ -4,6 +4,7 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
@@ -140,5 +141,51 @@ class GenerateServiceTextModelTest {
         assertNull(captor.getValue().getParams().get("sessionId"));
         assertEquals(9L, captor.getValue().getParams().get("assetId"));
         assertEquals(88L, resp.getId());
+    }
+
+    @Test
+    void dramaI2vFirstFrameOnlyAllowedWhenAdapterSupports() {
+        AiModel model = new AiModel();
+        model.setId(88L);
+        model.setEnabled(true);
+        model.setName("Seedance 2.0 Fast");
+        model.setModelKey("doubao-seedance-2.0-fast");
+        model.setAdapterKey("seedance-2.0");
+        model.setProvider("官方API");
+        model.setCategory(ModelCategory.VIDEO);
+        model.setCapabilities(List.of("video", "t2v", "r2v"));
+        when(aiModelMapper.selectById(88L)).thenReturn(model);
+        when(genTaskMapper.insert(any(GenTask.class))).thenAnswer(invocation -> {
+            GenTask task = invocation.getArgument(0);
+            task.setId(91L);
+            return 1;
+        });
+        when(creationService.toTaskResp(any(), any(), any())).thenAnswer(invocation -> {
+            GenTask task = invocation.getArgument(0);
+            GenerateTaskResp resp = new GenerateTaskResp();
+            resp.setId(task.getId());
+            resp.setParams(task.getParams());
+            return resp;
+        });
+
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(88L);
+        req.setCategory(ModelCategory.VIDEO);
+        req.setPrompt("从首帧起幅，局长推门进来");
+        req.setDurationSec(5);
+        GenerateSubmitReq.FrameInput frames = new GenerateSubmitReq.FrameInput();
+        frames.setFirstFrameKey("users/1/drama/21/frames/a.webp");
+        req.setFrames(frames);
+
+        GenerateTaskResp resp = service.submit(req, Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA,
+                "shotId", 201L));
+
+        ArgumentCaptor<GenTask> captor = ArgumentCaptor.forClass(GenTask.class);
+        verify(genTaskMapper).insert(captor.capture());
+        assertEquals(GenerateMode.I2V, captor.getValue().getParams().get("mode"));
+        assertEquals("users/1/drama/21/frames/a.webp",
+                ((java.util.Map<?, ?>) captor.getValue().getParams().get("frames")).get("firstFrameKey"));
+        assertEquals(91L, resp.getId());
     }
 }

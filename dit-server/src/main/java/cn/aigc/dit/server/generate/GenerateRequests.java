@@ -58,9 +58,25 @@ public final class GenerateRequests {
         return SOURCE_DRAMA.equals(sourceOf(params));
     }
 
-    /** 分镜出片任务（相对资产生图）。 */
+    /** 分镜出片任务（视频成片；开场静帧另见 {@link #isOpeningStill}）。 */
     public static boolean isDramaShot(Map<String, Object> params) {
-        return isDramaSource(params) && params != null && params.get("shotId") != null;
+        return isDramaSource(params) && params != null && params.get("shotId") != null && !isOpeningStill(params);
+    }
+
+    /** 分镜开场静帧（i2i），随后可能衔接到 i2v。 */
+    public static boolean isOpeningStill(Map<String, Object> params) {
+        return isDramaSource(params) && params != null && params.get("shotId") != null && truthy(params.get("openingStill"));
+    }
+
+    public static boolean continueStillToI2v(Map<String, Object> params) {
+        return isOpeningStill(params) && truthy(params.get("stillForI2v"));
+    }
+
+    private static boolean truthy(Object value) {
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        return value != null && "true".equalsIgnoreCase(String.valueOf(value).trim());
     }
 
     public static boolean bindsQuickCreate(Map<String, Object> params) {
@@ -255,10 +271,10 @@ public final class GenerateRequests {
         String first = blankToNull(req.getFrames().getFirstFrameKey());
         String last = blankToNull(req.getFrames().getLastFrameKey());
         if (first != null) {
-            assetService.requireOwnedKey(first);
+            assetService.assertOwnedStorageKey(first);
         }
         if (last != null) {
-            assetService.requireOwnedKey(last);
+            assetService.assertOwnedStorageKey(last);
         }
         FramePair frames = new FramePair(first, last);
         return frames.hasAny() ? frames : null;

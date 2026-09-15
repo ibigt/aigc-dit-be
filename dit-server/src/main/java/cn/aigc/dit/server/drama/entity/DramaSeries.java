@@ -29,6 +29,8 @@ public class DramaSeries {
     private String imageAdapterKey;
     private Long videoModelId;
     private String videoAdapterKey;
+    private String videoGenerateMode;
+    private Boolean videoChainPrevTail;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

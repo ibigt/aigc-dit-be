@@ -179,6 +179,9 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         resp.setCreditCost(task.getCreditCost());
         resp.setOutputStorageKey(task.getOutputStorageKey());
         resp.setPosterKey(task.getPosterKey());
+        if (task.getParams() != null && task.getParams().get("tailKey") != null) {
+            resp.setTailKey(String.valueOf(task.getParams().get("tailKey")));
+        }
         resp.setOutputKeys(task.getOutputKeys());
         resp.setCreatedAt(task.getCreatedAt());
         resp.setFinishedAt(GenerateTaskViews.shouldKeepPolling(task) ? null : task.getFinishedAt());

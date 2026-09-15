@@ -12,6 +12,7 @@ import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
@@ -184,12 +185,20 @@ public class DramaController {
         return CommonResult.success(dramaService.bindImageModel(id, req));
     }
 
-    @Operation(summary = "分镜页全局绑定视频模型（本页所有 r2v 都用这一条）")
+    @Operation(summary = "分镜页全局绑定视频模型（本页所有出片都用这一条）")
     @PutMapping("/series/{id}/video-model")
     public CommonResult<DramaSeriesResp> bindVideoModel(
             @PathVariable Long id,
             @Valid @RequestBody DramaVideoModelBindReq req) {
         return CommonResult.success(dramaService.bindVideoModel(id, req));
+    }
+
+    @Operation(summary = "分镜页全局生成方式：参考图 r2v / 首尾帧 i2v，以及参考图衔接落幅")
+    @PutMapping("/series/{id}/video-generate-mode")
+    public CommonResult<DramaSeriesResp> bindVideoGenerateMode(
+            @PathVariable Long id,
+            @RequestBody DramaVideoGenerateModeBindReq req) {
+        return CommonResult.success(dramaService.bindVideoGenerateMode(id, req));
     }
 
     @Operation(summary = "剧本页绑定文本模型；传 null 解绑并回退规则分场")
@@ -336,10 +345,36 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.confirmShot(id));
     }
 
-    @Operation(summary = "单镜出片；默认 r2v（锁定主体参考图 + compiled_prompt），不附首尾帧")
+    @Operation(summary = "单镜出片；走项目全局生成方式（参考图 r2v 或首尾帧 i2v）")
     @PostMapping("/shots/{id}/generate")
     public CommonResult<DramaShotGenerateResp> generateShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.generateShot(id));
+    }
+
+    @Operation(summary = "自动 i2i 重画本镜开场静帧（不开始出视频）")
+    @PostMapping("/shots/{id}/first-frame/generate")
+    public CommonResult<DramaShotGenerateResp> generateShotOpeningStill(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.generateOpeningStill(id));
+    }
+
+    @Operation(summary = "上传本镜开场首帧（覆盖自动静帧或链式落幅）")
+    @PostMapping("/shots/{id}/first-frame")
+    public CommonResult<DramaShotResp> uploadShotFirstFrame(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file) {
+        return CommonResult.success(dramaStoryboardService.uploadFirstFrame(id, file));
+    }
+
+    @Operation(summary = "清除本镜开场静帧，改回同场上一镜落幅或下次自动重画")
+    @DeleteMapping("/shots/{id}/first-frame")
+    public CommonResult<DramaShotResp> clearShotFirstFrame(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.clearFirstFrame(id));
+    }
+
+    @Operation(summary = "改用同场上一镜落幅作本镜首帧（换场不可用）")
+    @PostMapping("/shots/{id}/first-frame/from-prev")
+    public CommonResult<DramaShotResp> usePrevTailFirstFrame(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.usePrevTail(id));
     }
 
     @Operation(summary = "查询分镜出片任务；成功后写入 video_key")

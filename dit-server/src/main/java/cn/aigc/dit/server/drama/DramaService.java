@@ -14,6 +14,7 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
@@ -126,6 +127,8 @@ public class DramaService {
         series.setDefaultDurationSec(normalizeDuration(req.getDefaultDurationSec()));
         series.setPlannedEpisodeCount(normalizePlanned(req.getPlannedEpisodeCount()));
         series.setTextModelId(resolveCreateTextModelId(req.getTextModelId()));
+        series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        series.setVideoChainPrevTail(false);
         seriesMapper.insert(series);
 
         DramaEpisode episode = new DramaEpisode();
@@ -408,7 +411,7 @@ public class DramaService {
         resp.setStyleKey(style.key());
         resp.setStyleName(style.name());
         resp.setStyleCover(style.cover());
-        String coverKey = sceneCovers == null ? null : sceneCovers.get(series.getId());
+        String coverKey = (sceneCovers == null || series.getId() == null) ? null : sceneCovers.get(series.getId());
         resp.setCoverKey(coverKey);
         resp.setCoverUrl(MediaUrls.of(coverKey));
         resp.setAspectRatio(series.getAspectRatio());
@@ -427,6 +430,9 @@ public class DramaService {
         }
         resp.setVideoModelId(series.getVideoModelId());
         resp.setVideoAdapterKey(series.getVideoAdapterKey());
+        resp.setVideoGenerateMode(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()));
+        resp.setVideoChainPrevTail(Boolean.TRUE.equals(series.getVideoChainPrevTail()));
+        resp.setPromptRecompiling(storyboardService.isSeriesRecompiling(series.getId()));
         if (series.getVideoModelId() != null) {
             resp.setVideoModelName(modelNames.get(series.getVideoModelId()));
         }
@@ -647,8 +653,7 @@ public class DramaService {
                         .eq(AiModel::getEnabled, true)
                         .orderByAsc(AiModel::getId))
                 .stream()
-                .filter(model -> GenerateRequests.supportsMode(
-                        model.getCapabilities(), ModelCategory.VIDEO, GenerateMode.R2V))
+                .filter(model -> supportsDramaVideo(model))
                 .map(DramaService::toVideoModelResp)
                 .toList();
     }
@@ -660,7 +665,47 @@ public class DramaService {
         series.setVideoModelId(model.getId());
         series.setVideoAdapterKey(AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
+        String mode = DramaVideoGenerateModes.canonical(series.getVideoGenerateMode());
+        if (DramaVideoGenerateModes.isI2v(mode) && !supportsVideoMode(model, GenerateMode.I2V)) {
+            series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        } else if (DramaVideoGenerateModes.isR2v(mode) && !supportsVideoMode(model, GenerateMode.R2V)
+                && supportsVideoMode(model, GenerateMode.I2V)) {
+            series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        }
         seriesMapper.updateById(series);
+        if (!mode.equals(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()))) {
+            storyboardService.enqueueSeriesRecompile(series.getId());
+        }
+        return getSeries(series.getId());
+    }
+
+    @Transactional
+    public DramaSeriesResp bindVideoGenerateMode(Long seriesId, DramaVideoGenerateModeBindReq req) {
+        if (req == null || (req.getVideoGenerateMode() == null && req.getVideoChainPrevTail() == null)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择生成方式");
+        }
+        DramaSeries series = requireSeries(seriesId);
+        String previousMode = DramaVideoGenerateModes.canonical(series.getVideoGenerateMode());
+        boolean previousChain = Boolean.TRUE.equals(series.getVideoChainPrevTail());
+        if (req.getVideoGenerateMode() != null) {
+            String next = DramaVideoGenerateModes.canonical(req.getVideoGenerateMode());
+            if (DramaVideoGenerateModes.isI2v(next)) {
+                AiModel model = series.getVideoModelId() == null ? null : aiModelMapper.selectById(series.getVideoModelId());
+                if (model == null || !supportsVideoMode(model, GenerateMode.I2V)) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型不支持首尾帧");
+                }
+            }
+            series.setVideoGenerateMode(next);
+        }
+        if (req.getVideoChainPrevTail() != null) {
+            series.setVideoChainPrevTail(req.getVideoChainPrevTail());
+        }
+        boolean modeChanged = !previousMode.equals(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()));
+        boolean chainChanged = previousChain != Boolean.TRUE.equals(series.getVideoChainPrevTail());
+        seriesMapper.updateById(series);
+        if (modeChanged || chainChanged) {
+            storyboardService.enqueueSeriesRecompile(series.getId());
+        }
         return getSeries(series.getId());
     }
 
@@ -690,7 +735,13 @@ public class DramaService {
     }
 
     private Long resolveCreateTextModelId(Long requested) {
+        long enabled = aiModelMapper.selectCount(new LambdaQueryWrapper<AiModel>()
+                .eq(AiModel::getCategory, ModelCategory.TEXT)
+                .eq(AiModel::getEnabled, true));
         if (requested == null) {
+            if (enabled > 0) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "请选择文本模型");
+            }
             return null;
         }
         return requireEnabledTextModel(requested).getId();
@@ -783,7 +834,25 @@ public class DramaService {
         resp.setMaxAudioReferences(audio.maxReferences());
         resp.setSupportsAudioOnlyReference(audio.audioOnly());
         resp.setAudioMode(h3 || agnes || ark ? "native" : "unknown");
+        resp.setSupportsR2v(supportsVideoMode(model, GenerateMode.R2V));
+        resp.setSupportsI2v(supportsVideoMode(model, GenerateMode.I2V));
         return resp;
+    }
+
+    private static boolean supportsDramaVideo(AiModel model) {
+        return supportsVideoMode(model, GenerateMode.R2V) || supportsVideoMode(model, GenerateMode.I2V);
+    }
+
+    private static boolean supportsVideoMode(AiModel model, String mode) {
+        if (model == null) {
+            return false;
+        }
+        String adapter = AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (adapter != null) {
+            return AdapterCatalog.supportsMode(adapter, mode);
+        }
+        return GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.VIDEO, mode);
     }
 
     private AiModel requireEnabledVideoModel(Long id) {
@@ -794,8 +863,8 @@ public class DramaService {
         if (!Boolean.TRUE.equals(model.getEnabled())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "所选视频模型已停用");
         }
-        if (!GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.VIDEO, GenerateMode.R2V)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "所选视频模型不支持参考生视频");
+        if (!supportsDramaVideo(model)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "所选视频模型不支持参考生视频或首尾帧");
         }
         return model;
     }

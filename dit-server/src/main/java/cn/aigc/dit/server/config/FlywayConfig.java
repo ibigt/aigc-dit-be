@@ -118,6 +118,8 @@ public class FlywayConfig {
                     image_adapter_key       VARCHAR(64),
                     video_model_id          BIGINT       REFERENCES ai_model (id),
                     video_adapter_key       VARCHAR(64),
+                    video_generate_mode     VARCHAR(16)  NOT NULL DEFAULT 'r2v',
+                    video_chain_prev_tail   BOOLEAN      NOT NULL DEFAULT FALSE,
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
@@ -335,13 +337,22 @@ public class FlywayConfig {
                     gen_task_id             BIGINT       REFERENCES gen_task (id) ON DELETE SET NULL,
                     video_key               VARCHAR(512),
                     video_poster_key        VARCHAR(512),
+                    video_tail_key          VARCHAR(512),
+                    first_frame_key         VARCHAR(512),
+                    first_frame_origin      VARCHAR(16),
+                    video_generate_mode     VARCHAR(16),
+                    video_chain_prev_tail   BOOLEAN,
+                    video_generated_mode    VARCHAR(16),
+                    chained_from_shot_id    BIGINT,
+                    chained_from_tail_key   VARCHAR(512),
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_shot_episode_index UNIQUE (episode_id, shot_index),
                     CONSTRAINT ck_drama_shot_index CHECK (shot_index >= 1),
                     CONSTRAINT ck_drama_shot_duration CHECK (duration_sec >= 5 AND duration_sec <= 15),
                     CONSTRAINT ck_drama_shot_cast CHECK (cast_count >= 0),
-                    CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期'))
+                    CONSTRAINT ck_drama_shot_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
+                    CONSTRAINT ck_drama_shot_video_mode CHECK (video_generate_mode IS NULL OR video_generate_mode IN ('r2v', 'i2v'))
                 )
                 """);
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_shot_chapter ON drama_shot (chapter_id, shot_index)");
@@ -365,6 +376,92 @@ public class FlywayConfig {
                 COMMENT ON COLUMN drama_shot.video_poster_key
                 IS '成片首帧（ffmpeg 抽出的 poster.webp）；底片条预览用，未出片为空'
                 """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS video_generate_mode VARCHAR(16) NOT NULL DEFAULT 'r2v'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD COLUMN IF NOT EXISTS video_chain_prev_tail BOOLEAN NOT NULL DEFAULT FALSE
+                """);
+        statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_video_mode");
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD CONSTRAINT ck_drama_series_video_mode
+                CHECK (video_generate_mode IN ('r2v', 'i2v'))
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.video_generate_mode
+                IS '分镜出片默认方式：r2v 参考图 / i2v 首尾帧；单镜可覆盖'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_series.video_chain_prev_tail
+                IS '默认参考图模式下是否把上一镜落幅当作额外 reference_image；单镜可覆盖'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS video_tail_key VARCHAR(512)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS first_frame_key VARCHAR(512)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS first_frame_origin VARCHAR(16)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS video_generate_mode VARCHAR(16)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS video_chain_prev_tail BOOLEAN
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS video_generated_mode VARCHAR(16)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS chained_from_shot_id BIGINT
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS chained_from_tail_key VARCHAR(512)
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.video_tail_key
+                IS '成片落幅（ffmpeg 抽出的 tail.webp）；同场下一镜 i2v 首帧 / r2v 衔接参考'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.first_frame_key
+                IS '开场静帧对象 key：自动 i2i 或用户上传；场内第一镜/换特写时覆盖链式落幅'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.first_frame_origin
+                IS '开场静帧来源：auto 自动 i2i / upload 用户上传'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.video_generate_mode
+                IS '本镜出片方式：r2v 参考图 / i2v 首尾帧；空按参考图'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.video_chain_prev_tail
+                IS '本镜参考图是否把上一镜落幅当作额外 reference_image；空或不勾选则不衔接'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.video_generated_mode
+                IS '最近一次成功出片时的生成方式（r2v / i2v）'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.chained_from_shot_id
+                IS '首尾帧出片时使用的上一镜 id'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.chained_from_tail_key
+                IS '首尾帧出片时使用的上一镜落幅 key，用于判断上一镜是否已更新'
+                """);
         statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_duration");
         statement.execute("""
                 ALTER TABLE drama_series
@@ -376,6 +473,23 @@ public class FlywayConfig {
                 ALTER TABLE drama_shot
                 ADD CONSTRAINT ck_drama_shot_duration
                 CHECK (duration_sec >= 5 AND duration_sec <= 15)
+                """);
+        statement.execute("ALTER TABLE drama_shot DROP CONSTRAINT IF EXISTS ck_drama_shot_video_mode");
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD CONSTRAINT ck_drama_shot_video_mode
+                CHECK (video_generate_mode IS NULL OR video_generate_mode IN ('r2v', 'i2v'))
+                """);
+        statement.execute("""
+                UPDATE drama_shot AS s
+                SET video_generate_mode = COALESCE(s.video_generate_mode, ser.video_generate_mode, 'r2v'),
+                    video_chain_prev_tail = CASE
+                        WHEN COALESCE(s.video_generate_mode, ser.video_generate_mode, 'r2v') = 'i2v' THEN FALSE
+                        ELSE COALESCE(s.video_chain_prev_tail, ser.video_chain_prev_tail, FALSE)
+                    END
+                FROM drama_series ser
+                WHERE s.series_id = ser.id
+                  AND (s.video_generate_mode IS NULL OR s.video_chain_prev_tail IS NULL)
                 """);
         statement.execute("""
                 ALTER TABLE drama_episode

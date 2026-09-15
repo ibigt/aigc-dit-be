@@ -61,6 +61,27 @@ public class DramaShot {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String videoPosterKey;
 
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String videoTailKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String firstFrameKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String firstFrameOrigin;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String videoGenerateMode;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private Boolean videoChainPrevTail;
+
+    private String videoGeneratedMode;
+    private Long chainedFromShotId;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String chainedFromTailKey;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

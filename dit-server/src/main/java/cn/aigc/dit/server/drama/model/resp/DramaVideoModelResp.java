@@ -22,4 +22,8 @@ public class DramaVideoModelResp {
     private Integer maxAudioReferences;
     private Boolean supportsAudioOnlyReference;
     private String audioMode;
+    @Schema(description = "是否支持参考生视频")
+    private Boolean supportsR2v;
+    @Schema(description = "是否支持首尾帧")
+    private Boolean supportsI2v;
 }

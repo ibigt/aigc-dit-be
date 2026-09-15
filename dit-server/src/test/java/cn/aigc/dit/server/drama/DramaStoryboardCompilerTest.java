@@ -142,6 +142,181 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
+    void i2vOmitsPicturesAndAddsFirstFrameStart() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "洛白用书盖脸。",
+                "",
+                "开场",
+                "洛白仍闭眼",
+                5,
+                List.of("洛白"),
+                1);
+        String prompt = DramaStoryboardCompiler.compile(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false)).prompt();
+        assertFalse(prompt.contains("<Picture"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
+        assertTrue(prompt.contains("洛白：青年男性；清冷骨相"));
+        assertTrue(prompt.contains("Action: 洛白用书盖脸。"));
+        assertFalse(prompt.contains("洛白（<Picture 1>）"));
+        String r2v = DramaStoryboardCompiler.fingerprint(prefix, refs, shot);
+        String i2v = DramaStoryboardCompiler.fingerprint(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false));
+        assertNotEquals(r2v, i2v);
+    }
+
+    @Test
+    void i2vKeepsIncomingCharacterIdentityWithoutPictures() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "中景。局长推门将档案摔桌，洛白起身。",
+                "",
+                "洛白用书盖脸",
+                "局长站在桌前",
+                5,
+                List.of("局长", "洛白"),
+                2,
+                List.of(new DramaStoryboardCompiler.NamedAppearance("局长", "中年男性；浓眉；灰西装")));
+        String prompt = DramaStoryboardCompiler.compile(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false)).prompt();
+        assertFalse(prompt.contains("<Picture"));
+        assertTrue(prompt.contains("局长：中年男性；浓眉；灰西装"));
+        assertTrue(prompt.contains("洛白：青年男性；清冷骨相"));
+        assertTrue(prompt.contains("禁止用首帧里已有的人顶替新角色"));
+        assertTrue(prompt.contains("Action: 中景。局长推门将档案摔桌，洛白起身。"));
+    }
+
+    @Test
+    void i2vReplacesGenericLockPhraseWithDistinctLook() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "洛白的外貌、发型、服装和年龄必须保持一致", "设定图"),
+                ref(2, "局长", DramaContract.ASSET_TYPE_CHARACTER, "局长的外貌、发型、服装和年龄必须保持一致", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "中景。局长推门将档案摔桌，洛白起身。",
+                "",
+                "门被推开",
+                "厚档案落在桌面",
+                5,
+                List.of("局长", "洛白"),
+                2);
+        String prompt = DramaStoryboardCompiler.compile(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false)).prompt();
+        assertFalse(prompt.contains("局长的外貌、发型、服装和年龄必须保持一致"));
+        assertTrue(prompt.contains("局长：角色“局长”，" + DramaStoryboardCompiler.I2V_IDENTITY_FALLBACK));
+        assertTrue(prompt.contains("洛白：角色“洛白”，" + DramaStoryboardCompiler.I2V_IDENTITY_FALLBACK));
+        assertTrue(prompt.contains("禁止把首帧已有人物的脸改贴过来"));
+    }
+
+    @Test
+    void i2vAndR2vCompiledPromptsStayIsolated() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"),
+                ref(2, "局长", DramaContract.ASSET_TYPE_CHARACTER, "中年男性；浓眉；灰西装", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "中景。局长推门将档案摔桌，洛白起身。",
+                "",
+                "开场",
+                "局长站在桌前",
+                5,
+                List.of("局长", "洛白"),
+                2);
+        String r2v = DramaStoryboardCompiler.compile(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.r2v()).prompt();
+        String i2v = DramaStoryboardCompiler.compile(
+                prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false)).prompt();
+
+        assertTrue(r2v.contains("<Picture 1>"));
+        assertTrue(r2v.contains("洛白（<Picture 1>）") || r2v.contains("局长=<Picture 2>") || r2v.contains("<Picture 2> 局长"));
+        assertFalse(r2v.contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertFalse(r2v.contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
+        assertFalse(r2v.contains("禁止用首帧里已有的人顶替新角色"));
+
+        assertFalse(i2v.contains("<Picture"));
+        assertTrue(i2v.contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertTrue(i2v.contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
+        assertTrue(i2v.contains("局长：中年男性；浓眉；灰西装"));
+        assertNotEquals(
+                DramaStoryboardCompiler.fingerprint(prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.r2v()),
+                DramaStoryboardCompiler.fingerprint(prefix, refs, List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("i2v", false)));
+    }
+
+    @Test
+    void stillKeepsPicturesAndLocksOpeningPose() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "全景。洛白用书盖脸趴在红木桌。",
+                "",
+                "开场",
+                null,
+                5,
+                List.of("洛白"),
+                1);
+        String prompt = DramaStoryboardCompiler.compileStill(prefix, refs, shot).prompt();
+        assertTrue(prompt.contains("<Picture 1>"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.STILL_MUST));
+        assertTrue(prompt.contains("洛白（<Picture 1>）用书盖脸"));
+        assertFalse(prompt.contains("Duration:"));
+        assertFalse(prompt.contains(DramaStoryboardCompiler.I2V_MUST_START));
+    }
+
+    @Test
+    void stillWithPrevTailKeepsActionComposition() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"),
+                DramaStoryboardCompiler.prevTailStillReference());
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "特写。洛白手中古铜怀表。",
+                "",
+                "开场",
+                null,
+                5,
+                List.of("洛白"),
+                1);
+        String prompt = DramaStoryboardCompiler.compileStill(prefix, refs, shot).prompt();
+        assertTrue(prompt.contains("<Picture 1>"));
+        assertTrue(prompt.contains("<Picture 2>"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
+        assertFalse(prompt.contains(DramaStoryboardCompiler.PREV_TAIL_HINT));
+        assertTrue(prompt.contains("特写"));
+    }
+
+    @Test
+    void r2vChainAddsContinuityHintWithoutChangingDefaultFingerprintUnlessEnabled() {
+        String prefix = "二次元漫画风";
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "场景", "动作", null, "in", "out", 5, List.of("洛白"), 1);
+        String plain = DramaStoryboardCompiler.compile(prefix, List.of(), shot).prompt();
+        String chained = DramaStoryboardCompiler.compile(
+                prefix, List.of(), List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("r2v", true)).prompt();
+        assertFalse(plain.contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
+        assertTrue(chained.contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
+        assertEquals(
+                DramaStoryboardCompiler.fingerprint(prefix, List.of(), shot),
+                DramaStoryboardCompiler.fingerprint(prefix, List.of(), List.of(), shot, DramaStoryboardCompiler.CompileOptions.r2v()));
+        assertNotEquals(
+                DramaStoryboardCompiler.fingerprint(prefix, List.of(), shot),
+                DramaStoryboardCompiler.fingerprint(
+                        prefix, List.of(), List.of(), shot, DramaStoryboardCompiler.CompileOptions.of("r2v", true)));
+    }
+
+    @Test
     void compilesVoiceIdentityAndIncludesItInFingerprint() {
         DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
                 "雨夜", "回头", "洛白：别跟过来。", null, null, 5, List.of("洛白"), 1);
