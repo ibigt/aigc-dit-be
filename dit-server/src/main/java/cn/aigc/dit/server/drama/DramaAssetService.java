@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.common.constant.AssetKind;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
@@ -22,12 +23,14 @@ import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.Asset;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.GenerateService;
@@ -186,15 +189,34 @@ public class DramaAssetService {
     @Transactional
     public DramaAssetResp uploadVoiceReference(Long assetId, MultipartFile file) {
         DramaAsset asset = requireAsset(assetId);
-        if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "只有角色资产可以设置音色参考");
-        }
         if (file == null || file.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择音频");
         }
         String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
         if (!mime.startsWith("audio/")) {
             throw new BizException(ErrorCode.BAD_REQUEST, "音色参考仅支持音频文件");
+        }
+        validateVoiceReferenceTarget(asset);
+        AssetResp libraryAsset = assetService.upload(file);
+        attachVoiceReference(asset, libraryAsset.getStorageKey(), libraryAsset.getMimeType());
+        return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    @Transactional
+    public DramaAssetResp bindVoiceReference(Long assetId, Long libraryAssetId) {
+        DramaAsset asset = requireAsset(assetId);
+        validateVoiceReferenceTarget(asset);
+        Asset libraryAsset = assetService.requireOwned(libraryAssetId);
+        if (!AssetKind.AUDIO.equals(libraryAsset.getKind())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择音频素材");
+        }
+        attachVoiceReference(asset, libraryAsset.getStorageKey(), libraryAsset.getMimeType());
+        return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    private void validateVoiceReferenceTarget(DramaAsset asset) {
+        if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "只有角色资产可以设置音色参考");
         }
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         AiModel videoModel = series.getVideoModelId() == null
@@ -206,13 +228,14 @@ public class DramaAssetService {
         if (!audio.supported()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前项目的视频模型不支持上传参考音频");
         }
-        String key = assetService.putOwnedFile(file, "drama/" + asset.getSeriesId() + "/voices");
+    }
+
+    private void attachVoiceReference(DramaAsset asset, String key, String mime) {
         asset.setVoiceReferenceKey(key);
         asset.setVoiceReferenceMime(mime);
         reopenIfConfirmed(asset);
         assetMapper.updateById(asset);
         touchSeries(asset.getSeriesId());
-        return toResp(asset, loadTask(asset.getGenTaskId()));
     }
 
     @Transactional

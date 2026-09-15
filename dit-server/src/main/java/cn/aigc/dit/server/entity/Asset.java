@@ -19,7 +19,7 @@ public class Asset {
     private Long userId;
     private String name;
     private String mimeType;
-    /** image / video；一期不做音频 */
+    /** image / video / audio */
     private String kind;
     private String storageKey;
     private String posterKey;

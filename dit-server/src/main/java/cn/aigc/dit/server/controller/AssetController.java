@@ -33,7 +33,7 @@ public class AssetController {
         return CommonResult.success(assetService.listMine(kind, q));
     }
 
-    @Operation(summary = "上传图片或视频")
+    @Operation(summary = "上传图片、视频或音频（文件存入 MinIO）")
     @PostMapping
     public CommonResult<AssetResp> upload(@RequestParam("file") MultipartFile file) {
         return CommonResult.success(assetService.upload(file));
