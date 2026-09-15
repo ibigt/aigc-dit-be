@@ -12,6 +12,7 @@ import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.ReferenceAsset;
 import cn.aigc.dit.generate.SubmitResult;
+import cn.aigc.dit.generate.audio.AudioReferenceProcessor;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -41,19 +42,24 @@ public class ArkGenerateProvider implements GenerateProvider {
     private final GenerateProperties.Ark properties;
     private final ArkHttp http;
     private final ObjectMapper objectMapper;
+    private final AudioReferenceProcessor audioReferenceProcessor;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
 
     @Autowired
-    public ArkGenerateProvider(ObjectStorage objectStorage, GenerateProperties properties) {
-        this(objectStorage, properties, new JdkArkHttp(properties.getArk()), new ObjectMapper());
+    public ArkGenerateProvider(ObjectStorage objectStorage, GenerateProperties properties,
+                               AudioReferenceProcessor audioReferenceProcessor) {
+        this(objectStorage, properties, new JdkArkHttp(properties.getArk()), new ObjectMapper(),
+                audioReferenceProcessor);
     }
 
     ArkGenerateProvider(ObjectStorage objectStorage, GenerateProperties properties,
-                        ArkHttp http, ObjectMapper objectMapper) {
+                        ArkHttp http, ObjectMapper objectMapper,
+                        AudioReferenceProcessor audioReferenceProcessor) {
         this.objectStorage = objectStorage;
         this.properties = properties.getArk();
         this.http = http;
         this.objectMapper = objectMapper;
+        this.audioReferenceProcessor = audioReferenceProcessor;
     }
 
     @Override
@@ -392,6 +398,11 @@ public class ArkGenerateProvider implements GenerateProvider {
             throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空");
         }
         String mime = contentTypeOf(storageKey, kind);
+        if ("audio".equals(kind)) {
+            AudioReferenceProcessor.ProcessedAudio processed = audioReferenceProcessor.process(bytes, storageKey);
+            bytes = processed.bytes();
+            mime = processed.contentType();
+        }
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
     }
 

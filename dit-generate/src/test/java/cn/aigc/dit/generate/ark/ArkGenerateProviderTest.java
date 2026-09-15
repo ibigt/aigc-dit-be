@@ -9,6 +9,7 @@ import cn.aigc.dit.generate.FramePair;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.ReferenceAsset;
 import cn.aigc.dit.generate.SubmitResult;
+import cn.aigc.dit.generate.audio.AudioReferenceProcessor;
 import cn.aigc.dit.storage.LocalObjectStorage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -36,6 +37,7 @@ class ArkGenerateProviderTest {
     private ArkGenerateProvider provider;
     private LocalObjectStorage storage;
     private GenerateProperties properties;
+    private FakeAudioReferenceProcessor audioReferenceProcessor;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @BeforeEach
@@ -46,7 +48,8 @@ class ArkGenerateProviderTest {
         properties.getArk().setRateLimitBackoffSeconds(0);
         http = new FakeHttp();
         storage = new LocalObjectStorage(tempDir);
-        provider = new ArkGenerateProvider(storage, properties, http, mapper);
+        audioReferenceProcessor = new FakeAudioReferenceProcessor();
+        provider = new ArkGenerateProvider(storage, properties, http, mapper, audioReferenceProcessor);
     }
 
     @Test
@@ -119,7 +122,9 @@ class ArkGenerateProviderTest {
         JsonNode audio = body.get("content").get(0);
         assertEquals("audio_url", audio.get("type").asText());
         assertEquals("reference_audio", audio.get("role").asText());
-        assertEquals("data:audio/wav;base64,AQID", audio.get("audio_url").get("url").asText());
+        assertEquals("data:audio/mpeg;base64,CQg=", audio.get("audio_url").get("url").asText());
+        assertEquals(1, audioReferenceProcessor.callCount);
+        assertEquals("users/8/assets/voice.wav", audioReferenceProcessor.lastSourceName);
     }
 
     @Test
@@ -247,6 +252,18 @@ class ArkGenerateProviderTest {
                 .setDurationSec(5)
                 .setEndpoint("https://ark.cn-beijing.volces.com/api/v3")
                 .setApiKey("sk-ark");
+    }
+
+    private static final class FakeAudioReferenceProcessor implements AudioReferenceProcessor {
+        private int callCount;
+        private String lastSourceName;
+
+        @Override
+        public ProcessedAudio process(byte[] source, String sourceName) {
+            callCount++;
+            lastSourceName = sourceName;
+            return new ProcessedAudio(new byte[]{9, 8}, "audio/mpeg");
+        }
     }
 
     private static final class FakeHttp implements ArkHttp {
