@@ -251,6 +251,14 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.uploadVoiceReference(id, file));
     }
 
+    @Operation(summary = "从音频素材库绑定角色音色参考")
+    @PostMapping("/assets/{id}/voice-reference/library/{libraryAssetId}")
+    public CommonResult<DramaAssetResp> bindAssetVoiceReference(
+            @PathVariable Long id,
+            @PathVariable Long libraryAssetId) {
+        return CommonResult.success(dramaAssetService.bindVoiceReference(id, libraryAssetId));
+    }
+
     @Operation(summary = "用系列绑定的图像模型纯 t2i；不按素材选模型")
     @PostMapping("/assets/{id}/generate")
     public CommonResult<DramaAssetGenerateResp> generateAssetImage(

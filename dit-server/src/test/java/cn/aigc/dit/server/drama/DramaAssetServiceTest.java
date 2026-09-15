@@ -18,6 +18,7 @@ import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.GenerateService;
@@ -228,7 +229,7 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void uploadVoiceStoresInMinioWhenBoundModelSupportsAudio() {
+    void uploadVoiceStoresInMinioAndIndexesLibraryWhenBoundModelSupportsAudio() {
         DramaAsset asset = ownedAsset();
         DramaSeries series = ownedSeries();
         series.setVideoModelId(22L);
@@ -240,16 +241,46 @@ class DramaAssetServiceTest {
         when(assetMapper.selectById(9L)).thenReturn(asset);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(22L)).thenReturn(model);
-        when(libraryAssetService.putOwnedFile(any(), any()))
-                .thenReturn("users/7/drama/21/voices/voice.wav");
         org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
                 "file", "voice.wav", "audio/wav", new byte[]{1, 2, 3});
+        AssetResp libraryAsset = new AssetResp();
+        libraryAsset.setStorageKey("users/7/assets/voice.wav");
+        libraryAsset.setMimeType("audio/wav");
+        when(libraryAssetService.upload(file)).thenReturn(libraryAsset);
 
         DramaAssetResp resp = service.uploadVoiceReference(9L, file);
 
-        verify(libraryAssetService).putOwnedFile(file, "drama/21/voices");
-        assertEquals("users/7/drama/21/voices/voice.wav", resp.getVoiceReferenceKey());
+        verify(libraryAssetService).upload(file);
+        verify(libraryAssetService, never()).putOwnedFile(any(), any());
+        assertEquals("users/7/assets/voice.wav", resp.getVoiceReferenceKey());
         assertEquals("audio/wav", resp.getVoiceReferenceMime());
+    }
+
+    @Test
+    void bindVoiceUsesOwnedAudioFromLibrary() {
+        DramaAsset asset = ownedAsset();
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(22L);
+        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
+        model.setAdapterKey(AdapterCatalog.SEEDANCE_2_5);
+        model.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
+        model.setCategory("video");
+        model.setModelKey("doubao-seedance-2-5-260628");
+        cn.aigc.dit.server.entity.Asset libraryAsset = new cn.aigc.dit.server.entity.Asset();
+        libraryAsset.setId(55L);
+        libraryAsset.setKind("audio");
+        libraryAsset.setMimeType("audio/mpeg");
+        libraryAsset.setStorageKey("users/7/assets/voice.mp3");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(22L)).thenReturn(model);
+        when(libraryAssetService.requireOwned(55L)).thenReturn(libraryAsset);
+
+        DramaAssetResp resp = service.bindVoiceReference(9L, 55L);
+
+        assertEquals("users/7/assets/voice.mp3", resp.getVoiceReferenceKey());
+        assertEquals("audio/mpeg", resp.getVoiceReferenceMime());
+        verify(assetMapper).updateById(asset);
     }
 
     @Test
@@ -271,6 +302,7 @@ class DramaAssetServiceTest {
         BizException error = assertThrows(BizException.class, () -> service.uploadVoiceReference(9L, file));
 
         assertEquals("当前项目的视频模型不支持上传参考音频", error.getMessage());
+        verify(libraryAssetService, never()).upload(any());
         verify(libraryAssetService, never()).putOwnedFile(any(), any());
     }
 

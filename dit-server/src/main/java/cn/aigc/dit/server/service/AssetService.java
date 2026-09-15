@@ -7,6 +7,8 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.server.entity.Asset;
 import cn.aigc.dit.server.entity.Creation;
+import cn.aigc.dit.server.drama.entity.DramaAsset;
+import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.mapper.AssetMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.media.MediaUrls;
@@ -32,6 +34,7 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
     private final ObjectStorage objectStorage;
     private final PosterExtractor posterExtractor;
     private final CreationMapper creationMapper;
+    private final DramaAssetMapper dramaAssetMapper;
 
     public List<AssetResp> listMine(String kind, String query) {
         Long userId = UserContext.requireUserId();
@@ -122,7 +125,10 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         boolean sharedWithCreation = creationMapper.selectCount(new LambdaQueryWrapper<Creation>()
                 .eq(Creation::getUserId, asset.getUserId())
                 .eq(Creation::getStorageKey, asset.getStorageKey())) > 0;
-        if (!sharedWithCreation) {
+        boolean sharedWithDramaVoice = dramaAssetMapper.selectCount(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getUserId, asset.getUserId())
+                .eq(DramaAsset::getVoiceReferenceKey, asset.getStorageKey())) > 0;
+        if (!sharedWithCreation && !sharedWithDramaVoice) {
             objectStorage.delete(asset.getStorageKey());
             if (asset.getPosterKey() != null && !asset.getPosterKey().equals(asset.getStorageKey())) {
                 try {
