@@ -225,6 +225,22 @@ class DramaTextServiceImplTest {
     }
 
     @Test
+    void invalidOutputReasonExplainsEmptyMalformedAndContractFailures() {
+        assertEquals("模型返回 content 为空",
+                DramaTextServiceImpl.invalidOutputReason(" ", "ScriptDoc"));
+        assertEquals("返回内容中没有完整 JSON 对象",
+                DramaTextServiceImpl.invalidOutputReason("不是 JSON", "ScriptDoc"));
+        assertTrue(DramaTextServiceImpl.invalidOutputReason("{\"scenes\":[}", "ScriptDoc")
+                .startsWith("JSON 解析失败 line="));
+        assertEquals("scenes 缺失或为空",
+                DramaTextServiceImpl.invalidOutputReason("{\"scenes\":[]}", "ScriptDoc"));
+        assertEquals("assets 缺失或为空",
+                DramaTextServiceImpl.invalidOutputReason("{\"assets\":[]}", "AssetDraftList"));
+        assertEquals("shots 缺失或为空",
+                DramaTextServiceImpl.invalidOutputReason("{\"shots\":[]}", "ShotDraftList"));
+    }
+
+    @Test
     void parseScriptNeverThrowsOnJunkInput() {
         DramaTextServiceImpl service = boundService();
 

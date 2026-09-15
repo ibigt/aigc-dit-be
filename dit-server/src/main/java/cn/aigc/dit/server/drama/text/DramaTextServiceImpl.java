@@ -153,16 +153,77 @@ public class DramaTextServiceImpl implements DramaTextService {
                               java.util.function.Function<String, T> reader, String what, int maxTokens) {
         TextChatRequest req = new TextChatRequest(system, user, true, maxTokens);
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
-            T value = reader.apply(gateway.chat(seriesId, req).getContent());
+            TextChatResult response = gateway.chat(seriesId, req);
+            String content = response.getContent();
+            T value = reader.apply(content);
             if (value != null) {
                 if (attempt > 1) {
                     log.info("[drama-text] {} 第 {} 次输出符合合同 seriesId={}", what, attempt, seriesId);
                 }
                 return value;
             }
-            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={}", what, seriesId, attempt);
+            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={}",
+                    what, seriesId, attempt, invalidOutputReason(content, what), response.getModel(),
+                    response.getFinishReason(), content == null ? 0 : content.length());
         }
         return null;
+    }
+
+    /**
+     * 失败时重新做一次只读诊断。只记录结构原因和长度，不把用户剧本或模型原文写进日志。
+     */
+    static String invalidOutputReason(String content, String what) {
+        if (!StringUtils.hasText(content)) {
+            return "模型返回 content 为空";
+        }
+        String json = extractJsonObject(content);
+        if (json == null) {
+            return "返回内容中没有完整 JSON 对象";
+        }
+        Class<?> type = switch (what) {
+            case "ScriptDoc" -> ScriptDoc.class;
+            case "AssetDraftList" -> AssetDraftList.class;
+            case "ShotDraftList" -> ShotDraftList.class;
+            default -> null;
+        };
+        if (type == null) {
+            return "未知输出合同 " + what;
+        }
+        try {
+            Object parsed = MAPPER.readValue(json, type);
+            if (parsed instanceof ScriptDoc doc) {
+                if (doc.getScenes() == null || doc.getScenes().isEmpty()) {
+                    return "scenes 缺失或为空";
+                }
+                return "场景经合同清洗后为空（场景对象为空或缺少有效内容）";
+            }
+            if (parsed instanceof AssetDraftList list) {
+                if (list.getAssets() == null || list.getAssets().isEmpty()) {
+                    return "assets 缺失或为空";
+                }
+                return "资产经合同清洗后为空（name/type 缺失或类型无效）";
+            }
+            if (parsed instanceof ShotDraftList list) {
+                if (list.getShots() == null || list.getShots().isEmpty()) {
+                    return "shots 缺失或为空";
+                }
+                return "分镜经合同清洗后为空（章节引用、名称或字段无效）";
+            }
+            return "输出未通过合同校验";
+        } catch (JsonProcessingException e) {
+            String message = e.getOriginalMessage();
+            if (!StringUtils.hasText(message)) {
+                message = e.getClass().getSimpleName();
+            }
+            String location = e.getLocation() == null ? "" : " line=" + e.getLocation().getLineNr()
+                    + " column=" + e.getLocation().getColumnNr();
+            return "JSON 解析失败" + location + ": " + clipDiagnostic(message);
+        }
+    }
+
+    private static String clipDiagnostic(String value) {
+        String text = value == null ? "" : value.replaceAll("\\s+", " ").trim();
+        return text.length() <= 240 ? text : text.substring(0, 240);
     }
 
     private String toJson(Object value) {
