@@ -17,9 +17,11 @@ import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.GenTask;
+import cn.aigc.dit.server.entity.SpeechVoice;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
+import cn.aigc.dit.server.mapper.SpeechVoiceMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
 import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import cn.aigc.dit.server.model.resp.AdminModelResp;
@@ -47,6 +49,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
     private final DramaSeriesMapper seriesMapper;
     private final GenTaskMapper genTaskMapper;
     private final CreationMapper creationMapper;
+    private final SpeechVoiceMapper speechVoiceMapper;
 
     public List<AdminModelResp> listAdmin(String keyword, String category, String provider) {
         LambdaQueryWrapper<AiModel> wrapper = new LambdaQueryWrapper<AiModel>()
@@ -294,7 +297,11 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         pricing.remove("proxy");
         resp.setPricing(pricing);
         if (ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory())) {
-            resp.setAudioOptions(publicAudioOptions(model.getAdapterConfig()));
+            Map<String, Object> options = publicAudioOptions(model.getAdapterConfig());
+            if (AdapterCatalog.isMiniMaxSpeech(model.getAdapterKey())) {
+                options.put("voices", miniMaxSystemVoices(options.get("voices")));
+            }
+            resp.setAudioOptions(options);
         }
         resp.setEnabled(model.getEnabled());
         resp.setDescription(model.getDescription());
@@ -323,6 +330,33 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         for (String key : List.of("voices", "formats", "defaultVoice", "defaultFormat", "minSpeed", "maxSpeed")) {
             if (config.get(key) != null) {
                 result.put(key, config.get(key));
+            }
+        }
+        return result;
+    }
+
+    private List<Map<String, Object>> miniMaxSystemVoices(Object configuredVoices) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        Map<String, Boolean> included = new LinkedHashMap<>();
+        speechVoiceMapper.selectList(new LambdaQueryWrapper<SpeechVoice>()
+                        .eq(SpeechVoice::getProvider, "minimax")
+                        .eq(SpeechVoice::getEnabled, true)
+                        .orderByAsc(SpeechVoice::getSortOrder)
+                        .orderByAsc(SpeechVoice::getId))
+                .forEach(voice -> {
+                    result.add(Map.of(
+                            "id", voice.getVoiceId(),
+                            "name", voice.getName(),
+                            "language", voice.getLanguage()));
+                    included.put(voice.getVoiceId(), true);
+                });
+        if (configuredVoices instanceof Iterable<?> values) {
+            for (Object value : values) {
+                Object rawId = value instanceof Map<?, ?> map ? map.get("id") : value;
+                String id = rawId == null ? null : String.valueOf(rawId);
+                if (StringUtils.hasText(id) && !included.containsKey(id)) {
+                    result.add(Map.of("id", id, "name", id, "language", "自定义"));
+                }
             }
         }
         return result;

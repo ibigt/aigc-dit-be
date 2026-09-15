@@ -101,8 +101,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getCategory(),
                 request.getResolution(),
                 request.getQuality(),
-                ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
-                        ? request.getPrompt().length() : request.getDurationSec(),
+                billingQuantity(request),
                 request.resolvedCopies());
         boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
         CreationSession session = bindSession
@@ -138,6 +137,13 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             }
         });
         return creationService.toTaskResp(task, List.of(), model.getName());
+    }
+
+    static Integer billingQuantity(GenerateRequest request) {
+        if (ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
+            return request.getPrompt() == null ? 0 : request.getPrompt().length();
+        }
+        return request.getDurationSec();
     }
 
     private static void validatePromptAndAudio(AiModel model, GenerateRequest request) {

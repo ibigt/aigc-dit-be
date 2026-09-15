@@ -4,9 +4,11 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.SpeechVoice;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
+import cn.aigc.dit.server.mapper.SpeechVoiceMapper;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
 import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,12 +43,14 @@ class AdminModelServiceTest {
     private GenTaskMapper genTaskMapper;
     @Mock
     private CreationMapper creationMapper;
+    @Mock
+    private SpeechVoiceMapper speechVoiceMapper;
 
     private AdminModelService service;
 
     @BeforeEach
     void setUp() {
-        service = new AdminModelService(encryptor, chatClient, seriesMapper, genTaskMapper, creationMapper);
+        service = new AdminModelService(encryptor, chatClient, seriesMapper, genTaskMapper, creationMapper, speechVoiceMapper);
         ReflectionTestUtils.setField(service, "baseMapper", modelMapper);
     }
 
@@ -170,6 +174,25 @@ class AdminModelServiceTest {
         assertTrue(resp.getSupportsAudioReference());
         assertEquals(10, resp.getMaxAudioReferences());
         assertTrue(resp.getSupportsAudioOnlyReference());
+    }
+
+    @Test
+    void publicMiniMaxSpeechUsesSystemVoiceCatalog() {
+        SpeechVoice voice = new SpeechVoice();
+        voice.setVoiceId("Japanese_CalmLady");
+        voice.setName("Calm Lady");
+        voice.setLanguage("日文");
+        when(speechVoiceMapper.selectList(any())).thenReturn(List.of(voice));
+
+        AiModel model = new AiModel();
+        model.setAdapterKey(AdapterCatalog.MINIMAX_SPEECH);
+        model.setCategory(ModelCategory.AUDIO);
+        model.setAdapterConfig(Map.of("voices", List.of("custom-voice")));
+
+        var voices = (List<?>) service.toPublicResp(model).getAudioOptions().get("voices");
+        assertEquals(2, voices.size());
+        assertEquals(Map.of("id", "Japanese_CalmLady", "name", "Calm Lady", "language", "日文"), voices.get(0));
+        assertEquals(Map.of("id", "custom-voice", "name", "custom-voice", "language", "自定义"), voices.get(1));
     }
 
     @Test
