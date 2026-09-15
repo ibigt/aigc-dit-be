@@ -108,6 +108,7 @@ class DramaStoryboardServiceTest {
             storedChapters.add(chapter);
             return 1;
         });
+        org.mockito.Mockito.lenient().when(shotMapper.updateById(any(DramaShot.class))).thenReturn(1);
         org.mockito.Mockito.lenient().when(shotMapper.insert(any(DramaShot.class))).thenAnswer(invocation -> {
             DramaShot shot = invocation.getArgument(0);
             shot.setId(ids.incrementAndGet());
@@ -175,6 +176,10 @@ class DramaStoryboardServiceTest {
         assertEquals(first.getCastCount(), first.getCharacterNames().size());
         assertEquals(1, board.getChapters().size());
         assertTrue(board.getChapters().get(0).getShots().size() >= 4);
+        DramaShotResp drafted = board.getChapters().get(0).getShots().get(0);
+        assertNotNull(drafted.getCompiledPrompt());
+        assertFalse(drafted.getCompiledPrompt().isBlank());
+        assertFalse(Boolean.TRUE.equals(drafted.getCompiledStale()));
         org.junit.jupiter.api.Assertions.assertNull(episode.getStoryboardDraftingAt());
         assertFalse(Boolean.TRUE.equals(board.getDrafting()));
     }
@@ -711,7 +716,28 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void switchingGenerateModeMarksCompiledPromptStaleUntilRecompile() {
+    void getStoryboardFillsEmptyCompiledPrompt() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setCompiledPrompt(null);
+        shot.setCompiledFingerprint(null);
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        DramaShotResp visible = board.getChapters().get(0).getShots().get(0);
+        assertNotNull(visible.getCompiledPrompt());
+        assertFalse(visible.getCompiledPrompt().isBlank());
+        assertTrue(visible.getCompiledPrompt().contains("<Picture"));
+        assertFalse(Boolean.TRUE.equals(visible.getCompiledStale()));
+    }
+
+    @Test
+    void switchingGenerateModeRecompilesPromptOnRefresh() {
         storedChapters.add(pendingChapter());
         DramaShot shot = pendingShot();
         storedShots.add(shot);
@@ -729,14 +755,12 @@ class DramaStoryboardServiceTest {
         assertFalse(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
 
         shot.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
-        service.getStoryboard(31L);
-        org.junit.jupiter.api.Assertions.assertNull(shot.getCompiledPrompt());
-
-        service.compileShot(201L);
-        assertFalse(shot.getCompiledPrompt().contains("<Picture"));
-        assertTrue(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
-        assertTrue(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
-        assertFalse(Boolean.TRUE.equals(service.getStoryboard(31L).getChapters().get(0).getShots().get(0).getCompiledStale()));
+        DramaStoryboardResp board = service.getStoryboard(31L);
+        DramaShotResp visible = board.getChapters().get(0).getShots().get(0);
+        assertFalse(visible.getCompiledPrompt().contains("<Picture"));
+        assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
+        assertFalse(Boolean.TRUE.equals(visible.getCompiledStale()));
     }
 
     @Test

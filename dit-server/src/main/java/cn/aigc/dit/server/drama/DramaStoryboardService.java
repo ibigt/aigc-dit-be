@@ -1259,14 +1259,13 @@ public class DramaStoryboardService {
         if (StringUtils.hasText(shot.getPromptOverride())) {
             return false;
         }
-        if (!StringUtils.hasText(shot.getCompiledPrompt())) {
+        boolean empty = !StringUtils.hasText(shot.getCompiledPrompt());
+        boolean stale = isStale(shot, assets, stylePrefix, series);
+        if (!empty && !stale) {
             return false;
         }
-        if (!isStale(shot, assets, stylePrefix, series)) {
-            return false;
-        }
-        clearCompiled(shot);
-        if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
+        rebindAndCompile(shot, assets, stylePrefix, false, true, series);
+        if (stale && DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
             shot.setStatus(DramaContract.STATUS_EXPIRED);
         }
         shotMapper.updateById(shot);
