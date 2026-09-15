@@ -459,6 +459,8 @@ CREATE TABLE IF NOT EXISTS drama_asset (
     identity_invariants     TEXT,
     image_prompt            TEXT,
     voice_lock              VARCHAR(256),
+    voice_reference_key     VARCHAR(512),
+    voice_reference_mime    VARCHAR(128),
     must_split              BOOLEAN      NOT NULL DEFAULT FALSE,
     needs_human             BOOLEAN      NOT NULL DEFAULT FALSE,
     status                  VARCHAR(16)  NOT NULL DEFAULT '未开始',
@@ -490,6 +492,8 @@ COMMENT ON COLUMN drama_asset.description IS '完整描述符，永不缩写';
 COMMENT ON COLUMN drama_asset.identity_invariants IS '身份不变量（脸、发型、服装剪影、标志物）';
 COMMENT ON COLUMN drama_asset.image_prompt IS '中文生图 prompt；t2i 用此条，不按素材选模型';
 COMMENT ON COLUMN drama_asset.voice_lock IS '可选固定音色';
+COMMENT ON COLUMN drama_asset.voice_reference_key IS '角色音色参考音频的对象存储 key';
+COMMENT ON COLUMN drama_asset.voice_reference_mime IS '角色音色参考音频 MIME';
 COMMENT ON COLUMN drama_asset.must_split IS '是否必须与主身份拆开（入梦/换装）';
 COMMENT ON COLUMN drama_asset.needs_human IS '规则抽取后身份不完整，需人工补全';
 COMMENT ON COLUMN drama_asset.status IS '状态机：未开始 / 待确认 / 已锁定 / 已过期';

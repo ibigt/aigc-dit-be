@@ -21,7 +21,7 @@ spring:
     enabled: ${SPRING_FLYWAY_ENABLED:true}
     locations: classpath:db/migration
     baseline-on-migrate: true
-    # V1 合入后忽略旧 checksum；曾执行过已删除的 V2/V3/V4 时忽略 missing
+    # V1 合入后忽略旧 checksum；曾执行过已删除的 V2/V3/V4/V5 时忽略 missing。
     validate-on-migrate: false
     ignore-migration-patterns:
       - "*:checksum"

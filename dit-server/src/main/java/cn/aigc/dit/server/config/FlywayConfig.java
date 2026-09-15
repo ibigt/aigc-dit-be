@@ -244,6 +244,8 @@ public class FlywayConfig {
                     identity_invariants     TEXT,
                     image_prompt            TEXT,
                     voice_lock              VARCHAR(256),
+                    voice_reference_key     VARCHAR(512),
+                    voice_reference_mime    VARCHAR(128),
                     must_split              BOOLEAN      NOT NULL DEFAULT FALSE,
                     needs_human             BOOLEAN      NOT NULL DEFAULT FALSE,
                     status                  VARCHAR(16)  NOT NULL DEFAULT '未开始',
@@ -266,6 +268,22 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON TABLE drama_asset IS '短剧资产注册表：描述符 + 参考图 + 身份不变量 + 版本号；未锁定不能进分镜参考'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_asset
+                ADD COLUMN IF NOT EXISTS voice_reference_key VARCHAR(512)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_asset
+                ADD COLUMN IF NOT EXISTS voice_reference_mime VARCHAR(128)
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_asset.voice_reference_key
+                IS '角色音色参考音频的对象存储 key'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_asset.voice_reference_mime
+                IS '角色音色参考音频 MIME'
                 """);
         statement.execute("""
                 CREATE TABLE IF NOT EXISTS drama_chapter (

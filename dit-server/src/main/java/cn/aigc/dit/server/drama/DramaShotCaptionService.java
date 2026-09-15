@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 仅漫剧分镜出片：有对白才把字幕烧进成片。失败保留原片。
+ * 仅漫剧分镜出片：有对白才把字幕烧进单镜。当前出片链路已暂停调用，改到成片拼接再打开。
  */
 @Slf4j
 @Component

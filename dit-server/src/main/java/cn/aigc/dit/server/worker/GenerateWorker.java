@@ -80,6 +80,8 @@ public class GenerateWorker {
     private final CreationSessionMapper creationSessionMapper;
     private final GenerateProviderRegistry providerRegistry;
     private final PosterExtractor posterExtractor;
+    /** 分镜出片烧字幕已暂停，成片阶段再接回 {@code burnIfNeeded}。 */
+    @SuppressWarnings("unused")
     private final DramaShotCaptionService dramaShotCaptionService;
     private final CreditService creditService;
     private final AesGcmEncryptor encryptor;
@@ -445,9 +447,10 @@ public class GenerateWorker {
                 finishFailed(latest, "未返回成片");
                 return;
             }
-            if (GenerateRequests.isDramaShot(latest.getParams())) {
-                keys = dramaShotCaptionService.burnIfNeeded(latest, keys);
-            }
+            // 分镜出片暂不烧字幕，改到成片拼接阶段再打开。
+            // if (GenerateRequests.isDramaShot(latest.getParams())) {
+            //     keys = dramaShotCaptionService.burnIfNeeded(latest, keys);
+            // }
             String firstPoster = null;
             boolean recordCreation = GenerateRequests.bindsQuickCreate(latest.getParams());
             Long sessionId = recordCreation ? sessionId(latest) : null;
