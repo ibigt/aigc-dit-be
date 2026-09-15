@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 @ExtendWith(MockitoExtension.class)
 class DramaScriptAnalyzeLockTest {
@@ -50,10 +51,10 @@ class DramaScriptAnalyzeLockTest {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);
         when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(episodeMapper.claimScriptAnalysis(org.mockito.ArgumentMatchers.eq(31L), any(), any())).thenReturn(1);
 
         lock.claim(31L);
 
-        assertTrue(lock.isActive(episode));
-        verify(episodeMapper).updateById(episode);
+        verify(episodeMapper).claimScriptAnalysis(org.mockito.ArgumentMatchers.eq(31L), any(), any());
     }
 }

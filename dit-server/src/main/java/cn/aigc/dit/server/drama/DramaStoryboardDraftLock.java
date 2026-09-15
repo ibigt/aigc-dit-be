@@ -37,20 +37,15 @@ public class DramaStoryboardDraftLock {
         if (episode == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "剧集不存在");
         }
-        if (isActive(episode)) {
+        OffsetDateTime now = OffsetDateTime.now();
+        if (isActive(episode)
+                || episodeMapper.claimStoryboardDraft(episodeId, now, now.minus(STALE_AFTER)) != 1) {
             throw new BizException(ErrorCode.BAD_REQUEST, BUSY_MESSAGE);
         }
-        episode.setStoryboardDraftingAt(OffsetDateTime.now());
-        episodeMapper.updateById(episode);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void release(Long episodeId) {
-        DramaEpisode episode = episodeMapper.selectById(episodeId);
-        if (episode == null) {
-            return;
-        }
-        episode.setStoryboardDraftingAt(null);
-        episodeMapper.updateById(episode);
+        episodeMapper.releaseStoryboardDraft(episodeId);
     }
 }

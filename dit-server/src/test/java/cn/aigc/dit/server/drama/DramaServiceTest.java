@@ -327,6 +327,25 @@ class DramaServiceTest {
     }
 
     @Test
+    void deleteSeriesRejectsWhileScriptAnalysisIsActive() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        DramaEpisode episode = new DramaEpisode();
+        episode.setId(31L);
+        episode.setSeriesId(21L);
+        episode.setScriptAnalyzingAt(java.time.OffsetDateTime.now());
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of(episode));
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteSeries(21L));
+
+        assertEquals(409, error.getCode());
+        assertEquals("剧本正在分析，暂时无法删除", error.getMessage());
+        org.mockito.Mockito.verify(seriesMapper, org.mockito.Mockito.never()).deleteById(21L);
+    }
+
+    @Test
     void deleteSeriesHidesOtherUsersProjects() {
         DramaSeries foreign = new DramaSeries();
         foreign.setId(9L);

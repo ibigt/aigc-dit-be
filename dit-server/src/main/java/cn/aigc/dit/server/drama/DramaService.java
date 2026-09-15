@@ -49,6 +49,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -170,6 +171,7 @@ public class DramaService {
     @Transactional
     public DramaSeriesResp deleteEpisode(Long id) {
         DramaEpisode episode = requireEpisode(id);
+        assertEpisodeIdle(episode);
         Long seriesId = episode.getSeriesId();
         long remaining = episodeMapper.selectCount(new LambdaQueryWrapper<DramaEpisode>()
                 .eq(DramaEpisode::getSeriesId, seriesId));
@@ -223,6 +225,11 @@ public class DramaService {
     @Transactional
     public void deleteSeries(Long id) {
         DramaSeries series = requireSeries(id);
+        List<DramaEpisode> episodes = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
+                .eq(DramaEpisode::getSeriesId, series.getId()));
+        for (DramaEpisode episode : episodes) {
+            assertEpisodeIdle(episode);
+        }
         seriesMapper.deleteById(series.getId());
     }
 
@@ -241,13 +248,23 @@ public class DramaService {
     /**
      * 导入原文。乙合入后写入 {@code script}；否则只存 {@code source_text}，engine=pending。
      */
-    @Transactional
     public DramaEpisodeResp importSource(Long id, DramaScriptImportReq req) {
         DramaEpisode episode = requireEpisode(id);
         String raw = req.getSourceText().trim();
+        ParsedSource parsed = parseSource(episode.getSeriesId(), raw);
+        return scriptOps().persistImportedSource(id, raw, parsed);
+    }
+
+    /** 外部模型调用结束后再开启短事务，避免等待模型时长期占用数据库事务。 */
+    @Transactional
+    public DramaEpisodeResp persistImportedSource(Long id, String raw, ParsedSource parsed) {
+        DramaEpisode episode = requireEpisode(id);
         onScriptMutated(episode);
         episode.setSourceText(raw);
-        applyParseIfPresent(episode, raw);
+        if (parsed.replaceScript()) {
+            episode.setScript(ScriptDocs.toMap(parsed.script()));
+        }
+        episode.setEngine(parsed.engine());
         episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         episodeMapper.updateById(episode);
         touchSeries(episode.getSeriesId());
@@ -257,7 +274,6 @@ public class DramaService {
     /**
      * 从梗概生成分场剧本。需乙实现 + 项目绑定的文本模型可用。
      */
-    @Transactional
     public DramaEpisodeResp generateScript(Long id, DramaScriptImportReq req) {
         DramaEpisode episode = requireEpisode(id);
         DramaTextService svc = requireTextService();
@@ -265,21 +281,14 @@ public class DramaService {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前项目未绑定可用文本模型，无法生成剧本");
         }
         String raw = req.getSourceText().trim();
-        onScriptMutated(episode);
-        episode.setSourceText(raw);
         ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
-        episode.setScript(ScriptDocs.toMap(doc));
-        episode.setEngine(DramaContract.normalizeEngine(svc.engine(episode.getSeriesId())));
-        episode.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
-        episodeMapper.updateById(episode);
-        touchSeries(episode.getSeriesId());
-        return toEpisodeResp(episode, true);
+        String engine = DramaContract.normalizeEngine(svc.engine(episode.getSeriesId()));
+        return scriptOps().persistImportedSource(id, raw, new ParsedSource(doc, engine, true));
     }
 
     /**
      * 剧本页的一键分析闭环。各阶段仍复用现有服务，便于单独重跑和人工编辑。
-     * 不能包在同一个事务里：import 会先锁住剧集行，随后 draft 要用 REQUIRES_NEW 写拆镜锁，
-     * 会把后一次更新堵在同一行上。Java 线程再等 claim 返回，刷新看不到未提交分场，删除也会一直卡住。
+     * 不能包在同一个事务里：文本模型调用可能持续数分钟，分场落库与后台拆镜必须各自短事务提交。
      */
     public DramaScriptAnalyzeResp analyzeScript(Long id, DramaScriptAnalyzeReq req) {
         requireEpisode(id);
@@ -304,6 +313,10 @@ public class DramaService {
             result.setAssets(assets);
             result.setStoryboard(storyboard);
             result.setEngine(result.getEpisode().getEngine());
+            if (DramaContract.ENGINE_RULES.equals(result.getEngine())
+                    && textChatGateway.llmAvailable(result.getEpisode().getSeriesId())) {
+                result.getWarnings().add("文本模型调用失败，本次已降级为规则分析；请检查模型标识或服务状态后重试。");
+            }
             result.getWarnings().add("分镜正在后台按剧本自动拆分，打开「分镜」页可查看进度。");
             ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
                     ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
@@ -487,15 +500,17 @@ public class DramaService {
         resp.setFilmStale(film.getStale());
     }
 
-    private void applyParseIfPresent(DramaEpisode episode, String raw) {
+    private ParsedSource parseSource(Long seriesId, String raw) {
         DramaTextService svc = textService.getIfAvailable();
         if (svc == null) {
-            episode.setEngine(DramaContract.ENGINE_PENDING);
-            return;
+            return new ParsedSource(null, DramaContract.ENGINE_PENDING, false);
         }
-        ScriptDoc doc = svc.parseScript(episode.getSeriesId(), raw);
-        episode.setScript(ScriptDocs.toMap(doc));
-        episode.setEngine(DramaContract.normalizeEngine(svc.engine(episode.getSeriesId())));
+        ScriptDoc doc = svc.parseScript(seriesId, raw);
+        String engine = DramaContract.normalizeEngine(svc.engine(seriesId));
+        return new ParsedSource(doc, engine, true);
+    }
+
+    record ParsedSource(ScriptDoc script, String engine, boolean replaceScript) {
     }
 
     private DramaTextService requireTextService() {
@@ -542,6 +557,20 @@ public class DramaService {
         DramaSeries series = seriesMapper.selectById(seriesId);
         if (series != null) {
             seriesMapper.updateById(series);
+        }
+    }
+
+    private static void assertEpisodeIdle(DramaEpisode episode) {
+        if (episode == null) {
+            return;
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        boolean analyzing = episode.getScriptAnalyzingAt() != null
+                && episode.getScriptAnalyzingAt().isAfter(now.minus(DramaScriptAnalyzeLock.STALE_AFTER));
+        boolean drafting = episode.getStoryboardDraftingAt() != null
+                && episode.getStoryboardDraftingAt().isAfter(now.minus(DramaStoryboardDraftLock.STALE_AFTER));
+        if (analyzing || drafting) {
+            throw new BizException(ErrorCode.CONFLICT, analyzing ? "剧本正在分析，暂时无法删除" : "分镜正在生成，暂时无法删除");
         }
     }
 

@@ -73,6 +73,7 @@ class DramaServiceScriptTest {
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(textChatGateway.llmAvailable(anyLong())).thenReturn(false);
+        org.mockito.Mockito.lenient().when(episodeMapper.claimScriptAnalysis(anyLong(), any(), any())).thenReturn(1);
     }
 
     @AfterEach
@@ -118,6 +119,26 @@ class DramaServiceScriptTest {
         @SuppressWarnings("unchecked")
         List<Object> scenes = (List<Object>) episode.getScript().get("scenes");
         assertEquals(1, scenes.size());
+    }
+
+    @Test
+    void importParsesBeforeReloadingEpisodeForPersistence() {
+        DramaEpisode beforeParse = ownedEpisode();
+        DramaEpisode forPersistence = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(beforeParse, forPersistence);
+        when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
+        when(dramaTextService.parseScript(21L, "第1场 日 内")).thenAnswer(invocation -> {
+            verify(episodeMapper, org.mockito.Mockito.times(1)).selectById(31L);
+            return sampleDoc();
+        });
+
+        DramaScriptImportReq req = new DramaScriptImportReq();
+        req.setSourceText("第1场 日 内");
+        service.importSource(31L, req);
+
+        verify(episodeMapper, org.mockito.Mockito.times(2)).selectById(31L);
+        verify(episodeMapper).updateById(forPersistence);
     }
 
     @Test

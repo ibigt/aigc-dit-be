@@ -93,6 +93,7 @@ class DramaStoryboardServiceTest {
         storedShots.clear();
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(episodeMapper.updateById(any(DramaEpisode.class))).thenReturn(1);
+        org.mockito.Mockito.lenient().when(episodeMapper.claimStoryboardDraft(any(), any(), any())).thenReturn(1);
         org.mockito.Mockito.lenient().when(chapterMapper.insert(any(DramaChapter.class))).thenAnswer(invocation -> {
             DramaChapter chapter = invocation.getArgument(0);
             chapter.setId(ids.incrementAndGet());
