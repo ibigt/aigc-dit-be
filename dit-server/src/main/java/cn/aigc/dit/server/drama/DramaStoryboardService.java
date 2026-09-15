@@ -707,7 +707,7 @@ public class DramaStoryboardService {
         req.setPrompt(prompt);
         req.setRatio(series.getAspectRatio());
         req.setResolution(DramaResolutions.clamp(
-                series.getDefaultResolution(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
+                series.getDefaultResolution(), adapter, series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
         req.setDurationSec(DramaDurations.clamp(
                 shot.getDurationSec(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
         req.setCopies(1);

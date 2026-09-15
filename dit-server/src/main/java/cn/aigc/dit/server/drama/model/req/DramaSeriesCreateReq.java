@@ -18,10 +18,10 @@ public class DramaSeriesCreateReq {
     @Schema(description = "风格键：anime-comic / live-realism / anime-wuxia / costume-comic / republican-era / cyberpunk / sci-fi / rural", example = "anime-comic")
     private String styleKey;
 
-    @Schema(description = "画幅：16:9 / 9:16 / 1:1", example = "16:9")
+    @Schema(description = "画幅：21:9 / 16:9 / 4:3 / 1:1 / 3:4 / 9:16", example = "16:9")
     private String aspectRatio;
 
-    @Schema(description = "默认清晰度：480P / 720P", example = "720P")
+    @Schema(description = "默认清晰度：480P / 720P / 1080P / 2K", example = "720P")
     private String defaultResolution;
 
     @Schema(description = "默认单镜时长秒：5–15", example = "15")

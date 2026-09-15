@@ -23,8 +23,13 @@ public final class DramaContract {
     public static final int MAX_DURATION_SEC = 15;
     public static final int DEFAULT_PLANNED_EPISODES = 1;
 
-    public static final Set<String> ASPECT_RATIOS = Set.of("16:9", "9:16", "1:1");
-    public static final Set<String> RESOLUTIONS = Set.of("480P", "720P");
+    /** 画幅候选顺序即前端展示顺序。 */
+    public static final List<String> ASPECT_RATIO_OPTIONS = List.of("21:9", "16:9", "4:3", "1:1", "3:4", "9:16");
+    /** 清晰度候选顺序由低到高，clamp 依赖该顺序。 */
+    public static final List<String> RESOLUTION_OPTIONS = List.of("480P", "720P", "1080P", "2K");
+
+    public static final Set<String> ASPECT_RATIOS = Set.copyOf(ASPECT_RATIO_OPTIONS);
+    public static final Set<String> RESOLUTIONS = Set.copyOf(RESOLUTION_OPTIONS);
     public static final List<Integer> DURATION_OPTIONS = List.of(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     public static final Set<Integer> DURATIONS = Set.copyOf(DURATION_OPTIONS);
 

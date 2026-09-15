@@ -583,7 +583,7 @@ public class DramaService {
     static String normalizeAspectRatio(String value) {
         String ratio = StringUtils.hasText(value) ? value.trim() : DramaContract.DEFAULT_ASPECT_RATIO;
         if (!DramaContract.ASPECT_RATIOS.contains(ratio)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "画幅仅支持 16:9、9:16、1:1");
+            throw new BizException(ErrorCode.BAD_REQUEST, "画幅仅支持 " + String.join("、", DramaContract.ASPECT_RATIO_OPTIONS));
         }
         return ratio;
     }
@@ -591,7 +591,7 @@ public class DramaService {
     static String normalizeResolution(String value) {
         String resolution = StringUtils.hasText(value) ? value.trim().toUpperCase() : DramaContract.DEFAULT_RESOLUTION;
         if (!DramaContract.RESOLUTIONS.contains(resolution)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "清晰度仅支持 480P、720P");
+            throw new BizException(ErrorCode.BAD_REQUEST, "清晰度仅支持 " + String.join("、", DramaContract.RESOLUTION_OPTIONS));
         }
         return resolution;
     }
@@ -820,10 +820,10 @@ public class DramaService {
         resp.setName(model.getName());
         resp.setProvider(model.getProvider());
         resp.setAdapterKey(model.getAdapterKey());
-        resp.setDurations(DramaDurations.supported(model.getAdapterKey(), model.getModelKey()));
-        resp.setResolutions(DramaResolutions.supported(model.getAdapterKey(), model.getModelKey()));
         String adapter = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        resp.setDurations(DramaDurations.supported(adapter, model.getAdapterKey(), model.getModelKey()));
+        resp.setResolutions(DramaResolutions.supported(adapter, model.getAdapterKey(), model.getModelKey()));
         boolean h3 = AdapterCatalog.MINIMAX_H3.equals(adapter);
         boolean agnes = AdapterCatalog.AGNES_VIDEO_2_5.equals(adapter);
         boolean ark = AdapterCatalog.isArk(adapter);

@@ -21,4 +21,10 @@ class ComfyUiGeometryTest {
         assertArrayEquals(new int[]{480, 864}, ComfyUiGeometry.size("9:16", null));
         assertArrayEquals(new int[]{1344, 768}, ComfyUiGeometry.size("16:9", "1080P"));
     }
+
+    @Test
+    void ultraWideKeepsTwentyOneByNine() {
+        assertArrayEquals(new int[]{1344, 576}, ComfyUiGeometry.size("21:9", "1080P"));
+        assertArrayEquals(new int[]{864, 352}, ComfyUiGeometry.size("21:9", null));
+    }
 }

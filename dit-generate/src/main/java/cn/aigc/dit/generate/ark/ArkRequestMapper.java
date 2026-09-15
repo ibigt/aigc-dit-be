@@ -78,6 +78,14 @@ public final class ArkRequestMapper {
         return AdapterCatalog.SEEDANCE_2_0.equals(adapter) || model.contains("doubao-seedance-2-0");
     }
 
+    /** 本适配器真实可出的清晰度档位（合同大写键），Ark 上限 1080P、无 2K。 */
+    public static List<String> supportedResolutions(String adapterKey, String modelKey) {
+        GenerateRequest probe = new GenerateRequest();
+        probe.setAdapterKey(adapterKey);
+        probe.setModelKey(modelKey);
+        return allows1080p(probe) ? List.of("480P", "720P", "1080P") : List.of("480P", "720P");
+    }
+
     public static Map<String, Object> toCreateBody(GenerateRequest request,
                                                    String firstFrame,
                                                    String lastFrame,
