@@ -15,18 +15,22 @@ class FfmpegAudioReferenceProcessorTest {
     @Test
     void commandLimitsDurationAndNormalizesMp3() {
         List<String> args = FfmpegAudioReferenceProcessor.commandArgs(
-                Path.of("input.wav"), Path.of("output.mp3"));
+                Path.of("input.wav"), Path.of("output.mp3"), 14_800L);
 
         assertEquals("14.8", args.get(args.indexOf("-t") + 1));
         assertEquals("1", args.get(args.indexOf("-ac") + 1));
         assertEquals("24000", args.get(args.indexOf("-ar") + 1));
         assertEquals("libmp3lame", args.get(args.indexOf("-codec:a") + 1));
+
+        List<String> multiAudioArgs = FfmpegAudioReferenceProcessor.commandArgs(
+                Path.of("input.wav"), Path.of("output.mp3"), 4_933L);
+        assertEquals("4.933", multiAudioArgs.get(multiAudioArgs.indexOf("-t") + 1));
     }
 
     @Test
     void emptyAudioIsRejectedBeforeFfmpeg() {
         BizException error = assertThrows(BizException.class,
-                () -> new FfmpegAudioReferenceProcessor().process(new byte[0], "empty.wav"));
+                () -> new FfmpegAudioReferenceProcessor().process(new byte[0], "empty.wav", 14_800L));
 
         assertTrue(error.getMessage().contains("参考音频文件为空"));
     }

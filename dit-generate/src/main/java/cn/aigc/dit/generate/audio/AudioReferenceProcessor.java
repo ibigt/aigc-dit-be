@@ -5,7 +5,7 @@ package cn.aigc.dit.generate.audio;
  */
 public interface AudioReferenceProcessor {
 
-    ProcessedAudio process(byte[] source, String sourceName);
+    ProcessedAudio process(byte[] source, String sourceName, long maxDurationMillis);
 
     record ProcessedAudio(byte[] bytes, String contentType) {
     }

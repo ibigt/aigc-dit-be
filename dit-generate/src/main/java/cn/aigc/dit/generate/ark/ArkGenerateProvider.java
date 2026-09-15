@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ArkGenerateProvider implements GenerateProvider {
 
     public static final String KEY = "ark";
+    static final long SAFE_AUDIO_TOTAL_DURATION_MILLIS = 14_800L;
 
     private final ObjectStorage objectStorage;
     private final GenerateProperties.Ark properties;
@@ -356,15 +357,30 @@ public class ArkGenerateProvider implements GenerateProvider {
         if (request.getReferences() == null) {
             return values;
         }
+        long audioCount = "audio".equals(kind) ? referenceCount(request, kind) : 0L;
+        long maxDurationMillis = audioCount > 0
+                ? SAFE_AUDIO_TOTAL_DURATION_MILLIS / audioCount
+                : 0L;
+        if (audioCount > 0) {
+            log.info("Seedance audio preprocessing taskId={}, references={}, perReferenceLimitMs={}, totalLimitMs={}",
+                    request.getTaskId(), audioCount, maxDurationMillis, SAFE_AUDIO_TOTAL_DURATION_MILLIS);
+        }
         for (ReferenceAsset ref : request.getReferences()) {
             if (ref == null || !StringUtils.hasText(ref.getStorageKey())) {
                 continue;
             }
             if (kind.equals(refKind(ref))) {
-                values.add(mediaUri(ref.getStorageKey(), kind));
+                values.add(mediaUri(ref.getStorageKey(), kind, maxDurationMillis));
             }
         }
         return values;
+    }
+
+    private static long referenceCount(GenerateRequest request, String kind) {
+        return request.getReferences().stream()
+                .filter(ref -> ref != null && StringUtils.hasText(ref.getStorageKey()))
+                .filter(ref -> kind.equals(refKind(ref)))
+                .count();
     }
 
     private static String refKind(ReferenceAsset ref) {
@@ -386,10 +402,10 @@ public class ArkGenerateProvider implements GenerateProvider {
     }
 
     private String mediaUri(String storageKey) {
-        return mediaUri(storageKey, null);
+        return mediaUri(storageKey, null, 0L);
     }
 
-    private String mediaUri(String storageKey, String kind) {
+    private String mediaUri(String storageKey, String kind, long maxDurationMillis) {
         if (!StringUtils.hasText(storageKey)) {
             return null;
         }
@@ -399,7 +415,8 @@ public class ArkGenerateProvider implements GenerateProvider {
         }
         String mime = contentTypeOf(storageKey, kind);
         if ("audio".equals(kind)) {
-            AudioReferenceProcessor.ProcessedAudio processed = audioReferenceProcessor.process(bytes, storageKey);
+            AudioReferenceProcessor.ProcessedAudio processed = audioReferenceProcessor.process(
+                    bytes, storageKey, maxDurationMillis);
             bytes = processed.bytes();
             mime = processed.contentType();
         }

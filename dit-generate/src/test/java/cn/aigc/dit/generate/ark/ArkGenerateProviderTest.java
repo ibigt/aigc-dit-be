@@ -20,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -125,6 +126,47 @@ class ArkGenerateProviderTest {
         assertEquals("data:audio/mpeg;base64,CQg=", audio.get("audio_url").get("url").asText());
         assertEquals(1, audioReferenceProcessor.callCount);
         assertEquals("users/8/assets/voice.wav", audioReferenceProcessor.lastSourceName);
+        assertEquals(List.of(14_800L), audioReferenceProcessor.maxDurations);
+    }
+
+    @Test
+    void submitSeedance20SharesAudioDurationBudgetAcrossReferences() {
+        http.postBody = "{\"id\":\"cgt-audio-multi\",\"status\":\"queued\"}";
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+        storage.put("users/8/assets/voice-1.mp3", new byte[]{1}, "audio/mpeg");
+        storage.put("users/8/assets/voice-2.mp3", new byte[]{2}, "audio/mpeg");
+
+        provider.submit(video("r2v")
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("doubao-seedance-2-0")
+                .setReferences(List.of(
+                        new ReferenceAsset("image", "users/8/assets/a.png"),
+                        new ReferenceAsset("audio", "users/8/assets/voice-1.mp3"),
+                        new ReferenceAsset("audio", "users/8/assets/voice-2.mp3"))));
+
+        assertEquals(List.of(7_400L, 7_400L), audioReferenceProcessor.maxDurations);
+    }
+
+    @Test
+    void threeAudioReferencesStayWithinSafeTotalDuration() {
+        http.postBody = "{\"id\":\"cgt-audio-three\",\"status\":\"queued\"}";
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+        List<ReferenceAsset> references = new ArrayList<>();
+        references.add(new ReferenceAsset("image", "users/8/assets/a.png"));
+        for (int index = 1; index <= 3; index++) {
+            String key = "users/8/assets/voice-" + index + ".mp3";
+            storage.put(key, new byte[]{(byte) index}, "audio/mpeg");
+            references.add(new ReferenceAsset("audio", key));
+        }
+
+        provider.submit(video("r2v")
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("doubao-seedance-2-0")
+                .setReferences(references));
+
+        assertEquals(List.of(4_933L, 4_933L, 4_933L), audioReferenceProcessor.maxDurations);
+        assertTrue(audioReferenceProcessor.maxDurations.stream().mapToLong(Long::longValue).sum()
+                <= ArkGenerateProvider.SAFE_AUDIO_TOTAL_DURATION_MILLIS);
     }
 
     @Test
@@ -257,11 +299,13 @@ class ArkGenerateProviderTest {
     private static final class FakeAudioReferenceProcessor implements AudioReferenceProcessor {
         private int callCount;
         private String lastSourceName;
+        private final List<Long> maxDurations = new ArrayList<>();
 
         @Override
-        public ProcessedAudio process(byte[] source, String sourceName) {
+        public ProcessedAudio process(byte[] source, String sourceName, long maxDurationMillis) {
             callCount++;
             lastSourceName = sourceName;
+            maxDurations.add(maxDurationMillis);
             return new ProcessedAudio(new byte[]{9, 8}, "audio/mpeg");
         }
     }

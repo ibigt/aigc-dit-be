@@ -19,12 +19,13 @@ import java.util.Locale;
 @Component
 public class FfmpegAudioReferenceProcessor implements AudioReferenceProcessor {
 
-    static final String MAX_DURATION_SECONDS = "14.8";
-
     @Override
-    public ProcessedAudio process(byte[] source, String sourceName) {
+    public ProcessedAudio process(byte[] source, String sourceName, long maxDurationMillis) {
         if (source == null || source.length == 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, "参考音频文件为空");
+        }
+        if (maxDurationMillis <= 0) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考音频时长限制无效");
         }
         if (!FfmpegSupport.available()) {
             throw new BizException(ErrorCode.INTERNAL, "参考音频处理服务不可用，请联系管理员");
@@ -36,7 +37,7 @@ public class FfmpegAudioReferenceProcessor implements AudioReferenceProcessor {
             input = FfmpegSupport.tempFile("dit-audio-src-", suffix(sourceName));
             output = FfmpegSupport.tempFile("dit-audio-ref-", ".mp3");
             Files.write(input, source);
-            FfmpegSupport.run(commandArgs(input, output));
+            FfmpegSupport.run(commandArgs(input, output, maxDurationMillis));
             byte[] processed = Files.readAllBytes(output);
             if (processed.length == 0) {
                 throw new BizException(ErrorCode.INTERNAL, "参考音频处理结果为空");
@@ -53,16 +54,25 @@ public class FfmpegAudioReferenceProcessor implements AudioReferenceProcessor {
         }
     }
 
-    static List<String> commandArgs(Path input, Path output) {
+    static List<String> commandArgs(Path input, Path output, long maxDurationMillis) {
         return List.of(
                     "-i", input.toString(),
-                    "-t", MAX_DURATION_SECONDS,
+                    "-t", seconds(maxDurationMillis),
                     "-vn",
                     "-ac", "1",
                     "-ar", "24000",
                     "-codec:a", "libmp3lame",
                     "-b:a", "128k",
                     output.toString());
+    }
+
+    private static String seconds(long durationMillis) {
+        long seconds = durationMillis / 1000;
+        long millis = durationMillis % 1000;
+        if (millis == 0) {
+            return Long.toString(seconds);
+        }
+        return seconds + "." + String.format(Locale.ROOT, "%03d", millis).replaceFirst("0+$", "");
     }
 
     private static String suffix(String sourceName) {
