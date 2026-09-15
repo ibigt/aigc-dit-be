@@ -298,7 +298,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setPricing(pricing);
         if (ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory())) {
             Map<String, Object> options = publicAudioOptions(model.getAdapterConfig());
-            if (AdapterCatalog.isMiniMaxSpeech(model.getAdapterKey())) {
+            if (isMiniMaxSpeechModel(model)) {
                 options.put("voices", miniMaxSystemVoices(options.get("voices")));
             }
             resp.setAudioOptions(options);
@@ -333,6 +333,21 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
             }
         }
         return result;
+    }
+
+    /**
+     * 兼容历史模型记录：早期管理端可能只保存了厂商或模型键，没有保存规范适配键。
+     * 这类记录也必须使用完整的 MiniMax 系统音色目录，不能退回到少量默认音色。
+     */
+    private static boolean isMiniMaxSpeechModel(AiModel model) {
+        if (AdapterCatalog.isMiniMaxSpeech(model.getAdapterKey())) {
+            return true;
+        }
+        String provider = model.getProvider() == null ? "" : model.getProvider().toLowerCase();
+        String modelKey = model.getModelKey() == null ? "" : model.getModelKey().toLowerCase();
+        return (provider.contains("minimax") || provider.contains("稀宇")
+                || modelKey.contains("minimax") || modelKey.contains("speech-"))
+                && ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory());
     }
 
     private List<Map<String, Object>> miniMaxSystemVoices(Object configuredVoices) {
