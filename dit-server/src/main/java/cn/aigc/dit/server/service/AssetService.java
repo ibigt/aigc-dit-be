@@ -48,15 +48,21 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
 
     @Transactional
     public AssetResp upload(MultipartFile file) {
+        return upload(file, null);
+    }
+
+    @Transactional
+    public AssetResp upload(MultipartFile file, String name) {
         Long userId = UserContext.requireUserId();
         String mime = file == null || file.getContentType() == null
                 ? "" : file.getContentType().toLowerCase(Locale.ROOT);
+        String storedName = assetName(name, file == null ? null : file.getOriginalFilename());
         String key = putOwnedFile(file, "assets");
         String kind = AssetKind.fromMime(mime);
         String posterKey = AssetKind.VIDEO.equals(kind) ? posterExtractor.extract(key) : key;
         Asset asset = new Asset();
         asset.setUserId(userId);
-        asset.setName(displayName(file.getOriginalFilename()));
+        asset.setName(storedName);
         asset.setMimeType(mime);
         asset.setKind(kind);
         asset.setStorageKey(key);
@@ -181,6 +187,14 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         String name = slash >= 0 ? filename.substring(slash + 1) : filename;
         int dot = name.lastIndexOf('.');
         return dot > 0 ? name.substring(0, dot) : name;
+    }
+
+    static String assetName(String customName, String filename) {
+        String name = StringUtils.hasText(customName) ? customName.trim() : displayName(filename);
+        if (name.length() > 128) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "素材名称不能超过128个字符");
+        }
+        return name;
     }
 
     static String extension(String filename, String mime) {

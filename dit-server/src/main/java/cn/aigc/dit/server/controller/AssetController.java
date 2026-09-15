@@ -35,8 +35,10 @@ public class AssetController {
 
     @Operation(summary = "上传图片、视频或音频（文件存入 MinIO）")
     @PostMapping
-    public CommonResult<AssetResp> upload(@RequestParam("file") MultipartFile file) {
-        return CommonResult.success(assetService.upload(file));
+    public CommonResult<AssetResp> upload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(required = false) String name) {
+        return CommonResult.success(assetService.upload(file, name));
     }
 
     @Operation(summary = "删除素材")
