@@ -27,12 +27,13 @@ class DramaTextPromptsTest {
 
     @Test
     void shotUserAsksForPerShotDurationWithoutForcingEpisodeSum() {
-        String user = DramaTextPrompts.shotUser("{}", "洛白", 8, 30, 6);
+        String user = DramaTextPrompts.shotUser("{}", "洛白", 8, 30);
         assertTrue(user.contains("自行估计"));
         assertTrue(user.contains("不要所有镜头填同一个秒数"));
         assertTrue(user.contains("严格按剧本场次先后"));
         assertTrue(user.contains("本集故事体量大约 30 秒"));
-        assertTrue(user.contains("大约 6 个只是参考"));
+        assertTrue(user.contains("不要为凑数灌水"));
+        assertFalse(user.contains("大约 6 个只是参考"));
         assertFalse(user.contains("各镜秒数之和尽量接近"));
         assertFalse(user.contains("必须是 8，不得改成其它秒数"));
     }

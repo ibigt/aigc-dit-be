@@ -98,7 +98,7 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     @Override
     public ShotDraftList draftShots(long seriesId, ScriptDoc script, List<String> assetNames, int durationSec) {
-        return draftShots(seriesId, script, assetNames, durationSec, null, null);
+        return draftShots(seriesId, script, assetNames, durationSec, null);
     }
 
     @Override
@@ -107,8 +107,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             ScriptDoc script,
             List<String> assetNames,
             int durationSec,
-            Integer episodeBudgetSec,
-            Integer targetShots) {
+            Integer episodeBudgetSec) {
         int duration = DramaDurations.clamp(durationSec);
         if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
             return DramaShotDrafts.fromScript(script, assetNames, duration);
@@ -117,7 +116,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         try {
             drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
                     DramaTextPrompts.shotUser(
-                            toJson(script), String.join("、", safe(assetNames)), duration, episodeBudgetSec, targetShots),
+                            toJson(script), String.join("、", safe(assetNames)), duration, episodeBudgetSec),
                     content -> clampDurations(
                             normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
                             duration),

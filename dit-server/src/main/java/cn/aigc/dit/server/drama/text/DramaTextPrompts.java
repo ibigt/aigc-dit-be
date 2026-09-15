@@ -150,15 +150,15 @@ public final class DramaTextPrompts {
     }
 
     public static String shotUser(String scriptJson, String assetNames) {
-        return shotUser(scriptJson, assetNames, DramaContract.DEFAULT_DURATION_SEC, null, null);
+        return shotUser(scriptJson, assetNames, DramaContract.DEFAULT_DURATION_SEC, null);
     }
 
     public static String shotUser(String scriptJson, String assetNames, int durationSec) {
-        return shotUser(scriptJson, assetNames, durationSec, null, null);
+        return shotUser(scriptJson, assetNames, durationSec, null);
     }
 
     public static String shotUser(
-            String scriptJson, String assetNames, int fallbackSec, Integer episodeBudgetSec, Integer targetShots) {
+            String scriptJson, String assetNames, int fallbackSec, Integer episodeBudgetSec) {
         StringBuilder text = new StringBuilder();
         text.append("为这份剧本出章节与分镜草稿 ShotDraftList。");
         text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
@@ -170,10 +170,7 @@ public final class DramaTextPrompts {
             text.append("\n本集故事体量大约 ").append(episodeBudgetSec)
                     .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
-        if (targetShots != null && targetShots > 0) {
-            text.append("\n镜头数量以把每场戏按顺序讲清楚为准，大约 ").append(targetShots)
-                    .append(" 个只是参考，不要为凑数灌水，也不要为压到这个数而跳过情节。");
-        }
+        text.append("\n镜头数量以把每场戏按顺序讲清楚为准，不要为凑数灌水，也不要为压镜头数而跳过情节。");
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();
     }

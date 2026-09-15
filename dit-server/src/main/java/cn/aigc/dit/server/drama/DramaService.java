@@ -295,21 +295,14 @@ public class DramaService {
             // import 会优先使用已配置的文本模型，失败时由文本服务回落到规则分场。
             ops.importSource(id, importReq);
             ops.lockScript(id);
-            // 一键分析只同步完成分场和规则抽资产；LLM 拆镜后台跑，避免剧本页被第三次模型调用拖死。
-            // 不把「单集时长 / 目标分镜数」传给拆镜：默认 15 秒/8 镜会和每镜最少 5 秒冲突，模型会为凑时长打乱场次。
             List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
-            int episodeBudget = req.getEpisodeDurationSec() == null ? 15 : req.getEpisodeDurationSec();
-            int targetShots = req.getShotsPerEpisode() == null ? 8 : req.getShotsPerEpisode();
-            storyboardService.enqueueAutoDraft(id, null, null);
+            storyboardService.enqueueAutoDraft(id, null);
             DramaStoryboardResp storyboard = storyboardService.getStoryboard(id);
 
             DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();
             result.setEpisode(getEpisode(id));
             result.setAssets(assets);
             result.setStoryboard(storyboard);
-            result.setRequestedEpisodeCount(req.getEpisodeCount() == null ? 1 : req.getEpisodeCount());
-            result.setRequestedDurationSec(episodeBudget);
-            result.setRequestedShots(targetShots);
             result.setEngine(result.getEpisode().getEngine());
             result.getWarnings().add("分镜正在后台按剧本自动拆分，打开「分镜」页可查看进度。");
             ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
@@ -318,12 +311,6 @@ public class DramaService {
                     ? 0 : analyzedDoc.getScenes().size();
             result.setActualSceneCount(sceneCount);
             result.setActualShotCount(0);
-            if (result.getRequestedEpisodeCount() > 1) {
-                result.getWarnings().add("当前接口先完成第 1 集分析，多集拆分将在剧集编排阶段接入。");
-            }
-            if (StringUtils.hasText(req.getRequirements())) {
-                result.getWarnings().add("补充要求已记录在本次请求中；当前解析器暂不覆盖已有结构化字段。");
-            }
             return result;
         } finally {
             if (analyzeLock != null) {

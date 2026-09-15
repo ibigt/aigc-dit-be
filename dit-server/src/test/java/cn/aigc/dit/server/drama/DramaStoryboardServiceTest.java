@@ -249,7 +249,7 @@ class DramaStoryboardServiceTest {
                 lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
 
-        service.enqueueAutoDraft(31L, 30, 6);
+        service.enqueueAutoDraft(31L, 30);
 
         assertFalse(storedShots.isEmpty());
         org.junit.jupiter.api.Assertions.assertNull(episode.getStoryboardDraftingAt());

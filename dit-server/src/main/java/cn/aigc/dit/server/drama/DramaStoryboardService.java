@@ -123,17 +123,17 @@ public class DramaStoryboardService {
 
     @Transactional
     public DramaStoryboardResp draft(Long episodeId, boolean useLlm, Integer durationSec) {
-        return draft(episodeId, useLlm, durationSec, null, null);
+        return draft(episodeId, useLlm, durationSec, null);
     }
 
     @Transactional
     public DramaStoryboardResp draft(
-            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec) {
         assertCanDraft(episodeId);
         draftLock.claim(episodeId);
         boolean held = true;
         try {
-            DramaStoryboardResp board = finishDraft(episodeId, useLlm, durationSec, episodeBudgetSec, targetShots);
+            DramaStoryboardResp board = finishDraft(episodeId, useLlm, durationSec, episodeBudgetSec);
             held = false;
             return board;
         } finally {
@@ -146,7 +146,7 @@ public class DramaStoryboardService {
     /**
      * 分析结束后立刻占锁，让分镜页能显示「正在自动拆镜中」，真正的 LLM 拆镜在后台跑。
      */
-    public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec, Integer targetShots) {
+    public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec) {
         LoginUser user = UserContext.require();
         try {
             draftLock.claim(episodeId);
@@ -161,7 +161,7 @@ public class DramaStoryboardService {
             LoginUser previous = UserContext.get();
             UserContext.set(user);
             try {
-                ops().runClaimedDraft(episodeId, null, episodeBudgetSec, targetShots);
+                ops().runClaimedDraft(episodeId, null, episodeBudgetSec);
             } catch (Exception e) {
                 log.warn("自动拆镜失败 episodeId={}: {}", episodeId, e.toString());
                 try {
@@ -182,11 +182,11 @@ public class DramaStoryboardService {
     /** 锁已占用，供后台线程经 Spring 代理提交事务。 */
     @Transactional
     public DramaStoryboardResp runClaimedDraft(
-            Long episodeId, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+            Long episodeId, Integer durationSec, Integer episodeBudgetSec) {
         assertCanDraft(episodeId);
         boolean held = true;
         try {
-            DramaStoryboardResp board = finishDraft(episodeId, true, durationSec, episodeBudgetSec, targetShots);
+            DramaStoryboardResp board = finishDraft(episodeId, true, durationSec, episodeBudgetSec);
             held = false;
             return board;
         } finally {
@@ -211,10 +211,10 @@ public class DramaStoryboardService {
     }
 
     private DramaStoryboardResp finishDraft(
-            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec, Integer targetShots) {
+            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec) {
         DramaEpisode episode = requireEpisode(episodeId);
         ScriptDoc doc = ScriptDocs.fromMap(episode.getScript());
-        replaceStoryboard(episode, doc, useLlm, durationSec, episodeBudgetSec, targetShots);
+        replaceStoryboard(episode, doc, useLlm, durationSec, episodeBudgetSec);
         DramaStoryboardResp board = getStoryboard(episode.getId());
         board.setDrafting(false);
         releaseDraftLockWhenDone(episode.getId());
@@ -656,8 +656,7 @@ public class DramaStoryboardService {
             ScriptDoc doc,
             boolean useLlm,
             Integer requestedDuration,
-            Integer episodeBudgetSec,
-            Integer targetShots) {
+            Integer episodeBudgetSec) {
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
         int fallback = resolveDraftDuration(series, requestedDuration);
@@ -673,7 +672,7 @@ public class DramaStoryboardService {
                 .filter(StringUtils::hasText)
                 .toList();
         ShotDraftList drafts = resolveDrafts(
-                episode.getSeriesId(), doc, assetNames, fallback, useLlm, episodeBudgetSec, targetShots);
+                episode.getSeriesId(), doc, assetNames, fallback, useLlm, episodeBudgetSec);
 
         for (DramaShot shot : listShots(episode.getId())) {
             shotMapper.deleteById(shot.getId());
@@ -778,12 +777,11 @@ public class DramaStoryboardService {
             List<String> assetNames,
             int duration,
             boolean useLlm,
-            Integer episodeBudgetSec,
-            Integer targetShots) {
+            Integer episodeBudgetSec) {
         DramaTextService svc = textService.getIfAvailable();
         ShotDraftList drafts = null;
         if (useLlm && svc != null) {
-            drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec, targetShots);
+            drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec);
         }
         if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
             drafts = DramaShotDrafts.fromScript(doc, assetNames, duration);

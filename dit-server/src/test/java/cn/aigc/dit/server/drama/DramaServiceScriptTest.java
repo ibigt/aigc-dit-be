@@ -234,7 +234,7 @@ class DramaServiceScriptTest {
         assertEquals(0, result.getActualShotCount());
         assertEquals(DramaContract.STATUS_LOCKED, episode.getStatus());
         org.mockito.Mockito.verify(assetService).extractFromScript(31L, false);
-        org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(31L, null, null);
+        org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(31L, null);
         org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).draft(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
         org.mockito.Mockito.verify(analyzeLock).claim(31L);
         org.mockito.Mockito.verify(analyzeLock).release(31L);

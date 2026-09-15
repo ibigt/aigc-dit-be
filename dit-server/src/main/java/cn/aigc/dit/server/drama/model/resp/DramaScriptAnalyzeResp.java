@@ -12,9 +12,6 @@ public class DramaScriptAnalyzeResp {
     private DramaEpisodeResp episode;
     private List<DramaAssetResp> assets = new ArrayList<>();
     private DramaStoryboardResp storyboard;
-    private Integer requestedEpisodeCount;
-    private Integer requestedDurationSec;
-    private Integer requestedShots;
     private Integer actualSceneCount;
     private Integer actualShotCount;
     private String engine;
