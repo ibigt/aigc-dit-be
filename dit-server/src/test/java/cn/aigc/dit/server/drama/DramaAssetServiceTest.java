@@ -1,7 +1,6 @@
 package cn.aigc.dit.server.drama;
 
 import cn.aigc.dit.common.exception.BizException;
-import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
@@ -105,7 +104,7 @@ class DramaAssetServiceTest {
             return 1;
         });
 
-        List<DramaAssetResp> assets = service.extractFromScript(31L);
+        List<DramaAssetResp> assets = service.extractFromScript(31L, false);
         ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
         verify(assetMapper, org.mockito.Mockito.atLeast(4)).insert(captor.capture());
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "洛白".equals(item.getName())));
@@ -125,6 +124,21 @@ class DramaAssetServiceTest {
                         && item.getImagePrompt() != null
                         && item.getImagePrompt().contains("不要出现人物")));
         assertFalse(assets.stream().anyMatch(item -> Boolean.TRUE.equals(item.getReferenceEligible())));
+    }
+
+    @Test
+    void llmAssetExtractionDoesNotFallBackWhenTextServiceIsMissing() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(sampleDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.extractFromScript(31L, true));
+
+        assertEquals("剧本生成服务尚未就绪", error.getMessage());
+        verify(assetMapper, never()).insert(any(DramaAsset.class));
     }
 
     @Test
@@ -231,16 +245,7 @@ class DramaAssetServiceTest {
     @Test
     void uploadVoiceStoresInMinioAndIndexesLibraryWhenBoundModelSupportsAudio() {
         DramaAsset asset = ownedAsset();
-        DramaSeries series = ownedSeries();
-        series.setVideoModelId(22L);
-        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
-        model.setAdapterKey(AdapterCatalog.SEEDANCE_2_5);
-        model.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
-        model.setCategory("video");
-        model.setModelKey("doubao-seedance-2-5-260628");
         when(assetMapper.selectById(9L)).thenReturn(asset);
-        when(seriesMapper.selectById(21L)).thenReturn(series);
-        when(aiModelMapper.selectById(22L)).thenReturn(model);
         org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
                 "file", "voice.wav", "audio/wav", new byte[]{1, 2, 3});
         AssetResp libraryAsset = new AssetResp();
@@ -259,21 +264,12 @@ class DramaAssetServiceTest {
     @Test
     void bindVoiceUsesOwnedAudioFromLibrary() {
         DramaAsset asset = ownedAsset();
-        DramaSeries series = ownedSeries();
-        series.setVideoModelId(22L);
-        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
-        model.setAdapterKey(AdapterCatalog.SEEDANCE_2_5);
-        model.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
-        model.setCategory("video");
-        model.setModelKey("doubao-seedance-2-5-260628");
         cn.aigc.dit.server.entity.Asset libraryAsset = new cn.aigc.dit.server.entity.Asset();
         libraryAsset.setId(55L);
         libraryAsset.setKind("audio");
         libraryAsset.setMimeType("audio/mpeg");
         libraryAsset.setStorageKey("users/7/assets/voice.mp3");
         when(assetMapper.selectById(9L)).thenReturn(asset);
-        when(seriesMapper.selectById(21L)).thenReturn(series);
-        when(aiModelMapper.selectById(22L)).thenReturn(model);
         when(libraryAssetService.requireOwned(55L)).thenReturn(libraryAsset);
 
         DramaAssetResp resp = service.bindVoiceReference(9L, 55L);
@@ -284,26 +280,20 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void uploadVoiceRejectedWhenBoundModelDoesNotSupportAudio() {
+    void uploadVoiceIsAllowedBeforeVideoModelSelection() {
         DramaAsset asset = ownedAsset();
-        DramaSeries series = ownedSeries();
-        series.setVideoModelId(22L);
-        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
-        model.setAdapterKey(AdapterCatalog.SEEDANCE_2_0);
-        model.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
-        model.setCategory("video");
-        model.setModelKey("doubao-seedance-1-5-pro-250528");
         when(assetMapper.selectById(9L)).thenReturn(asset);
-        when(seriesMapper.selectById(21L)).thenReturn(series);
-        when(aiModelMapper.selectById(22L)).thenReturn(model);
         org.springframework.mock.web.MockMultipartFile file = new org.springframework.mock.web.MockMultipartFile(
                 "file", "voice.mp3", "audio/mpeg", new byte[]{1});
+        AssetResp libraryAsset = new AssetResp();
+        libraryAsset.setStorageKey("users/7/assets/voice.mp3");
+        libraryAsset.setMimeType("audio/mpeg");
+        when(libraryAssetService.upload(file)).thenReturn(libraryAsset);
 
-        BizException error = assertThrows(BizException.class, () -> service.uploadVoiceReference(9L, file));
+        DramaAssetResp resp = service.uploadVoiceReference(9L, file);
 
-        assertEquals("当前项目的视频模型不支持上传参考音频", error.getMessage());
-        verify(libraryAssetService, never()).upload(any());
-        verify(libraryAssetService, never()).putOwnedFile(any(), any());
+        assertEquals("users/7/assets/voice.mp3", resp.getVoiceReferenceKey());
+        verify(libraryAssetService).upload(file);
     }
 
     @Test

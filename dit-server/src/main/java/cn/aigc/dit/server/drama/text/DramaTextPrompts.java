@@ -108,7 +108,7 @@ public final class DramaTextPrompts {
             }
             规则：
             - duration_sec 只许 5–15 的整数秒；按本镜对白长短、动作节拍各自估计，不要所有镜头填同一个秒数。
-              时长只服务单镜，禁止为了凑总秒数而删戏、并戏或打乱时间线。
+              时长只服务单镜，禁止为了凑总秒数而删戏或打乱时间线；不同场景不得并进一镜。
             - 必须按 scenes 的先后、场内 action 与 dialogue 的出现顺序拆镜；后一场的事件不得出现在前面的镜头里。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
@@ -117,11 +117,12 @@ public final class DramaTextPrompts {
             - 谁做动作就写谁的名字，不要把 A 的动作写到 B 身上。
             - prop_names 只列本镜被使用或被拿在手上的道具，不要每镜都带全场道具。
             - cast_count 必须等于 character_names 元素个数。
-            - chapter_index 对应 scene_index，一场至少 2 镜；不要压成少数超长镜。
+            - chapter_index 对应 scene_index；同一场允许只有 1 镜。地点、时间和可见状态连续时，
+              能在 15 秒内完整表达的动作与短台词应优先合并，不要仅因景别变化或运镜变化拆镜。
             - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
               （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
-            - narrative_goal 写一个景别或主运镜，接着 2～3 个连续可见动作。
-              不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，不要把整场情节塞进一镜。
+            - narrative_goal 写一个景别或主运镜，接着 2～3 个连续可见动作；15 秒内优先合并自然连续内容。
+              不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
             """;
@@ -143,6 +144,27 @@ public final class DramaTextPrompts {
 
     public static String assetUser(String scriptJson) {
         return "从这份锁定剧本里抽资产清单 AssetDraftList：\n\n" + scriptJson;
+    }
+
+    public static String repairUser(String originalUser, String contractName, String reason, String previousOutput) {
+        return """
+                上一次结构化输出没有通过合同校验。请只修复格式或缺失字段，不要增删、改写剧情事实。
+                输出合同：%s
+                校验错误：%s
+
+                原始任务：
+                %s
+
+                上一次输出：
+                %s
+                """.formatted(contractName, reason, clip(originalUser, 12000), clip(previousOutput, 10000));
+    }
+
+    private static String clip(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
     }
 
     public static String shotSystem() {
@@ -170,7 +192,8 @@ public final class DramaTextPrompts {
             text.append("\n本集故事体量大约 ").append(episodeBudgetSec)
                     .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
-        text.append("\n镜头数量以把每场戏按顺序讲清楚为准，不要为凑数灌水，也不要为压镜头数而跳过情节。");
+        text.append("\n镜头数量以最少且完整为目标：同一场景、时间和可见状态连续的内容，应在 15 秒内优先合并成一镜。");
+        text.append("只有场景/时间跳转、状态无法连续、参考能力受限或完整表达超过 15 秒时才拆分；不得为减少镜头而跳过情节。");
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();
     }

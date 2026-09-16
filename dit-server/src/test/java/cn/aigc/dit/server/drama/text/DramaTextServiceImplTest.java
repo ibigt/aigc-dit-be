@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -64,14 +63,12 @@ class DramaTextServiceImplTest {
     }
 
     @Test
-    void unboundSeriesUsesRules() {
+    void unboundSeriesRequiresTextModel() {
         DramaTextServiceImpl service = boundService();
 
-        ScriptDoc doc = service.parseScript(UNBOUND, RAW);
+        BizException error = assertThrows(BizException.class, () -> service.parseScript(UNBOUND, RAW));
 
-        assertEquals(DramaTextService.ENGINE_RULES, service.engine(UNBOUND));
-        assertEquals(1, doc.getScenes().size());
-        assertEquals("幻梦侦探社", doc.getScenes().get(0).getLocation());
+        assertTrue(error.getMessage().contains("未绑定文本模型"));
         verify(gateway, never()).chat(anyLong(), any());
     }
 
@@ -112,16 +109,14 @@ class DramaTextServiceImplTest {
     }
 
     @Test
-    void emptyScenesRetriesOnceThenFallsBackWithoutClaimingLlm() {
+    void emptyScenesRetriesOnceThenFailsExplicitly() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(reply("{\"scenes\":[]}"));
 
-        ScriptDoc doc = service.parseScript(BOUND, RAW);
+        BizException error = assertThrows(BizException.class, () -> service.parseScript(BOUND, RAW));
 
         verify(gateway, times(2)).chat(anyLong(), any());
-        assertEquals(DramaTextService.ENGINE_RULES, service.engine(BOUND), "回落却报 llm 会让 engine 与 script 不同源");
-        assertEquals(1, doc.getScenes().size());
-        assertEquals("幻梦侦探社", doc.getScenes().get(0).getLocation());
+        assertTrue(error.getMessage().contains("ScriptDoc"));
     }
 
     @Test
@@ -139,15 +134,14 @@ class DramaTextServiceImplTest {
     }
 
     @Test
-    void transportFailureFallsBackWithoutAnotherRoundTrip() {
+    void transportFailureSurfacesWithoutAnotherRoundTrip() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenThrow(new BizException(ErrorCode.INTERNAL, "文本模型超时"));
 
-        ScriptDoc doc = service.parseScript(BOUND, RAW);
+        BizException error = assertThrows(BizException.class, () -> service.parseScript(BOUND, RAW));
 
         verify(gateway, times(1)).chat(anyLong(), any());
-        assertEquals(DramaTextService.ENGINE_RULES, service.engine(BOUND));
-        assertEquals(1, doc.getScenes().size());
+        assertEquals("文本模型超时", error.getMessage());
     }
 
     @Test
@@ -241,31 +235,24 @@ class DramaTextServiceImplTest {
     }
 
     @Test
-    void parseScriptNeverThrowsOnJunkInput() {
+    void parseScriptRejectsJunkInsteadOfInventingRuleBasedScenes() {
         DramaTextServiceImpl service = boundService();
 
-        // DramaService 在事务里同步调用本方法，抛异常会直接堵死导入。
-        for (String raw : new String[]{null, "", "   ", "一", "\n\n\n", "：无主台词", "第X场 乱写"}) {
-            for (long seriesId : new long[]{UNBOUND, BOUND}) {
-                if (seriesId == BOUND) {
-                    when(gateway.chat(anyLong(), any())).thenReturn(reply("不是JSON"));
-                }
-                ScriptDoc doc = assertDoesNotThrow(() -> service.parseScript(seriesId, raw));
-                assertTrue(doc.getScenes().size() <= 2);
-            }
-        }
+        when(gateway.chat(anyLong(), any())).thenReturn(reply("不是JSON"));
+        assertThrows(BizException.class, () -> service.parseScript(BOUND, "第X场 乱写"));
+        assertThrows(BizException.class, () -> service.parseScript(UNBOUND, RAW));
     }
 
     @Test
     void parsedDocumentRoundTripsThroughJsonbMap() {
         DramaTextServiceImpl service = boundService();
 
-        ScriptDoc doc = service.parseScript(UNBOUND, RAW);
+        ScriptDoc doc = DramaTextServiceImpl.readScript(GOOD_JSON);
         Map<String, Object> map = ScriptDocs.toMap(doc);
 
         assertEquals(1, ((Collection<?>) map.get("scenes")).size());
         ScriptDoc back = ScriptDocs.fromMap(map);
         assertEquals("幻梦侦探社", back.getScenes().get(0).getLocation());
-        assertEquals(List.of("洛白"), back.getScenes().get(0).getCharacters());
+        assertEquals(List.of("洛白", "局长"), back.getScenes().get(0).getCharacters());
     }
 }

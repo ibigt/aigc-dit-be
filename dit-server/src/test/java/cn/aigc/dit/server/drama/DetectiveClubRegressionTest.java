@@ -1,11 +1,9 @@
 package cn.aigc.dit.server.drama;
 
 import cn.aigc.dit.server.drama.text.AssetDraftList;
-import cn.aigc.dit.server.drama.text.DramaTextServiceImpl;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
-import cn.aigc.dit.server.drama.text.ScriptDocs;
+import cn.aigc.dit.server.drama.text.ScriptParser;
 import cn.aigc.dit.server.drama.text.ShotDraftList;
-import cn.aigc.dit.server.drama.text.TextChatGateway;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,22 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 侦探社黄金样例回归：剧本理解层三段链路（分场 → 资产 → 分镜）对固定输入的稳定产出。
+ * 旧规则工具的隔离回归。正式剧本分析链路不再调用这些工具兜底。
  */
 class DetectiveClubRegressionTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-
-    private final DramaTextServiceImpl service = new DramaTextServiceImpl(unboundGateway());
-
-    /** 本回归钉规则路径：让每个系列都表现为「未绑定文本模型」。 */
-    private static TextChatGateway unboundGateway() {
-        TextChatGateway gateway = org.mockito.Mockito.mock(TextChatGateway.class);
-        org.mockito.Mockito.when(gateway.resolve(org.mockito.ArgumentMatchers.anyLong()))
-                .thenReturn(java.util.Optional.empty());
-        return gateway;
-    }
 
     private static String fixture(String name) {
         try (InputStream in = DetectiveClubRegressionTest.class.getResourceAsStream("/fixtures/detective-club/" + name)) {
@@ -50,7 +38,7 @@ class DetectiveClubRegressionTest {
     }
 
     private ScriptDoc parsedScript() {
-        return service.parseScript(1L, fixture("source.txt"));
+        return ScriptParser.parse(fixture("source.txt"));
     }
 
     @Test
@@ -92,7 +80,7 @@ class DetectiveClubRegressionTest {
     @Test
     void assetsMatchGoldenSample() throws IOException {
         JsonNode spec = MAPPER.readTree(fixture("expected-assets.json"));
-        List<AssetDraftList.AssetDraft> assets = service.extractAssets(1L, parsedScript()).getAssets();
+        List<AssetDraftList.AssetDraft> assets = DramaAssetDrafts.fromScript(parsedScript()).getAssets();
 
         for (JsonNode want : spec.get("must_include")) {
             AssetDraftList.AssetDraft got = findAsset(assets, want.get("name").asText());
@@ -119,7 +107,7 @@ class DetectiveClubRegressionTest {
     @Test
     void dreamStateIsNeverMergedIntoBase() throws IOException {
         JsonNode spec = MAPPER.readTree(fixture("expected-assets.json"));
-        List<AssetDraftList.AssetDraft> assets = service.extractAssets(1L, parsedScript()).getAssets();
+        List<AssetDraftList.AssetDraft> assets = DramaAssetDrafts.fromScript(parsedScript()).getAssets();
 
         for (JsonNode forbid : spec.get("must_not_merge")) {
             String base = forbid.get("base").asText();
@@ -140,10 +128,10 @@ class DetectiveClubRegressionTest {
     void shotsMatchGoldenSample() throws IOException {
         JsonNode spec = MAPPER.readTree(fixture("expected-shots.json"));
         ScriptDoc doc = parsedScript();
-        List<String> assetNames = service.extractAssets(1L, doc).getAssets().stream()
+        List<String> assetNames = DramaAssetDrafts.fromScript(doc).getAssets().stream()
                 .map(AssetDraftList.AssetDraft::getName)
                 .toList();
-        ShotDraftList drafts = service.draftShots(1L, doc, assetNames);
+        ShotDraftList drafts = DramaShotDrafts.fromScript(doc, assetNames);
 
         assertEquals(spec.get("chapter_count").asInt(), drafts.getChapters().size());
         for (ShotDraftList.ChapterDraft chapter : drafts.getChapters()) {

@@ -7,7 +7,6 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
-import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -89,6 +88,8 @@ public class DramaAssetService {
      */
     @Transactional
     public List<DramaAssetResp> extractFromScript(Long episodeId, boolean useLlm) {
+        long started = System.nanoTime();
+        log.info("[drama] 资产分析开始 episodeId={} useLlm={}", episodeId, useLlm);
         DramaEpisode episode = requireEpisode(episodeId);
         if (!DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定分场剧本再提取资产");
@@ -100,7 +101,10 @@ public class DramaAssetService {
         DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(episode.getSeriesId()).getStyleKey());
         AssetDraftList drafts;
         DramaTextService svc = textService.getIfAvailable();
-        if (useLlm && svc != null) {
+        if (useLlm && svc == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
+        }
+        if (useLlm) {
             drafts = svc.extractAssets(episode.getSeriesId(), doc);
             DramaAssetDrafts.ensurePrompts(drafts, doc, style);
         } else {
@@ -115,7 +119,10 @@ public class DramaAssetService {
             upsertDraft(episode, userId, existing, draft);
         }
         touchSeries(episode.getSeriesId());
-        return listByEpisode(episode.getId());
+        List<DramaAssetResp> result = listByEpisode(episode.getId());
+        log.info("[drama] 资产分析完成 episodeId={} assets={} elapsedMs={}",
+                episodeId, result.size(), (System.nanoTime() - started) / 1_000_000);
+        return result;
     }
 
     @Transactional
@@ -221,16 +228,6 @@ public class DramaAssetService {
     private void validateVoiceReferenceTarget(DramaAsset asset) {
         if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "只有角色资产可以设置音色参考");
-        }
-        DramaSeries series = requireOwnedSeries(asset.getSeriesId());
-        AiModel videoModel = series.getVideoModelId() == null
-                ? null : aiModelMapper.selectById(series.getVideoModelId());
-        AudioReferenceCapabilities audio = videoModel == null
-                ? new AudioReferenceCapabilities(false, 0, false)
-                : AudioReferenceCapabilities.resolve(videoModel.getAdapterKey(), videoModel.getProvider(),
-                videoModel.getCategory(), videoModel.getModelKey());
-        if (!audio.supported()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "当前项目的视频模型不支持上传参考音频");
         }
     }
 

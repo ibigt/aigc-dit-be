@@ -147,6 +147,7 @@ public class DramaStoryboardService {
      * 分析结束后立刻占锁，让分镜页能显示「正在自动拆镜中」，真正的 LLM 拆镜在后台跑。
      */
     public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec) {
+        log.info("[drama] 自动分镜排队 episodeId={} episodeBudgetSec={}", episodeId, episodeBudgetSec);
         LoginUser user = UserContext.require();
         try {
             draftLock.claim(episodeId);
@@ -161,7 +162,9 @@ public class DramaStoryboardService {
             LoginUser previous = UserContext.get();
             UserContext.set(user);
             try {
+                log.info("[drama] 自动分镜开始 episodeId={}", episodeId);
                 ops().runClaimedDraft(episodeId, null, episodeBudgetSec);
+                log.info("[drama] 自动分镜完成 episodeId={}", episodeId);
             } catch (Exception e) {
                 log.warn("自动拆镜失败 episodeId={}: {}", episodeId, e.toString());
                 try {
@@ -657,6 +660,9 @@ public class DramaStoryboardService {
             boolean useLlm,
             Integer requestedDuration,
             Integer episodeBudgetSec) {
+        long started = System.nanoTime();
+        log.info("[drama] 分镙草稿落库开始 episodeId={} useLlm={} durationSec={}",
+                episode.getId(), useLlm, requestedDuration);
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
         int fallback = resolveDraftDuration(series, requestedDuration);
@@ -769,6 +775,8 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能生成分镜草稿");
         }
         touchSeries(episode.getSeriesId());
+        log.info("[drama] 分镙草稿落库完成 episodeId={} shots={} elapsedMs={}",
+                episode.getId(), shotIndex, (System.nanoTime() - started) / 1_000_000);
     }
 
     private ShotDraftList resolveDrafts(
@@ -780,11 +788,17 @@ public class DramaStoryboardService {
             Integer episodeBudgetSec) {
         DramaTextService svc = textService.getIfAvailable();
         ShotDraftList drafts = null;
-        if (useLlm && svc != null) {
+        if (useLlm && svc == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
+        }
+        if (useLlm) {
             drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec);
         }
-        if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
+        if (!useLlm && (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty())) {
             drafts = DramaShotDrafts.fromScript(doc, assetNames, duration);
+        }
+        if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "未能生成分镜草稿");
         }
         return drafts;
     }

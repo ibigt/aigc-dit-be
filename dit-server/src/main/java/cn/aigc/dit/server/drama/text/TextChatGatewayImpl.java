@@ -65,7 +65,7 @@ public class TextChatGatewayImpl implements TextChatGateway {
         }
         String apiKey = encryptor.decrypt(model.getApiKeyEnc());
         ResolvedTextModel resolved = toResolved(model);
-        return chatClient.chat(resolved.endpoint(), apiKey, resolved.chatModel(), req);
+        return chatClient.chat(resolved.endpoint(), apiKey, resolved.chatModel(), req, resolved.adapterConfig());
     }
 
     public static boolean usable(AiModel model) {
@@ -87,7 +87,8 @@ public class TextChatGatewayImpl implements TextChatGateway {
                 model.getAdapterKey(),
                 model.getProvider(),
                 model.getEndpoint(),
-                chatModelOf(model));
+                chatModelOf(model),
+                model.getAdapterConfig());
     }
 
     public static String chatModelOf(AiModel model) {

@@ -251,7 +251,6 @@ class DramaServiceTest {
         text.setProvider("官方API");
         text.setEndpoint("https://api.agnes-ai.cn/v1");
         text.setModelKey("agnes-2.5-flash");
-        when(aiModelMapper.selectCount(any())).thenReturn(1L);
         when(aiModelMapper.selectById(88L)).thenReturn(text);
         when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(text));
         when(seriesMapper.insert(any(DramaSeries.class))).thenAnswer(invocation -> {

@@ -19,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Map;
 
 /**
  * OpenAI 兼容 {@code /chat/completions}。管理端测连接与 Gateway 共用。
@@ -58,27 +59,48 @@ public class OpenAiCompatChatClient {
     }
 
     public TextChatResult chat(String endpoint, String apiKey, String model, TextChatRequest req) {
+        return chat(endpoint, apiKey, model, req, Map.of());
+    }
+
+    public TextChatResult chat(String endpoint, String apiKey, String model, TextChatRequest req,
+                               Map<String, Object> adapterConfig) {
         if (req == null || !StringUtils.hasText(req.getUser())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "对话内容不能为空");
         }
         ObjectNode body = objectMapper.createObjectNode();
         body.put("model", model);
         ArrayNode messages = body.putArray("messages");
-        if (StringUtils.hasText(req.getSystem())) {
+        boolean supportsSystemRole = booleanOption(adapterConfig, "supportsSystemRole", true);
+        if (supportsSystemRole && StringUtils.hasText(req.getSystem())) {
             ObjectNode system = messages.addObject();
             system.put("role", "system");
             system.put("content", req.getSystem());
         }
         ObjectNode user = messages.addObject();
         user.put("role", "user");
-        user.put("content", req.getUser());
+        String userContent = !supportsSystemRole && StringUtils.hasText(req.getSystem())
+                ? req.getSystem().trim() + "\n\n" + req.getUser()
+                : req.getUser();
+        user.put("content", userContent);
         if (req.jsonMode()) {
-            body.putObject("response_format").put("type", "json_object");
+            String structuredOutput = option(adapterConfig, "structuredOutput", "json_object");
+            if (!"plain_json".equalsIgnoreCase(structuredOutput)) {
+                body.putObject("response_format").put("type", "json_object");
+            }
+            String tokenParameter = option(adapterConfig, "tokenParameter", "max_tokens");
+            if (!"max_completion_tokens".equals(tokenParameter)) {
+                tokenParameter = "max_tokens";
+            }
+            body.put(tokenParameter, req.getMaxTokens() == null ? 8192 : req.getMaxTokens());
             // DeepSeek-V4 默认会输出较长 reasoning，剧本阶段只需要合同内 JSON。
             // vLLM 的 chat template 支持关闭思考，可避免 60s 客户端超时和 content 为空。
-            if (isDeepSeek(model)) {
-                body.putObject("chat_template_kwargs").put("enable_thinking", false);
-                body.put("max_tokens", req.getMaxTokens() == null ? 8192 : req.getMaxTokens());
+            if (hasOption(adapterConfig, "enableThinking") || isDeepSeek(model)) {
+                body.putObject("chat_template_kwargs").put("enable_thinking",
+                        booleanOption(adapterConfig, "enableThinking", false));
+            }
+            Double temperature = numberOption(adapterConfig, "temperature");
+            if (temperature != null && temperature >= 0 && temperature <= 2) {
+                body.put("temperature", temperature);
             }
         }
         JsonNode root = post(endpoint, apiKey, body, CHAT_TIMEOUT, false);
@@ -89,6 +111,41 @@ public class OpenAiCompatChatClient {
         }
         return TextChatResult.of(content, root.path("model").asText(model),
                 choice.path("finish_reason").asText(null));
+    }
+
+    private static String option(Map<String, Object> config, String key, String fallback) {
+        if (config == null || config.get(key) == null) {
+            return fallback;
+        }
+        String value = String.valueOf(config.get(key)).trim();
+        return value.isEmpty() ? fallback : value;
+    }
+
+    private static boolean booleanOption(Map<String, Object> config, String key, boolean fallback) {
+        if (config == null || config.get(key) == null) {
+            return fallback;
+        }
+        Object value = config.get(key);
+        return value instanceof Boolean bool ? bool : Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private static boolean hasOption(Map<String, Object> config, String key) {
+        return config != null && config.containsKey(key) && config.get(key) != null;
+    }
+
+    private static Double numberOption(Map<String, Object> config, String key) {
+        if (!hasOption(config, key)) {
+            return null;
+        }
+        Object value = config.get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value).trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private static boolean isDeepSeek(String model) {

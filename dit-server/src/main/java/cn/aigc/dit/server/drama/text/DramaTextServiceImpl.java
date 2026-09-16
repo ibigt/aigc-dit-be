@@ -4,7 +4,6 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDurations;
-import cn.aigc.dit.server.drama.DramaShotDrafts;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,9 +23,8 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * 剧本理解层实现。按系列绑定的文本模型判定引擎；未绑定走规则分场，调用方无感。
- * <p>
- * 资产草稿与分镜草稿沿用 {@link DramaTextService} 的 default 规则实现。
+ * 剧本理解层实现。分场、资产与分镜均使用系列绑定的文本模型；
+ * 未绑定或输出合同连续失败时明确报错，不生成规则替代结果。
  */
 @Slf4j
 @Service
@@ -42,8 +40,7 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
 
     /**
-     * 本线程最近一次 parseScript 的实际引擎。文本模型失败会静默回落规则，
-     * 只用「决策谓词」报引擎会把回落也标成 llm，所以这里记下实际值供 {@link #engine(long)} 读取。
+     * 本线程最近一次 parseScript 的实际引擎，供 {@link #engine(long)} 与落库同源读取。
      * 调用方必须紧跟 parseScript 使用；按 seriesId 比对，避免读到上一条请求的残留。
      */
     private static final ThreadLocal<Long> PARSED_SERIES = new ThreadLocal<>();
@@ -62,33 +59,46 @@ public class DramaTextServiceImpl implements DramaTextService {
     @Override
     public ScriptDoc parseScript(long seriesId, String raw) {
         if (!useLlm(seriesId)) {
-            return record(seriesId, ENGINE_RULES, ScriptParser.parse(raw));
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
         }
-        ScriptDoc doc = null;
+        long started = System.nanoTime();
+        log.info("[drama-text] 分场开始 seriesId={} rawLength={}", seriesId, raw == null ? 0 : raw.length());
         try {
-            doc = llmParse(seriesId, raw);
+            ScriptDoc result = record(seriesId, ENGINE_LLM, llmParse(seriesId, raw));
+            log.info("[drama-text] 分场完成 seriesId={} scenes={} elapsedMs={}",
+                    seriesId, result.getScenes() == null ? 0 : result.getScenes().size(), elapsedMs(started));
+            return result;
         } catch (RuntimeException e) {
-            swallowUnlessUnbound(seriesId, "分场", e);
+            log.warn("[drama-text] 分场失败 seriesId={} elapsedMs={} error={}",
+                    seriesId, elapsedMs(started), e.getMessage());
+            throw e;
         }
-        return doc == null
-                ? record(seriesId, ENGINE_RULES, ScriptParser.parse(raw))
-                : record(seriesId, ENGINE_LLM, doc);
     }
 
     @Override
     public AssetDraftList extractAssets(long seriesId, ScriptDoc script) {
-        if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
-            return DramaTextService.super.extractAssets(seriesId, script);
+        if (script == null || script.getScenes().isEmpty()) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "剧本场景为空，无法抽取资产");
         }
-        AssetDraftList drafts = null;
+        if (!useLlm(seriesId)) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
+        }
+        long started = System.nanoTime();
+        log.info("[drama-text] 资产抽取开始 seriesId={} scenes={}", seriesId, script.getScenes().size());
         try {
-            drafts = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
+            AssetDraftList result = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
                     DramaTextPrompts.assetUser(toJson(script)),
                     content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 4096);
+            log.info("[drama-text] 资产抽取完成 seriesId={} assets={} elapsedMs={}",
+                    seriesId, result.getAssets() == null ? 0 : result.getAssets().size(), elapsedMs(started));
+            return result;
         } catch (RuntimeException e) {
-            swallowUnlessUnbound(seriesId, "资产抽取", e);
+            log.warn("[drama-text] 资产抽取失败 seriesId={} elapsedMs={} error={}",
+                    seriesId, elapsedMs(started), e.getMessage());
+            throw e;
         }
-        return drafts == null ? DramaTextService.super.extractAssets(seriesId, script) : drafts;
     }
 
     @Override
@@ -109,28 +119,40 @@ public class DramaTextServiceImpl implements DramaTextService {
             int durationSec,
             Integer episodeBudgetSec) {
         int duration = DramaDurations.clamp(durationSec);
-        if (script == null || script.getScenes().isEmpty() || !useLlm(seriesId)) {
-            return DramaShotDrafts.fromScript(script, assetNames, duration);
+        if (script == null || script.getScenes().isEmpty()) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "剧本场景为空，无法生成分镜");
         }
-        ShotDraftList drafts = null;
+        if (!useLlm(seriesId)) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
+        }
+        long started = System.nanoTime();
+        log.info("[drama-text] 分镜草稿开始 seriesId={} scenes={} assets={} durationSec={}",
+                seriesId, script.getScenes().size(), safe(assetNames).size(), duration);
         try {
-            drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
+            ShotDraftList drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
                     DramaTextPrompts.shotUser(
                             toJson(script), String.join("、", safe(assetNames)), duration, episodeBudgetSec),
                     content -> clampDurations(
                             normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
                             duration),
                     "ShotDraftList", 8192);
+            int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
+            ShotDraftList result = ShotDraftMinimizer.minimize(drafts, duration);
+            log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
+                    seriesId, before, result.getShots() == null ? 0 : result.getShots().size(), elapsedMs(started));
+            return result;
         } catch (RuntimeException e) {
-            swallowUnlessUnbound(seriesId, "分镜草稿", e);
+            log.warn("[drama-text] 分镜草稿失败 seriesId={} elapsedMs={} error={}",
+                    seriesId, elapsedMs(started), e.getMessage());
+            throw e;
         }
-        return drafts == null ? DramaShotDrafts.fromScript(script, assetNames, duration) : drafts;
     }
 
     /**
      * 只认系列绑定，不认环境变量：{@code drama_series.text_model_id → ai_model}。
      * 用 {@code resolve} 而非 {@code llmAvailable}——后者把「绑了但已停用」压成 false，
-     * 会让用户被静默降级成规则分场，而 {@link TextChatGateway#BINDING_UNUSABLE} 的意图是提示去换绑。
+     * 否则会把「已绑定但已停用」错误当成未绑定，丢失 {@link TextChatGateway#BINDING_UNUSABLE} 的换绑提示。
      */
     private boolean useLlm(long seriesId) {
         return gateway.resolve(seriesId).isPresent();
@@ -141,18 +163,14 @@ public class DramaTextServiceImpl implements DramaTextService {
                 DramaTextServiceImpl::readScript, "ScriptDoc", 8192);
     }
 
-    /** 供三条 LLM 路径共用：换绑提示原样上抛，其余吞掉并由调用方回落规则。 */
-    private void swallowUnlessUnbound(long seriesId, String what, RuntimeException e) {
-        if (e instanceof BizException biz && TextChatGateway.BINDING_UNUSABLE.equals(biz.getMessage())) {
-            throw biz;
-        }
-        log.warn("[drama-text] {} 走文本模型失败，回落规则 seriesId={}: {}", what, seriesId, e.toString());
-    }
-
     private <T> T attemptJson(long seriesId, String system, String user,
                               java.util.function.Function<String, T> reader, String what, int maxTokens) {
-        TextChatRequest req = new TextChatRequest(system, user, true, maxTokens);
+        String requestUser = user;
+        String lastReason = "输出未通过合同校验";
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
+            TextChatRequest req = new TextChatRequest(system, requestUser, true, maxTokens);
+            log.info("[drama-text] 模型请求开始 contract={} seriesId={} attempt={} maxTokens={} userLength={}",
+                    what, seriesId, attempt, maxTokens, requestUser == null ? 0 : requestUser.length());
             TextChatResult response = gateway.chat(seriesId, req);
             String content = response.getContent();
             T value = reader.apply(content);
@@ -162,11 +180,15 @@ public class DramaTextServiceImpl implements DramaTextService {
                 }
                 return value;
             }
+            String reason = invalidOutputReason(content, what);
+            lastReason = reason;
             log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={}",
-                    what, seriesId, attempt, invalidOutputReason(content, what), response.getModel(),
+                    what, seriesId, attempt, reason, response.getModel(),
                     response.getFinishReason(), content == null ? 0 : content.length());
+            requestUser = DramaTextPrompts.repairUser(user, what, reason, content);
         }
-        return null;
+        throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                "文本模型输出未通过 " + what + " 合同：" + lastReason);
     }
 
     /**
@@ -468,5 +490,9 @@ public class DramaTextServiceImpl implements DramaTextService {
         log.info("[drama-text] 分场完成 seriesId={} engine={} scenes={}",
                 seriesId, engine, doc.getScenes().size());
         return doc;
+    }
+
+    private static long elapsedMs(long started) {
+        return (System.nanoTime() - started) / 1_000_000;
     }
 }

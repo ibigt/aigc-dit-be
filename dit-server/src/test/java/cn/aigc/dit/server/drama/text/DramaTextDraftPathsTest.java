@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -78,12 +79,13 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
-    void unboundSeriesExtractsAssetsByRulesWithoutHttp() {
+    void unboundSeriesCannotInventAssetsWithRules() {
         DramaTextServiceImpl service = boundService();
 
-        AssetDraftList drafts = service.extractAssets(UNBOUND, oneScene());
+        BizException error = assertThrows(BizException.class,
+                () -> service.extractAssets(UNBOUND, oneScene()));
 
-        assertEquals(2, drafts.getAssets().size(), "规则路径：人物 + 场景");
+        assertTrue(error.getMessage().contains("未绑定文本模型"));
         verify(gateway, never()).chat(anyLong(), any());
     }
 
@@ -114,19 +116,23 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
-    void emptyAssetListFallsBackToRules() {
+    void emptyAssetListFailsExplicitly() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("{\"assets\":[]}", "m", "stop"));
 
-        assertEquals(2, service.extractAssets(BOUND, oneScene()).getAssets().size());
+        BizException error = assertThrows(BizException.class,
+                () -> service.extractAssets(BOUND, oneScene()));
+        assertTrue(error.getMessage().contains("AssetDraftList"));
     }
 
     @Test
-    void assetTransportFailureFallsBackToRules() {
+    void assetTransportFailureSurfaces() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenThrow(new BizException(ErrorCode.INTERNAL, "超时"));
 
-        assertFalse(service.extractAssets(BOUND, oneScene()).getAssets().isEmpty());
+        BizException error = assertThrows(BizException.class,
+                () -> service.extractAssets(BOUND, oneScene()));
+        assertEquals("超时", error.getMessage());
     }
 
     @Test
@@ -165,8 +171,8 @@ class DramaTextDraftPathsTest {
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("""
                 {"shots":[
                   {"chapter_index":2,"index":1,"title":"后场先出","duration_sec":6,"character_names":["洛白"]},
-                  {"chapter_index":1,"index":2,"title":"前场第二","duration_sec":7,"character_names":["洛白"]},
-                  {"chapter_index":1,"index":1,"title":"前场第一","duration_sec":5,"character_names":["洛白"]}
+                  {"chapter_index":1,"index":2,"title":"前场第二","duration_sec":7,"continuity_in":"洛白站在桌前","character_names":["洛白"]},
+                  {"chapter_index":1,"index":1,"title":"前场第一","duration_sec":5,"continuity_out":"洛白站在桌前","character_names":["洛白"]}
                 ]}
                 """, "m", "stop"));
 
@@ -181,17 +187,22 @@ class DramaTextDraftPathsTest {
 
         List<String> titles = service.draftShots(BOUND, doc, List.of("洛白")).getShots()
                 .stream().map(ShotDraftList.ShotDraft::getTitle).toList();
-        assertEquals(List.of("前场第一", "前场第二", "后场先出"), titles);
+        assertEquals(List.of("前场第一", "后场先出"), titles,
+                "同场且总时长不超过 15 秒的前两镜应合并");
     }
 
     @Test
-    void unboundOrEmptyShotsFallBackToRules() {
+    void unboundOrEmptyShotsFailExplicitly() {
         DramaTextServiceImpl service = boundService();
 
         List<String> names = List.of("洛白", "古铜怀表");
-        assertEquals(4, service.draftShots(UNBOUND, oneScene(), names).getShots().size(), "规则路径第一场 4 镜");
+        BizException unbound = assertThrows(BizException.class,
+                () -> service.draftShots(UNBOUND, oneScene(), names));
+        assertTrue(unbound.getMessage().contains("未绑定文本模型"));
 
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("{\"shots\":[]}", "m", "stop"));
-        assertEquals(4, service.draftShots(BOUND, oneScene(), names).getShots().size());
+        BizException invalid = assertThrows(BizException.class,
+                () -> service.draftShots(BOUND, oneScene(), names));
+        assertTrue(invalid.getMessage().contains("ShotDraftList"));
     }
 }

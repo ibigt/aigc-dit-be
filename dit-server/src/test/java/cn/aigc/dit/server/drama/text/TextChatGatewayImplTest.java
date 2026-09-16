@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
@@ -82,13 +83,13 @@ class TextChatGatewayImplTest {
         when(seriesMapper.selectById(21L)).thenReturn(series(21L, 11L));
         when(aiModelMapper.selectById(11L)).thenReturn(textModel(11L, "绑定的模型", true));
         when(encryptor.decrypt("v1:cipher")).thenReturn("sk-bound");
-        when(chatClient.chat(eq("https://api.agnes-ai.cn/v1"), eq("sk-bound"), eq("agnes-2.5-flash"), any()))
+        when(chatClient.chat(eq("https://api.agnes-ai.cn/v1"), eq("sk-bound"), eq("agnes-2.5-flash"), any(), anyMap()))
                 .thenReturn(TextChatResult.of("ok", "agnes-2.5-flash", "stop"));
 
         TextChatRequest req = new TextChatRequest(null, "ping", false);
         TextChatResult result = gateway.chat(21L, req);
         assertEquals("ok", result.getContent());
-        verify(chatClient).chat("https://api.agnes-ai.cn/v1", "sk-bound", "agnes-2.5-flash", req);
+        verify(chatClient).chat("https://api.agnes-ai.cn/v1", "sk-bound", "agnes-2.5-flash", req, java.util.Map.of());
     }
 
     @Test
@@ -119,7 +120,7 @@ class TextChatGatewayImplTest {
         when(seriesMapper.selectById(21L)).thenReturn(series(21L, 11L));
         when(aiModelMapper.selectById(11L)).thenReturn(model);
         when(encryptor.decrypt(isNull())).thenReturn(null);
-        when(chatClient.chat(eq("http://172.171.114.10:8080/v1"), isNull(), eq("deepseek-v3-flash"), any()))
+        when(chatClient.chat(eq("http://172.171.114.10:8080/v1"), isNull(), eq("deepseek-v3-flash"), any(), anyMap()))
                 .thenReturn(TextChatResult.of("ok", "deepseek-v3-flash", "stop"));
 
         Optional<ResolvedTextModel> resolved = gateway.resolve(21L);
@@ -129,7 +130,7 @@ class TextChatGatewayImplTest {
         TextChatRequest req = new TextChatRequest(null, "ping", false);
         TextChatResult result = gateway.chat(21L, req);
         assertEquals("ok", result.getContent());
-        verify(chatClient).chat("http://172.171.114.10:8080/v1", null, "deepseek-v3-flash", req);
+        verify(chatClient).chat("http://172.171.114.10:8080/v1", null, "deepseek-v3-flash", req, java.util.Map.of());
     }
 
     private static DramaSeries series(long id, Long textModelId) {

@@ -242,7 +242,7 @@ class DramaServiceScriptTest {
         when(textService.getIfAvailable()).thenReturn(dramaTextService);
         when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
         when(dramaTextService.parseScript(anyLong(), anyString())).thenReturn(sampleDoc());
-        when(assetService.extractFromScript(31L, false)).thenReturn(List.of());
+        when(assetService.extractFromScript(31L, true)).thenReturn(List.of());
         cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp board = new cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp();
         board.setDrafting(true);
         when(storyboardService.getStoryboard(31L)).thenReturn(board);
@@ -254,7 +254,7 @@ class DramaServiceScriptTest {
         assertEquals(1, result.getActualSceneCount());
         assertEquals(0, result.getActualShotCount());
         assertEquals(DramaContract.STATUS_LOCKED, episode.getStatus());
-        org.mockito.Mockito.verify(assetService).extractFromScript(31L, false);
+        org.mockito.Mockito.verify(assetService).extractFromScript(31L, true);
         org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(31L, null);
         org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).draft(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
         org.mockito.Mockito.verify(analyzeLock).claim(31L);

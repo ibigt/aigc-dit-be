@@ -154,7 +154,7 @@ class DramaStoryboardServiceTest {
                 lockedAsset(4L, "古铜怀表", DramaContract.ASSET_TYPE_PROP),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
 
-        DramaStoryboardResp board = service.draft(31L);
+        DramaStoryboardResp board = service.draft(31L, false);
 
         assertTrue(storedShots.size() >= 4 && storedShots.size() <= 8);
         DramaShot first = storedShots.get(0);
@@ -231,13 +231,28 @@ class DramaStoryboardServiceTest {
                 lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
 
-        service.draft(31L, true, 15);
+        service.draft(31L, false, 15);
 
         assertFalse(storedShots.isEmpty());
         assertTrue(storedShots.stream().allMatch(item ->
                 item.getDurationSec() != null && item.getDurationSec() >= 5 && item.getDurationSec() <= 15));
         assertTrue(storedShots.stream().allMatch(item ->
                 item.getCompiledPrompt().contains("Duration: " + item.getDurationSec() + " seconds")));
+    }
+
+    @Test
+    void llmStoryboardDraftDoesNotFallBackWhenTextServiceIsMissing() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+
+        BizException error = assertThrows(BizException.class,
+                () -> service.draft(31L, true, 15));
+
+        assertEquals("剧本生成服务尚未就绪", error.getMessage());
+        assertTrue(storedShots.isEmpty());
     }
 
     @Test
@@ -249,6 +264,12 @@ class DramaStoryboardServiceTest {
         when(assetMapper.selectList(any())).thenReturn(List.of(
                 lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
+        when(textService.getIfAvailable()).thenReturn(llm);
+        when(llm.draftShots(org.mockito.ArgumentMatchers.anyLong(), any(ScriptDoc.class), any(),
+                org.mockito.ArgumentMatchers.anyInt(), any()))
+                .thenReturn(DramaShotDrafts.fromScript(
+                        detectiveDoc(), List.of("洛白", "幻梦侦探社"), 5));
 
         service.enqueueAutoDraft(31L, 30);
 

@@ -1,11 +1,13 @@
 package cn.aigc.dit.server.drama.text;
 
 import cn.aigc.dit.common.exception.BizException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -65,6 +67,90 @@ class OpenAiCompatChatClientTest {
         assertEquals("hello", result.getContent());
         assertEquals("agnes-2.5-flash", result.getModel());
         assertEquals("stop", result.getFinishReason());
+    }
+
+    @Test
+    void jsonChatSendsRequestedTokenLimitForNonDeepSeekModels() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://api.agnes-ai.cn/v1", "sk", "agnes-2.5-flash",
+                new TextChatRequest("sys", "user", true, 4321));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertEquals(4321, sent.path("max_tokens").asInt(),
+                "非 DeepSeek 模型也必须收到调用方要求的输出 token 上限，否则长 JSON 会按供应商默认值截断");
+    }
+
+    @Test
+    void modelOptionsCanUsePlainJsonAndAlternateTokenParameter() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://example.com/v1", "sk", "portable-model",
+                new TextChatRequest("sys", "user", true, 2048),
+                Map.of("structuredOutput", "plain_json", "tokenParameter", "max_completion_tokens"));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertTrue(sent.path("response_format").isMissingNode(),
+                "不支持 response_format 的模型必须依靠提示词输出 JSON");
+        assertEquals(2048, sent.path("max_completion_tokens").asInt());
+        assertTrue(sent.path("max_tokens").isMissingNode());
+    }
+
+    @Test
+    void modelOptionsFoldSystemPromptWhenSystemRoleIsUnsupported() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://example.com/v1", "sk", "no-system-role",
+                new TextChatRequest("严格输出 JSON", "解析这份剧本", true, 1024),
+                Map.of("supportsSystemRole", false));
+
+        JsonNode messages = mapper.readTree(body.get()).path("messages");
+        assertEquals(1, messages.size());
+        assertEquals("user", messages.path(0).path("role").asText());
+        assertTrue(messages.path(0).path("content").asText().contains("严格输出 JSON"));
+        assertTrue(messages.path(0).path("content").asText().contains("解析这份剧本"));
+    }
+
+    @Test
+    void modelOptionsControlReasoningAndTemperatureWithoutModelNameChecks() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://example.com/v1", "sk", "custom-reasoning-model",
+                new TextChatRequest("sys", "user", true, 1024),
+                Map.of("enableThinking", false, "temperature", 0.15));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertTrue(sent.path("chat_template_kwargs").has("enable_thinking"));
+        assertEquals(false, sent.path("chat_template_kwargs").path("enable_thinking").asBoolean());
+        assertEquals(0.15, sent.path("temperature").asDouble(), 0.0001);
     }
 
     @Test

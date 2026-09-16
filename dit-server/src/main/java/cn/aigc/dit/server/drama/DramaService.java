@@ -301,10 +301,10 @@ public class DramaService {
             analyzeLock.claim(id);
         }
         try {
-            // import 会优先使用已配置的文本模型，失败时由文本服务回落到规则分场。
+            // 分场、资产与分镜均使用项目绑定的文本模型；失败时显式返回诊断，不伪造规则结果。
             ops.importSource(id, importReq);
             ops.lockScript(id);
-            List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
+            List<DramaAssetResp> assets = assetService.extractFromScript(id, true);
             storyboardService.enqueueAutoDraft(id, null);
             DramaStoryboardResp storyboard = storyboardService.getStoryboard(id);
 
@@ -691,6 +691,12 @@ public class DramaService {
 
     private Long resolveCreateTextModelId(Long requested) {
         if (requested == null) {
+            long enabledTextModels = aiModelMapper.selectCount(new LambdaQueryWrapper<AiModel>()
+                    .eq(AiModel::getCategory, ModelCategory.TEXT)
+                    .eq(AiModel::getEnabled, true));
+            if (enabledTextModels > 0) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "请选择文本模型");
+            }
             return null;
         }
         return requireEnabledTextModel(requested).getId();
