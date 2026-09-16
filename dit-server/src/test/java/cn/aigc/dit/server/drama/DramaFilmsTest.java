@@ -46,11 +46,23 @@ class DramaFilmsTest {
     }
 
     @Test
+    void dialogueChangeMarksAssembledFilmStale() {
+        DramaEpisode episode = new DramaEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        DramaShot shot = clip(11L, 1, "users/7/a.mp4");
+        shot.setDialogue("洛白：旧台词。");
+        episode.setFilmFingerprint(DramaFilms.fingerprint(List.of(shot)));
+        shot.setDialogue("洛白：新台词。");
+        assertTrue(DramaFilms.stale(episode, List.of(shot)));
+    }
+
+    @Test
     void describeReportsMissingShotsAndIncomplete() {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);
         episode.setFilmKey("users/7/drama/31/film.mp4");
         List<DramaShot> shots = List.of(clip(11L, 1, "users/7/a.mp4"), clip(22L, 2, null));
+        shots.get(0).setDialogue("洛白：字幕。");
         episode.setFilmFingerprint(DramaFilms.fingerprint(shots));
 
         DramaFilmResp resp = DramaFilms.describe(episode, shots);
@@ -61,6 +73,8 @@ class DramaFilmsTest {
         assertEquals(2, resp.getShotCount());
         assertEquals(1, resp.getReadyShotCount());
         assertFalse(resp.getStale());
+        assertTrue(resp.getHasCaptions());
+        assertTrue(resp.getShots().get(0).getHasCaptions());
     }
 
     private static DramaShot clip(Long id, int index, String videoKey) {

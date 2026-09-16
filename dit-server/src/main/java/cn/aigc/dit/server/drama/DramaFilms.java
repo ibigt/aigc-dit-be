@@ -16,8 +16,8 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * 成片指纹与响应：按 {@code shot_index} 拼接 {@code shotId:videoKey:durationSec} 再 SHA-256。
- * 时长纳入指纹，避免改镜长后成片页仍显示未过期。
+ * 成片指纹与响应：按 {@code shot_index} 拼接 {@code shotId:videoKey:durationSec:dialogue} 再 SHA-256。
+ * 时长和对白都纳入指纹，避免改镜长或字幕后成片页仍显示未过期。
  */
 public final class DramaFilms {
 
@@ -68,6 +68,8 @@ public final class DramaFilms {
             payload.append(shot.getVideoKey() == null ? "" : shot.getVideoKey());
             payload.append(':');
             payload.append(shot.getDurationSec() == null ? "" : shot.getDurationSec());
+            payload.append(':');
+            payload.append(shot.getDialogue() == null ? "" : shot.getDialogue());
         }
         return sha256Hex(payload.toString());
     }
@@ -94,6 +96,7 @@ public final class DramaFilms {
         resp.setMissingShotIndexes(missing);
         resp.setShotCount(ordered.size());
         resp.setReadyShotCount(ordered.size() - missing.size());
+        boolean hasCaptions = false;
         List<DramaFilmShotResp> items = new ArrayList<>();
         for (DramaShot shot : ordered) {
             DramaFilmShotResp item = new DramaFilmShotResp();
@@ -103,10 +106,14 @@ public final class DramaFilms {
             item.setDurationSec(shot.getDurationSec());
             boolean ready = StringUtils.hasText(shot.getVideoKey());
             item.setReady(ready);
+            boolean shotHasCaptions = ready && !DramaStoryboardCompiler.captionLines(shot.getDialogue()).isEmpty();
+            item.setHasCaptions(shotHasCaptions);
+            hasCaptions = hasCaptions || shotHasCaptions;
             item.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
             item.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
             items.add(item);
         }
+        resp.setHasCaptions(hasCaptions);
         resp.setShots(items);
         return resp;
     }

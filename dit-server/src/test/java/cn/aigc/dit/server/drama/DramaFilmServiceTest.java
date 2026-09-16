@@ -44,6 +44,8 @@ class DramaFilmServiceTest {
     private PosterExtractor posterExtractor;
     @Mock
     private DramaFilmConcat filmConcat;
+    @Mock
+    private DramaCaptionService captionService;
 
     private LocalObjectStorage storage;
     private DramaFilmService service;
@@ -55,7 +57,7 @@ class DramaFilmServiceTest {
     @BeforeEach
     void setUp() {
         storage = new LocalObjectStorage(tempDir.resolve("obj"));
-        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat);
+        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat, captionService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         concatPayloads.clear();
         org.mockito.Mockito.lenient().when(posterExtractor.extract(any())).thenReturn("users/7/drama/31/film-poster.webp");

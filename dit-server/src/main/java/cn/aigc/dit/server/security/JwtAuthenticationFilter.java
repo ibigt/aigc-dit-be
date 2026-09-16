@@ -32,7 +32,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         try {
             String token = resolveToken(request);
-            if (!StringUtils.hasText(token) && isMediaRequest(request)) {
+            if (!StringUtils.hasText(token) && acceptsQueryToken(request)) {
                 token = request.getParameter("token");
             }
             if (StringUtils.hasText(token)) {
@@ -62,8 +62,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return header.substring(7).trim();
     }
 
-    private static boolean isMediaRequest(HttpServletRequest request) {
+    static boolean acceptsQueryToken(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path != null && path.startsWith("/api/media");
+        if (path == null) {
+            return false;
+        }
+        return path.startsWith("/api/media")
+                || path.matches("^/api/drama/shots/\\d+/captions\\.vtt$")
+                || path.matches("^/api/drama/episodes/\\d+/film/captions\\.vtt$");
     }
 }

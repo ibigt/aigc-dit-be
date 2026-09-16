@@ -32,6 +32,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,6 +58,7 @@ public class DramaController {
     private final DramaAssetService dramaAssetService;
     private final DramaStoryboardService dramaStoryboardService;
     private final DramaFilmService dramaFilmService;
+    private final DramaCaptionService dramaCaptionService;
 
     @Operation(summary = "可选视觉风格（图例；不含编译前缀）")
     @GetMapping("/styles")
@@ -385,6 +389,12 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.getGenerateTask(id, taskId));
     }
 
+    @Operation(summary = "当前分镜中文字幕（按实际视频时长生成 WebVTT）")
+    @GetMapping(value = "/shots/{id}/captions.vtt", produces = "text/vtt;charset=UTF-8")
+    public ResponseEntity<String> getShotCaptions(@PathVariable Long id) {
+        return vtt(dramaCaptionService.shotVtt(id));
+    }
+
     @Operation(summary = "本集成片状态（指纹过期、缺镜清单）")
     @GetMapping("/episodes/{id}/film")
     public CommonResult<DramaFilmResp> getFilm(@PathVariable Long id) {
@@ -395,5 +405,18 @@ public class DramaController {
     @PostMapping("/episodes/{id}/film/assemble")
     public CommonResult<DramaFilmResp> assembleFilm(@PathVariable Long id) {
         return CommonResult.success(dramaFilmService.assemble(id));
+    }
+
+    @Operation(summary = "本集成片中文字幕（按镜头实际时长累计 WebVTT）")
+    @GetMapping(value = "/episodes/{id}/film/captions.vtt", produces = "text/vtt;charset=UTF-8")
+    public ResponseEntity<String> getFilmCaptions(@PathVariable Long id) {
+        return vtt(dramaCaptionService.episodeVtt(id));
+    }
+
+    private static ResponseEntity<String> vtt(String body) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .contentType(MediaType.parseMediaType("text/vtt;charset=UTF-8"))
+                .body(body);
     }
 }

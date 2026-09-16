@@ -27,14 +27,14 @@ class DramaShotCaptionsTest {
     }
 
     @Test
-    void multipleLinesSplitDurationEvenly() {
-        List<CaptionCue> cues = DramaShotCaptions.cues("旁白：风很大。\n洛白：走吧。", 6);
+    void multipleLinesSplitDurationByTextLength() {
+        List<CaptionCue> cues = DramaShotCaptions.cues("旁白：风越来越大。\n洛白：走吧。", 7);
         assertEquals(2, cues.size());
         assertEquals(0.0, cues.get(0).startSec());
-        assertEquals(3.0, cues.get(0).endSec());
-        assertEquals("风很大。", cues.get(0).text());
-        assertEquals(3.0, cues.get(1).startSec());
-        assertEquals(6.0, cues.get(1).endSec());
+        assertEquals(5.0, cues.get(0).endSec(), 0.001);
+        assertEquals("风越来越大。", cues.get(0).text());
+        assertEquals(5.0, cues.get(1).startSec(), 0.001);
+        assertEquals(7.0, cues.get(1).endSec());
         assertEquals("走吧。", cues.get(1).text());
     }
 }
