@@ -13,6 +13,7 @@ import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
@@ -112,6 +113,10 @@ class DramaServiceTest {
         assertEquals(7L, seriesCaptor.getValue().getUserId());
         assertEquals(DramaStyles.ANIME_COMIC, seriesCaptor.getValue().getStyleKey());
         assertEquals(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), seriesCaptor.getValue().getStylePrefix());
+        assertEquals(DramaVideoGenerateModes.R2V, seriesCaptor.getValue().getVideoGenerateMode());
+        assertEquals(Boolean.FALSE, seriesCaptor.getValue().getVideoChainPrevTail());
+        assertEquals(DramaVideoGenerateModes.R2V, resp.getVideoGenerateMode());
+        assertEquals(Boolean.FALSE, resp.getVideoChainPrevTail());
     }
 
     @Test
@@ -468,7 +473,74 @@ class DramaServiceTest {
         DramaVideoModelBindReq req = new DramaVideoModelBindReq();
         req.setVideoModelId(89L);
         BizException error = assertThrows(BizException.class, () -> service.bindVideoModel(21L, req));
-        assertEquals("所选视频模型不支持参考生视频", error.getMessage());
+        assertEquals("所选视频模型不支持参考生视频或首尾帧", error.getMessage());
         verify(seriesMapper, never()).updateById(existing);
+    }
+
+    @Test
+    void bindVideoGenerateModeWritesSeriesAndRecompiles() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setDefaultResolution("720P");
+        existing.setDefaultDurationSec(5);
+        existing.setPlannedEpisodeCount(1);
+        existing.setVideoModelId(88L);
+        existing.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        existing.setVideoChainPrevTail(false);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        AiModel video = new AiModel();
+        video.setId(88L);
+        video.setName("Seedance 2.0 Fast");
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setAdapterKey("seedance-2.0");
+        video.setProvider("官方API");
+        video.setModelKey("doubao-seedance-2.0-fast");
+        video.setCapabilities(List.of("video", "t2v", "r2v"));
+        when(aiModelMapper.selectById(88L)).thenReturn(video);
+        when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(video));
+
+        DramaVideoGenerateModeBindReq req = new DramaVideoGenerateModeBindReq();
+        req.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        org.mockito.Mockito.when(storyboardService.isSeriesRecompiling(21L)).thenReturn(true);
+        DramaSeriesResp resp = service.bindVideoGenerateMode(21L, req);
+
+        assertEquals(DramaVideoGenerateModes.I2V, existing.getVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.I2V, resp.getVideoGenerateMode());
+        assertEquals(Boolean.TRUE, resp.getPromptRecompiling());
+        verify(seriesMapper).updateById(existing);
+        verify(storyboardService).enqueueSeriesRecompile(21L);
+    }
+
+    @Test
+    void bindVideoChainPrevTailRecompilesWithoutChangingMode() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setName("侦探社");
+        existing.setStyleKey(DramaStyles.ANIME_COMIC);
+        existing.setStylePrefix(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        existing.setAspectRatio("16:9");
+        existing.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        existing.setVideoChainPrevTail(false);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+
+        DramaVideoGenerateModeBindReq req = new DramaVideoGenerateModeBindReq();
+        req.setVideoChainPrevTail(true);
+        org.mockito.Mockito.when(storyboardService.isSeriesRecompiling(21L)).thenReturn(true);
+        DramaSeriesResp resp = service.bindVideoGenerateMode(21L, req);
+
+        assertEquals(DramaVideoGenerateModes.R2V, resp.getVideoGenerateMode());
+        assertEquals(Boolean.TRUE, existing.getVideoChainPrevTail());
+        assertEquals(Boolean.TRUE, resp.getVideoChainPrevTail());
+        assertEquals(Boolean.TRUE, resp.getPromptRecompiling());
+        verify(storyboardService).enqueueSeriesRecompile(21L);
     }
 }

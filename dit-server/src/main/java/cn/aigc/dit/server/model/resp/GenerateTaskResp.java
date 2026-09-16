@@ -25,6 +25,8 @@ public class GenerateTaskResp {
     private Long creditCost;
     private String outputStorageKey;
     private String posterKey;
+    @Schema(description = "成片落幅对象 key（分镜出片抽末帧）")
+    private String tailKey;
     private List<String> outputKeys;
     private List<CreationItemResp> creations;
     private OffsetDateTime createdAt;

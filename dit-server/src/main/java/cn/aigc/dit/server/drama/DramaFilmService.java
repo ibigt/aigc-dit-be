@@ -34,6 +34,7 @@ public class DramaFilmService {
     private final ObjectStorage objectStorage;
     private final PosterExtractor posterExtractor;
     private final DramaFilmConcat filmConcat;
+    private final DramaCaptionService captionService;
 
     public DramaFilmResp get(Long episodeId) {
         DramaEpisode episode = requireEpisode(episodeId);
@@ -69,6 +70,7 @@ public class DramaFilmService {
             temps.add(output);
             filmConcat.concat(inputs, output);
             objectStorage.put(filmKey, Files.readAllBytes(output), "video/mp4");
+            captionService.storeEpisodeVtt(filmKey, clips, inputs);
             String posterKey = null;
             try {
                 posterKey = posterExtractor.extract(filmKey);
@@ -113,6 +115,7 @@ public class DramaFilmService {
         }
         deleteObjectQuietly(episode.getFilmKey());
         deleteObjectQuietly(episode.getFilmPosterKey());
+        captionService.deleteEpisodeVtt(episode.getFilmKey());
         episode.setFilmKey(null);
         episode.setFilmPosterKey(null);
         episode.setFilmFingerprint(null);

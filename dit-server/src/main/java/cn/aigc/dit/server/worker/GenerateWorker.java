@@ -455,6 +455,7 @@ public class GenerateWorker {
             //     keys = dramaShotCaptionService.burnIfNeeded(latest, keys);
             // }
             String firstPoster = null;
+            String firstTail = null;
             boolean recordCreation = GenerateRequests.bindsQuickCreate(latest.getParams());
             Long sessionId = recordCreation ? sessionId(latest) : null;
             CreationSession session = sessionId == null ? null : creationSessionMapper.selectById(sessionId);
@@ -463,11 +464,20 @@ public class GenerateWorker {
             }
             long perCopy = Math.max(0, (latest.getCreditCost() == null ? 0 : latest.getCreditCost()) / Math.max(1, keys.size()));
             int index = 1;
+            boolean dramaShot = GenerateRequests.isDramaShot(latest.getParams());
             for (String key : keys) {
-                String poster = ModelCategory.AUDIO.equalsIgnoreCase(latest.getCategory())
-                        ? null : posterExtractor.extract(key);
+                PosterExtractor.VideoStills stills;
+                if (ModelCategory.AUDIO.equalsIgnoreCase(latest.getCategory())) {
+                    stills = new PosterExtractor.VideoStills(null, null);
+                } else if (dramaShot) {
+                    stills = posterExtractor.extractStills(key);
+                } else {
+                    stills = new PosterExtractor.VideoStills(posterExtractor.extract(key), null);
+                }
+                String poster = stills.posterKey();
                 if (firstPoster == null) {
                     firstPoster = poster;
+                    firstTail = stills.tailKey();
                 }
                 if (!recordCreation) {
                     continue;
@@ -495,6 +505,13 @@ public class GenerateWorker {
             latest.setOutputStorageKey(keys.get(0));
             latest.setOutputKeys(keys);
             latest.setPosterKey(firstPoster);
+            if (StringUtils.hasText(firstTail)) {
+                java.util.Map<String, Object> params = latest.getParams() == null
+                        ? new java.util.LinkedHashMap<>()
+                        : new java.util.LinkedHashMap<>(latest.getParams());
+                params.put("tailKey", firstTail);
+                latest.setParams(params);
+            }
             latest.setStatus(TaskStatus.SUCCEEDED);
             latest.setProgress(100);
             latest.setFinishedAt(OffsetDateTime.now());

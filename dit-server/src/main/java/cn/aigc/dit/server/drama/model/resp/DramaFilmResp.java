@@ -20,6 +20,8 @@ public class DramaFilmResp {
     private Boolean stale;
     @Schema(description = "本集全部分镜均已出片")
     private Boolean complete;
+    @Schema(description = "成片是否包含可展示的中文字幕")
+    private Boolean hasCaptions;
     private List<Integer> missingShotIndexes = new ArrayList<>();
     private Integer shotCount;
     private Integer readyShotCount;

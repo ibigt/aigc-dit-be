@@ -78,6 +78,21 @@ class ArkRequestMapperTest {
     }
 
     @Test
+    void mapsI2vFirstFrameOnly() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_5)
+                .setMode("i2v")
+                .setPrompt("局长推门进来")
+                .setDurationSec(5);
+        Map<String, Object> body = ArkRequestMapper.toCreateBody(
+                request, "https://example.com/first.png", null, List.of());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) body.get("content");
+        assertEquals(2, content.size());
+        assertEquals("first_frame", content.get(1).get("role"));
+    }
+
+    @Test
     void mapsOfficialMultimodalRefsAndKeeps1080ForSeedance20() {
         GenerateRequest request = new GenerateRequest()
                 .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)

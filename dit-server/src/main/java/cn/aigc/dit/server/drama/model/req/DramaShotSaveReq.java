@@ -38,4 +38,11 @@ public class DramaShotSaveReq {
     @Schema(description = "手动覆盖视频提示词；传非空=启用覆盖并跳过自动编译，传空串=清除覆盖回到自动编译，不传=不改动")
     @Size(max = 4000)
     private String promptOverride;
+
+    @Schema(description = "本镜出片方式：r2v / i2v / inherit（跟随系列默认）；不传=不改动")
+    @Size(max = 16)
+    private String videoGenerateMode;
+
+    @Schema(description = "本镜参考图是否衔接上一镜落幅；仅 r2v。不传=不改动；跟随默认时随 inherit 清空")
+    private Boolean videoChainPrevTail;
 }

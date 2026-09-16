@@ -44,6 +44,9 @@ public final class ComfyUiGeometry {
         } else if ("3:4".equals(aspect)) {
             height = longEdge;
             width = align(Math.round(longEdge * 3f / 4f));
+        } else if ("21:9".equals(aspect)) {
+            width = longEdge;
+            height = align(Math.round(longEdge * 9f / 21f));
         } else {
             width = longEdge;
             height = pairShort(longEdge);

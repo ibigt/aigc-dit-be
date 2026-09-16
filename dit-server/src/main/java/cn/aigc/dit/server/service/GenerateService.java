@@ -73,20 +73,17 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             throw new BizException(ErrorCode.BAD_REQUEST, "模型不支持当前创作类型");
         }
         GenerateRequest request = GenerateRequests.fromSubmit(userId, model.getModelKey(), req, assetService);
-        if (!GenerateRequests.supportsMode(model.getCapabilities(), request.getCategory(), request.getMode())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
-        }
         String adapterKey = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         request.setAdapterKey(adapterKey);
         validateAudioRequest(request);
         validatePromptAndAudio(model, request);
-        if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
+        if (!modeSupported(model.getCapabilities(), adapterKey, request.getCategory(), request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST, GenerateRequests.unsupportedModeMessage(request.getMode()));
         }
         if (GenerateMode.I2V.equalsIgnoreCase(GenerateMode.canonical(request.getMode())) && request.getFrames() != null) {
-            if (request.getFrames().getFirstFrameKey() == null || request.getFrames().getLastFrameKey() == null) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "首尾帧模式需要同时提供首帧与尾帧");
+            if (request.getFrames().getFirstFrameKey() == null || request.getFrames().getFirstFrameKey().isBlank()) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "首尾帧模式需要提供首帧");
             }
         }
         if (ModelCategory.VIDEO.equals(request.getCategory()) && request.getDurationSec() == null) {
@@ -274,6 +271,16 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             request.setResolution("1K");
             request.setQuality("Low");
         }
+    }
+
+    /**
+     * 已识别适配协议时以厂商协议为准（管理端 capabilities 漏写 i2v 时，官方 Seedance 仍可走首尾帧）。
+     */
+    static boolean modeSupported(List<String> capabilities, String adapterKey, String category, String mode) {
+        if (adapterKey != null) {
+            return AdapterCatalog.supportsMode(adapterKey, mode);
+        }
+        return GenerateRequests.supportsMode(capabilities, category, mode);
     }
 
     private AiModel requireEnabledModel(Long modelId) {

@@ -26,6 +26,12 @@ public class DramaStoryboardResp {
     private String filmUrl;
     @Schema(description = "成片是否因分镜视频变更而过期")
     private Boolean filmStale;
+    @Schema(description = "项目全局出片方式：r2v / i2v")
+    private String videoGenerateMode;
+    @Schema(description = "参考图模式下是否衔接上一镜落幅")
+    private Boolean videoChainPrevTail;
+    @Schema(description = "正在按当前生成方式后台重编译分镜提示词")
+    private Boolean promptRecompiling;
     private List<DramaChapterResp> chapters = new ArrayList<>();
     private List<DramaAssetResp> lockedAssets = new ArrayList<>();
 }

@@ -20,6 +20,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -81,6 +82,19 @@ class GenerateRequestsTest {
         assertTrue(GenerateRequests.supportsMode(List.of("video", "t2v", "i2v"), "video", GenerateMode.I2V));
         assertTrue(GenerateRequests.supportsMode(List.of("video", "frames"), "video", GenerateMode.I2V));
         assertTrue(GenerateRequests.supportsMode(List.of("video", "v2v"), "video", GenerateMode.I2V));
+        assertFalse(GenerateRequests.isDramaShot(java.util.Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA,
+                "shotId", 201L,
+                "openingStill", true)));
+        assertTrue(GenerateRequests.isOpeningStill(java.util.Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA,
+                "shotId", 201L,
+                "openingStill", true)));
+        assertTrue(GenerateRequests.continueStillToI2v(java.util.Map.of(
+                "source", GenerateRequests.SOURCE_DRAMA,
+                "shotId", 201L,
+                "openingStill", true,
+                "stillForI2v", true)));
         assertEquals("当前模型不支持参考图，请移除参考素材后再创作",
                 GenerateRequests.unsupportedModeMessage(GenerateMode.I2I));
         assertEquals("当前模型不支持参考生视频，请移除参考素材后再创作",
@@ -160,6 +174,25 @@ class GenerateRequestsTest {
         req.setReferences(List.of(ref));
         GenerateRequest request = GenerateRequests.fromSubmit(1L, "minimax-h3", req, assetService);
         assertEquals(AssetKind.AUDIO, request.getReferences().get(0).getType());
+    }
+
+    @Test
+    void firstFrameOnlyDoesNotRequireLibraryRow() {
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(4L);
+        req.setPrompt("从首帧起幅");
+        req.setCategory("video");
+        req.setDurationSec(5);
+        GenerateSubmitReq.FrameInput frames = new GenerateSubmitReq.FrameInput();
+        frames.setFirstFrameKey("users/1/drama/21/frames/a.webp");
+        req.setFrames(frames);
+
+        GenerateRequest request = GenerateRequests.fromSubmit(1L, "mock-video", req, assetService);
+        assertEquals(GenerateMode.I2V, request.getMode());
+        assertEquals("users/1/drama/21/frames/a.webp", request.getFrames().getFirstFrameKey());
+        assertNull(request.getFrames().getLastFrameKey());
+        verify(assetService).assertOwnedStorageKey("users/1/drama/21/frames/a.webp");
+        verify(assetService, never()).requireOwnedKey(any());
     }
 
     @Test

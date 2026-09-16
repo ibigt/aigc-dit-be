@@ -12,6 +12,7 @@ public class DramaFilmShotResp {
     private String title;
     private Integer durationSec;
     private Boolean ready;
+    private Boolean hasCaptions;
     private String videoUrl;
     private String videoPosterUrl;
 }

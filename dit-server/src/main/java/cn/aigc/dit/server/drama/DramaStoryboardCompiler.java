@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.generate.GenerateMode;
 import org.springframework.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
@@ -26,8 +27,47 @@ public final class DramaStoryboardCompiler {
     public static final String MOVIE_SCENE_MUST =
             "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
     public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号；口型与每个字严格同步，不得增删或改写。";
+    public static final String I2V_MUST_START =
+            "Must start: 以提供的首帧为起幅（空间、已在画面中人物的服装与站位）。严格按 Action 的主语演出，禁止改写谁做了什么。"
+                    + "Action 新点名、但首帧里还没有的人，必须按其 Identities 外貌入画；"
+                    + "禁止用首帧里已有的人顶替新角色（例如首帧是洛白趴桌、Action 写局长摔档案，必须由局长进门摔档案，不能改成洛白摔档案）。"
+                    + "首帧里未被本镜 Action/Cast 点名的人可出画或退到后景。";
+    public static final String I2V_IDENTITIES_HEADER = "Identities:";
+    public static final String I2V_IDENTITY_FALLBACK =
+            "与本镜其他角色及首帧人物不是同一人；按其锁定设定图的性别、年龄、发型、五官、身材和服装入画，禁止把首帧已有人物的脸改贴过来";
+    public static final String R2V_CHAIN_HINT =
+            "衔接：若本请求附带上一镜落幅参考图，必须从该站位起幅，禁止瞬移，未点名的人保持原位。";
+    public static final String PREV_TAIL_NAME = "上一镜落幅";
+    public static final String PREV_TAIL_HINT = "是上一镜落幅，必须从该站位起幅，禁止瞬移，未点名的人保持原位";
+    public static final String PREV_TAIL_STILL_TYPE = "落幅参考";
+    public static final String STILL_PREV_TAIL_HINT =
+            "只借上一镜的空间、服装与光线，不继承姿态、构图、机位；必须按 Action 重新构图";
+    public static final String STILL_MUST =
+            "Must: 这是电影开场静帧，单幅画面。人物已在戏里站好，姿态、站位与构图必须符合 Action 的起幅。禁止三视图、设定表、纯色背景摆拍、无人概念图。";
 
     private DramaStoryboardCompiler() {
+    }
+
+    public record CompileOptions(String videoGenerateMode, boolean chainPrevTail, boolean includePrevTailPicture) {
+        public static CompileOptions r2v() {
+            return new CompileOptions(GenerateMode.R2V, false, false);
+        }
+
+        public static CompileOptions of(String videoGenerateMode, boolean chainPrevTail) {
+            return new CompileOptions(DramaVideoGenerateModes.canonical(videoGenerateMode), chainPrevTail, false);
+        }
+
+        public CompileOptions withPrevTailPicture() {
+            return new CompileOptions(videoGenerateMode(), chainPrevTail(), true);
+        }
+
+        public boolean i2v() {
+            return DramaVideoGenerateModes.isI2v(videoGenerateMode());
+        }
+
+        public boolean r2vChain() {
+            return !i2v() && chainPrevTail();
+        }
     }
 
     public record ActiveReference(
@@ -79,13 +119,20 @@ public final class DramaStoryboardCompiler {
     }
 
     public static Result compile(String stylePrefix, List<ActiveReference> references, ShotContent shot) {
-        return compile(stylePrefix, references, List.of(), shot);
+        return compile(stylePrefix, references, List.of(), shot, CompileOptions.r2v());
     }
 
     public static Result compile(String stylePrefix, List<ActiveReference> references,
                                  List<AudioReference> audioReferences, ShotContent shot) {
+        return compile(stylePrefix, references, audioReferences, shot, CompileOptions.r2v());
+    }
+
+    public static Result compile(String stylePrefix, List<ActiveReference> references,
+                                 List<AudioReference> audioReferences, ShotContent shot, CompileOptions options) {
+        CompileOptions opts = options == null ? CompileOptions.r2v() : options;
         List<ActiveReference> refs = references == null ? List.of() : references;
-        List<AudioReference> audioRefs = audioReferences == null ? List.of() : audioReferences;
+        List<ActiveReference> pictureRefs = opts.i2v() ? List.of() : refs;
+        List<AudioReference> audioRefs = audioReferences == null || opts.i2v() ? List.of() : audioReferences;
         ShotContent content = shot == null
                 ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
                 : shot;
@@ -94,8 +141,8 @@ public final class DramaStoryboardCompiler {
                 : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
 
         StringBuilder prompt = new StringBuilder();
-        if (!refs.isEmpty()) {
-            for (int i = 1; i <= refs.size(); i++) {
+        if (!pictureRefs.isEmpty()) {
+            for (int i = 1; i <= pictureRefs.size(); i++) {
                 if (i > 1) {
                     prompt.append(' ');
                 }
@@ -109,10 +156,10 @@ public final class DramaStoryboardCompiler {
         }
         prompt.append('\n');
 
-        if (!refs.isEmpty()) {
+        if (!pictureRefs.isEmpty()) {
             prompt.append('\n').append("Active References:\n");
-            for (int i = 0; i < refs.size(); i++) {
-                ActiveReference ref = refs.get(i);
+            for (int i = 0; i < pictureRefs.size(); i++) {
+                ActiveReference ref = pictureRefs.get(i);
                 int picture = i + 1;
                 prompt.append("<Picture ").append(picture).append("> ");
                 prompt.append(blank(ref.name()));
@@ -143,13 +190,19 @@ public final class DramaStoryboardCompiler {
         }
 
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
-        Map<String, Integer> pictures = pictureIndexByName(refs);
+        if (opts.i2v()) {
+            prompt.append(I2V_MUST_START).append('\n');
+            appendI2vIdentities(prompt, refs, content);
+        } else if (opts.r2vChain() && !opts.includePrevTailPicture()) {
+            prompt.append(R2V_CHAIN_HINT).append('\n');
+        }
+        Map<String, Integer> pictures = pictureIndexByName(pictureRefs);
         appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
         appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
         appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
         appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
-        prompt.append(castConstraint(content, refs)).append('\n');
+        prompt.append(castConstraint(content, pictureRefs, opts.i2v())).append('\n');
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
         String spoken = spokenDialogueConstraint(content.dialogue());
         if (StringUtils.hasText(spoken)) {
@@ -160,15 +213,78 @@ public final class DramaStoryboardCompiler {
             prompt.append('\n').append(spoken);
         }
 
-        return new Result(prompt.toString().trim(), fingerprint(prefix, refs, audioRefs, content));
+        return new Result(prompt.toString().trim(), fingerprint(prefix, refs, audioRefs, content, opts));
+    }
+
+    /**
+     * 开场静帧 i2i：仍使用角色/场景设定图（厂商允许图生图带参考），锁定起幅姿态后再交给 i2v。
+     */
+    public static Result compileStill(String stylePrefix, List<ActiveReference> references, ShotContent shot) {
+        List<ActiveReference> refs = references == null ? List.of() : references;
+        ShotContent content = shot == null
+                ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
+                : shot;
+        String prefix = DramaStyles.withVideoSceneClause(StringUtils.hasText(stylePrefix)
+                ? stylePrefix.trim()
+                : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        StringBuilder prompt = new StringBuilder();
+        if (!refs.isEmpty()) {
+            for (int i = 1; i <= refs.size(); i++) {
+                if (i > 1) {
+                    prompt.append(' ');
+                }
+                prompt.append("<Picture ").append(i).append('>');
+            }
+            prompt.append('\n');
+        }
+        prompt.append(prefix);
+        if (!prefix.endsWith("。") && !prefix.endsWith(".")) {
+            prompt.append('。');
+        }
+        prompt.append('\n');
+        if (!refs.isEmpty()) {
+            prompt.append('\n').append("Active References:\n");
+            for (int i = 0; i < refs.size(); i++) {
+                ActiveReference ref = refs.get(i);
+                int picture = i + 1;
+                prompt.append("<Picture ").append(picture).append("> ");
+                prompt.append(blank(ref.name()));
+                prompt.append('。');
+                String identity = fullIdentity(ref);
+                if (StringUtils.hasText(identity)) {
+                    prompt.append(identity);
+                    if (!identity.endsWith("。") && !identity.endsWith(".")) {
+                        prompt.append('。');
+                    }
+                }
+                prompt.append(' ');
+                prompt.append("<Picture ").append(picture).append("> ");
+                prompt.append(pictureHint(ref));
+                prompt.append('\n');
+            }
+        }
+        prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
+        prompt.append(STILL_MUST).append('\n');
+        Map<String, Integer> pictures = pictureIndexByName(refs);
+        appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
+        appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
+        appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
+        prompt.append(castConstraint(content, refs));
+        return new Result(prompt.toString().trim(), fingerprint(prefix, refs, List.of(), content, CompileOptions.r2v()));
     }
 
     public static String fingerprint(String stylePrefix, List<ActiveReference> references, ShotContent shot) {
-        return fingerprint(stylePrefix, references, List.of(), shot);
+        return fingerprint(stylePrefix, references, List.of(), shot, CompileOptions.r2v());
     }
 
     public static String fingerprint(String stylePrefix, List<ActiveReference> references,
                                      List<AudioReference> audioReferences, ShotContent shot) {
+        return fingerprint(stylePrefix, references, audioReferences, shot, CompileOptions.r2v());
+    }
+
+    public static String fingerprint(String stylePrefix, List<ActiveReference> references,
+                                     List<AudioReference> audioReferences, ShotContent shot, CompileOptions options) {
+        CompileOptions opts = options == null ? CompileOptions.r2v() : options;
         StringBuilder raw = new StringBuilder();
         raw.append(blank(stylePrefix)).append('\n');
         if (references != null) {
@@ -177,7 +293,7 @@ public final class DramaStoryboardCompiler {
                         .append(blank(ref.identityInvariants())).append('\n');
             }
         }
-        if (audioReferences != null) {
+        if (audioReferences != null && !opts.i2v()) {
             for (AudioReference ref : audioReferences) {
                 raw.append("audio:").append(blank(ref.name())).append(':')
                         .append(blank(ref.voiceLock())).append(':')
@@ -203,7 +319,19 @@ public final class DramaStoryboardCompiler {
                 }
             }
         }
+        if (opts.i2v() || opts.chainPrevTail()) {
+            raw.append('\n').append("mode:").append(DramaVideoGenerateModes.canonical(opts.videoGenerateMode()));
+            raw.append('\n').append("chain:").append(opts.chainPrevTail());
+        }
         return sha256(raw.toString());
+    }
+
+    public static ActiveReference prevTailReference() {
+        return new ActiveReference(-1, 0, PREV_TAIL_NAME, "落幅", "", PREV_TAIL_HINT);
+    }
+
+    public static ActiveReference prevTailStillReference() {
+        return new ActiveReference(-1, 0, PREV_TAIL_NAME, PREV_TAIL_STILL_TYPE, "", STILL_PREV_TAIL_HINT);
     }
 
     static Map<String, Integer> pictureIndexByName(List<ActiveReference> references) {
@@ -272,6 +400,12 @@ public final class DramaStoryboardCompiler {
     }
 
     static String pictureHint(ActiveReference ref) {
+        if (ref == null) {
+            return CHAR_PICTURE_HINT.formatted("该资产");
+        }
+        if (PREV_TAIL_NAME.equals(blank(ref.name()))) {
+            return PREV_TAIL_STILL_TYPE.equals(blank(ref.type())) ? STILL_PREV_TAIL_HINT : PREV_TAIL_HINT;
+        }
         String name = StringUtils.hasText(ref.name()) ? ref.name().trim() : "该资产";
         if (DramaContract.ASSET_TYPE_SCENE.equals(ref.type())) {
             return SCENE_PICTURE_HINT;
@@ -283,6 +417,10 @@ public final class DramaStoryboardCompiler {
     }
 
     static String castConstraint(ShotContent shot, List<ActiveReference> references) {
+        return castConstraint(shot, references, false);
+    }
+
+    static String castConstraint(ShotContent shot, List<ActiveReference> references, boolean i2v) {
         List<String> names = shot.characterNames() == null ? List.of() : shot.characterNames().stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
@@ -304,7 +442,7 @@ public final class DramaStoryboardCompiler {
         }
 
         List<String> picturedNames = names.stream().filter(pictured::contains).toList();
-        List<String> unnamedLooks = unnamedLooks(names, pictured, shot.unnamedAppearances());
+        List<String> unnamedLooks = unnamedLooks(names, pictured, shot.unnamedAppearances(), i2v);
 
         StringBuilder line = new StringBuilder();
         line.append("Cast: 本镜恰好 ").append(count).append(" 人，不得增删角色。");
@@ -389,7 +527,7 @@ public final class DramaStoryboardCompiler {
     }
 
     private static List<String> unnamedLooks(
-            List<String> names, Set<String> pictured, List<NamedAppearance> unnamedAppearances) {
+            List<String> names, Set<String> pictured, List<NamedAppearance> unnamedAppearances, boolean i2v) {
         List<NamedAppearance> appearances = unnamedAppearances == null ? List.of() : unnamedAppearances;
         List<String> looks = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
@@ -404,9 +542,32 @@ public final class DramaStoryboardCompiler {
                     break;
                 }
             }
-            looks.add(StringUtils.hasText(identity) ? identity : "外貌普通的配角");
+            if (i2v) {
+                looks.add(i2vIdentity(name, identity));
+            } else {
+                looks.add(StringUtils.hasText(identity)
+                        ? identity
+                        : "角色“" + name + "”，外貌按剧本，不得被其他人顶替");
+            }
         }
         return looks;
+    }
+
+    static boolean genericIdentityLock(String identity) {
+        if (!StringUtils.hasText(identity)) {
+            return true;
+        }
+        String text = identity.trim();
+        return text.contains("外貌、发型、服装和年龄必须保持一致")
+                || text.contains("与主身份同一张脸和发型");
+    }
+
+    static String i2vIdentity(String name, String identity) {
+        if (!genericIdentityLock(identity)) {
+            return identity.trim();
+        }
+        String who = StringUtils.hasText(name) ? name.trim() : "该角色";
+        return "角色“" + who + "”，" + I2V_IDENTITY_FALLBACK;
     }
 
     private static int speakerSeparator(String line) {
@@ -423,6 +584,54 @@ public final class DramaStoryboardCompiler {
 
     private static int indexOfUnquoted(String line, char sep) {
         return line.indexOf(sep);
+    }
+
+    private static void appendI2vIdentities(StringBuilder prompt, List<ActiveReference> refs, ShotContent content) {
+        Map<String, String> byName = new LinkedHashMap<>();
+        if (refs != null) {
+            for (ActiveReference ref : refs) {
+                if (ref == null
+                        || !DramaContract.ASSET_TYPE_CHARACTER.equals(ref.type())
+                        || !StringUtils.hasText(ref.name())) {
+                    continue;
+                }
+                byName.put(ref.name().trim(), fullIdentity(ref));
+            }
+        }
+        if (content != null && content.unnamedAppearances() != null) {
+            for (NamedAppearance appearance : content.unnamedAppearances()) {
+                if (appearance == null || !StringUtils.hasText(appearance.name())) {
+                    continue;
+                }
+                String name = appearance.name().trim();
+                if (byName.containsKey(name) && StringUtils.hasText(byName.get(name))) {
+                    continue;
+                }
+                String identity = blank(appearance.identityInvariants());
+                if (StringUtils.hasText(identity) || !byName.containsKey(name)) {
+                    byName.put(name, identity);
+                }
+            }
+        }
+        if (content != null && content.characterNames() != null) {
+            for (String name : content.characterNames()) {
+                if (StringUtils.hasText(name) && !byName.containsKey(name.trim())) {
+                    byName.put(name.trim(), "");
+                }
+            }
+        }
+        if (byName.isEmpty()) {
+            return;
+        }
+        prompt.append(I2V_IDENTITIES_HEADER).append('\n');
+        for (Map.Entry<String, String> entry : byName.entrySet()) {
+            String identity = i2vIdentity(entry.getKey(), blank(entry.getValue()));
+            prompt.append(entry.getKey()).append("：").append(identity);
+            if (!identity.endsWith("。") && !identity.endsWith(".")) {
+                prompt.append('。');
+            }
+            prompt.append('\n');
+        }
     }
 
     private static void appendLine(StringBuilder prompt, String label, String value) {
