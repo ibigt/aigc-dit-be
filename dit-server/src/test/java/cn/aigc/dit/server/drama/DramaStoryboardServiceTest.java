@@ -498,6 +498,53 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void generateOnOfficialSeedanceSendsOnlySpeakingCharactersVoiceWithMatchingPromptTag() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("赵王", "秦国使臣"));
+        shot.setCastCount(2);
+        shot.setDialogue("秦国使臣：秦王愿以十五座城，换赵国和氏璧。");
+        storedShots.add(shot);
+
+        DramaAsset king = lockedAsset(1L, "赵王", DramaContract.ASSET_TYPE_CHARACTER);
+        king.setVoiceReferenceKey("users/7/assets/robot.mp3");
+        king.setVoiceReferenceMime("audio/mpeg");
+        DramaAsset envoy = lockedAsset(2L, "秦国使臣", DramaContract.ASSET_TYPE_CHARACTER);
+        envoy.setVoiceReferenceKey("users/7/assets/envoy.mp3");
+        envoy.setVoiceReferenceMime("audio/mpeg");
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                king,
+                envoy,
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setAspectRatio("16:9");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        GenerateSubmitReq req = reqCaptor.getValue();
+        assertEquals(4, req.getReferences().size());
+        assertEquals("audio", req.getReferences().get(3).getType());
+        assertEquals("users/7/assets/envoy.mp3", req.getReferences().get(3).getStorageKey());
+        assertFalse(req.getReferences().stream()
+                .anyMatch(item -> "users/7/assets/robot.mp3".equals(item.getStorageKey())));
+        assertTrue(req.getPrompt().contains("<Audio 1> 只定义角色“秦国使臣”的音色身份"));
+        assertTrue(req.getPrompt().contains("角色“秦国使臣”使用 <Audio 1>"));
+        assertFalse(req.getPrompt().contains("只定义角色“赵王”的音色身份"));
+    }
+
+    @Test
     void generateDoesNotReuseInFlightTaskFromAnotherModel() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);

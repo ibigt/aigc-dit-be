@@ -1044,10 +1044,15 @@ public class DramaStoryboardService {
     private List<DramaStoryboardCompiler.AudioReference> voiceReferences(
             DramaShot shot, List<DramaAsset> assets, boolean includeAudioKey) {
         Set<String> cast = new LinkedHashSet<>(cleanNames(shot.getCharacterNames()));
+        Set<String> speakers = DramaStoryboardCompiler.spokenUtterances(shot.getDialogue()).stream()
+                .map(DramaStoryboardCompiler.SpokenUtterance::speaker)
+                .filter(cast::contains)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         List<DramaStoryboardCompiler.AudioReference> values = new ArrayList<>();
         for (DramaAsset asset : assets) {
             if (!DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
                     || !cast.contains(asset.getName())
+                    || !speakers.contains(asset.getName())
                     || (!StringUtils.hasText(asset.getVoiceLock())
                     && (!includeAudioKey || !StringUtils.hasText(asset.getVoiceReferenceKey())))) {
                 continue;
@@ -1639,7 +1644,9 @@ public class DramaStoryboardService {
                 active.add(toActive(asset));
             }
         }
-        return DramaStoryboardCompiler.compile(stylePrefix, active, toShotContent(shot, assets, pictured)).prompt();
+        List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(shot, pictured, true);
+        return DramaStoryboardCompiler.compile(
+                stylePrefix, active, audioRefs, toShotContent(shot, assets, pictured)).prompt();
     }
 
     /**

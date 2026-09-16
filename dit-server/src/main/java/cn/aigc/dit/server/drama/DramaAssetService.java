@@ -36,6 +36,7 @@ import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.GenerateService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +52,7 @@ import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class DramaAssetService {
 
     private final DramaAssetMapper assetMapper;
@@ -211,6 +213,8 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "请选择音频素材");
         }
         attachVoiceReference(asset, libraryAsset.getStorageKey(), libraryAsset.getMimeType());
+        log.info("bind drama voice reference characterAssetId={} character={} libraryAssetId={} libraryAsset={} mime={}",
+                asset.getId(), asset.getName(), libraryAsset.getId(), libraryAsset.getName(), libraryAsset.getMimeType());
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
 
