@@ -1069,11 +1069,13 @@ public class DramaStoryboardService {
             boolean inherit = DramaVideoGenerateModes.isInherit(req.getVideoGenerateMode());
             String stored = DramaVideoGenerateModes.stored(req.getVideoGenerateMode());
             shot.setVideoGenerateMode(stored);
-            if (DramaVideoGenerateModes.isI2v(stored)) {
+            if (inherit) {
+                shot.setVideoChainPrevTail(null);
+            } else if (DramaVideoGenerateModes.isI2v(stored)) {
                 shot.setVideoChainPrevTail(false);
             } else if (req.getVideoChainPrevTail() != null) {
                 shot.setVideoChainPrevTail(Boolean.TRUE.equals(req.getVideoChainPrevTail()));
-            } else if (inherit || shot.getVideoChainPrevTail() == null) {
+            } else if (shot.getVideoChainPrevTail() == null) {
                 shot.setVideoChainPrevTail(false);
             }
         } else if (req.getVideoChainPrevTail() != null) {
@@ -2175,6 +2177,17 @@ public class DramaStoryboardService {
         String mode = DramaVideoGenerateModes.effectiveMode(series, shot);
         boolean chain = DramaVideoGenerateModes.effectiveChainPrevTail(series, shot);
         return DramaStoryboardCompiler.CompileOptions.of(mode, chain);
+    }
+
+    /** 项目级模式变更后，让所有镜头重新继承项目设置。 */
+    public void inheritSeriesVideoSettings(Long seriesId) {
+        if (seriesId == null) {
+            return;
+        }
+        shotMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<DramaShot>()
+                .eq(DramaShot::getSeriesId, seriesId)
+                .set(DramaShot::getVideoGenerateMode, null)
+                .set(DramaShot::getVideoChainPrevTail, null));
     }
 
     private DramaShot previousSameChapterShot(DramaShot shot) {

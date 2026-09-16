@@ -7,7 +7,7 @@ import org.springframework.util.StringUtils;
 
 /**
  * 漫剧出片方式：参考图 {@code r2v} / 首尾帧 {@code i2v}。
- * 按镜存储；空值按参考图且不衔接上一镜落幅。{@code inherit} 写入时当作参考图。
+ * 单镜可覆盖系列设置；空值或 {@code inherit} 表示跟随系列。
  */
 public final class DramaVideoGenerateModes {
 
@@ -30,17 +30,17 @@ public final class DramaVideoGenerateModes {
         return !StringUtils.hasText(mode) || INHERIT.equalsIgnoreCase(mode.trim());
     }
 
-    /** 写入 drama_shot.video_generate_mode：不再存 null 表示跟随系列。 */
+    /** 写入 drama_shot.video_generate_mode：null 表示跟随系列。 */
     public static String stored(String mode) {
-        return canonical(mode);
+        return isInherit(mode) ? null : canonical(mode);
     }
 
     public static void applyProductDefault(DramaShot shot) {
         if (shot == null) {
             return;
         }
-        shot.setVideoGenerateMode(R2V);
-        shot.setVideoChainPrevTail(false);
+        shot.setVideoGenerateMode(null);
+        shot.setVideoChainPrevTail(null);
     }
 
     public static boolean inheritsMode(DramaShot shot) {
@@ -55,6 +55,9 @@ public final class DramaVideoGenerateModes {
         if (shot != null && StringUtils.hasText(shot.getVideoGenerateMode())) {
             return canonical(shot.getVideoGenerateMode());
         }
+        if (series != null && StringUtils.hasText(series.getVideoGenerateMode())) {
+            return canonical(series.getVideoGenerateMode());
+        }
         return R2V;
     }
 
@@ -62,7 +65,10 @@ public final class DramaVideoGenerateModes {
         if (isI2v(effectiveMode(series, shot))) {
             return false;
         }
-        return shot != null && Boolean.TRUE.equals(shot.getVideoChainPrevTail());
+        if (shot != null && shot.getVideoChainPrevTail() != null) {
+            return Boolean.TRUE.equals(shot.getVideoChainPrevTail());
+        }
+        return series != null && Boolean.TRUE.equals(series.getVideoChainPrevTail());
     }
 
     public static boolean isI2v(String mode) {

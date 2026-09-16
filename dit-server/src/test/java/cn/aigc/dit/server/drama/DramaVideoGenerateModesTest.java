@@ -11,33 +11,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DramaVideoGenerateModesTest {
 
     @Test
-    void storedEmptyOrInheritIsR2v() {
-        assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.stored(null));
-        assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.stored(""));
-        assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.stored("inherit"));
+    void storedEmptyOrInheritKeepsSeriesInheritance() {
+        assertEquals(null, DramaVideoGenerateModes.stored(null));
+        assertEquals(null, DramaVideoGenerateModes.stored(""));
+        assertEquals(null, DramaVideoGenerateModes.stored("inherit"));
         assertEquals(DramaVideoGenerateModes.I2V, DramaVideoGenerateModes.stored("i2v"));
         assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.canonical("inherit"));
     }
 
     @Test
-    void effectiveModeUsesShotThenProductDefaultNotSeries() {
+    void effectiveModeUsesShotThenSeriesThenProductFallback() {
         DramaSeries series = new DramaSeries();
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         DramaShot shot = new DramaShot();
-        assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.effectiveMode(series, shot));
+        assertEquals(DramaVideoGenerateModes.I2V, DramaVideoGenerateModes.effectiveMode(series, shot));
 
         shot.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         assertEquals(DramaVideoGenerateModes.I2V, DramaVideoGenerateModes.effectiveMode(series, shot));
         assertFalse(DramaVideoGenerateModes.inheritsMode(shot));
+
+        shot.setVideoGenerateMode(null);
+        series.setVideoGenerateMode(null);
+        assertEquals(DramaVideoGenerateModes.R2V, DramaVideoGenerateModes.effectiveMode(series, shot));
     }
 
     @Test
-    void effectiveChainDefaultsOffAndIgnoresSeries() {
+    void effectiveChainUsesShotThenSeriesAndIsOffForI2v() {
         DramaSeries series = new DramaSeries();
         series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
         series.setVideoChainPrevTail(true);
         DramaShot shot = new DramaShot();
-        assertFalse(DramaVideoGenerateModes.effectiveChainPrevTail(series, shot));
+        assertTrue(DramaVideoGenerateModes.effectiveChainPrevTail(series, shot));
 
         shot.setVideoChainPrevTail(true);
         assertTrue(DramaVideoGenerateModes.effectiveChainPrevTail(series, shot));

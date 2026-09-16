@@ -118,7 +118,7 @@ public class FlywayConfig {
                     image_adapter_key       VARCHAR(64),
                     video_model_id          BIGINT       REFERENCES ai_model (id),
                     video_adapter_key       VARCHAR(64),
-                    video_generate_mode     VARCHAR(16)  NOT NULL DEFAULT 'r2v',
+                    video_generate_mode     VARCHAR(16)  NOT NULL DEFAULT 'i2v',
                     video_chain_prev_tail   BOOLEAN      NOT NULL DEFAULT FALSE,
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -378,8 +378,9 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 ALTER TABLE drama_series
-                ADD COLUMN IF NOT EXISTS video_generate_mode VARCHAR(16) NOT NULL DEFAULT 'r2v'
+                ADD COLUMN IF NOT EXISTS video_generate_mode VARCHAR(16) NOT NULL DEFAULT 'i2v'
                 """);
+        statement.execute("ALTER TABLE drama_series ALTER COLUMN video_generate_mode SET DEFAULT 'i2v'");
         statement.execute("""
                 ALTER TABLE drama_series
                 ADD COLUMN IF NOT EXISTS video_chain_prev_tail BOOLEAN NOT NULL DEFAULT FALSE
@@ -479,17 +480,6 @@ public class FlywayConfig {
                 ALTER TABLE drama_shot
                 ADD CONSTRAINT ck_drama_shot_video_mode
                 CHECK (video_generate_mode IS NULL OR video_generate_mode IN ('r2v', 'i2v'))
-                """);
-        statement.execute("""
-                UPDATE drama_shot AS s
-                SET video_generate_mode = COALESCE(s.video_generate_mode, ser.video_generate_mode, 'r2v'),
-                    video_chain_prev_tail = CASE
-                        WHEN COALESCE(s.video_generate_mode, ser.video_generate_mode, 'r2v') = 'i2v' THEN FALSE
-                        ELSE COALESCE(s.video_chain_prev_tail, ser.video_chain_prev_tail, FALSE)
-                    END
-                FROM drama_series ser
-                WHERE s.series_id = ser.id
-                  AND (s.video_generate_mode IS NULL OR s.video_chain_prev_tail IS NULL)
                 """);
         statement.execute("""
                 ALTER TABLE drama_episode

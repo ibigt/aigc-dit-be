@@ -127,7 +127,7 @@ public class DramaService {
         series.setDefaultDurationSec(normalizeDuration(req.getDefaultDurationSec()));
         series.setPlannedEpisodeCount(normalizePlanned(req.getPlannedEpisodeCount()));
         series.setTextModelId(resolveCreateTextModelId(req.getTextModelId()));
-        series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         series.setVideoChainPrevTail(false);
         seriesMapper.insert(series);
 
@@ -704,6 +704,7 @@ public class DramaService {
         boolean chainChanged = previousChain != Boolean.TRUE.equals(series.getVideoChainPrevTail());
         seriesMapper.updateById(series);
         if (modeChanged || chainChanged) {
+            storyboardService.inheritSeriesVideoSettings(series.getId());
             storyboardService.enqueueSeriesRecompile(series.getId());
         }
         return getSeries(series.getId());

@@ -15,6 +15,7 @@ class DramaCaptionVttTest {
 
         assertTrue(vtt.startsWith("WEBVTT\n\n"));
         assertTrue(vtt.contains("00:00:00.000 --> 00:00:05.400"));
+        assertTrue(vtt.contains("line:94%,end position:50% align:middle size:92%"));
         assertTrue(vtt.contains("这是当前镜头。"));
         assertFalse(vtt.contains("洛白："));
     }

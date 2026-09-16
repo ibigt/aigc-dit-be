@@ -113,9 +113,9 @@ class DramaServiceTest {
         assertEquals(7L, seriesCaptor.getValue().getUserId());
         assertEquals(DramaStyles.ANIME_COMIC, seriesCaptor.getValue().getStyleKey());
         assertEquals(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), seriesCaptor.getValue().getStylePrefix());
-        assertEquals(DramaVideoGenerateModes.R2V, seriesCaptor.getValue().getVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.I2V, seriesCaptor.getValue().getVideoGenerateMode());
         assertEquals(Boolean.FALSE, seriesCaptor.getValue().getVideoChainPrevTail());
-        assertEquals(DramaVideoGenerateModes.R2V, resp.getVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.I2V, resp.getVideoGenerateMode());
         assertEquals(Boolean.FALSE, resp.getVideoChainPrevTail());
     }
 
@@ -515,6 +515,7 @@ class DramaServiceTest {
         assertEquals(DramaVideoGenerateModes.I2V, resp.getVideoGenerateMode());
         assertEquals(Boolean.TRUE, resp.getPromptRecompiling());
         verify(seriesMapper).updateById(existing);
+        verify(storyboardService).inheritSeriesVideoSettings(21L);
         verify(storyboardService).enqueueSeriesRecompile(21L);
     }
 

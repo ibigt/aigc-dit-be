@@ -917,7 +917,7 @@ class DramaStoryboardServiceTest {
         assertEquals(keep, explicit.getCompiledPrompt());
         DramaShotResp inheritResp = board.getChapters().get(0).getShots().get(0);
         DramaShotResp explicitResp = board.getChapters().get(0).getShots().get(1);
-        assertEquals(DramaVideoGenerateModes.R2V, inheritResp.getEffectiveVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.I2V, inheritResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.TRUE, inheritResp.getVideoModeInherited());
         assertEquals(DramaVideoGenerateModes.R2V, explicitResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.FALSE, explicitResp.getVideoModeInherited());
@@ -939,10 +939,10 @@ class DramaStoryboardServiceTest {
         req.setVideoGenerateMode(DramaVideoGenerateModes.INHERIT);
         DramaShotResp resp = service.updateShot(201L, req);
 
-        assertEquals(DramaVideoGenerateModes.R2V, shot.getVideoGenerateMode());
-        assertEquals(Boolean.FALSE, shot.getVideoChainPrevTail());
-        assertEquals(Boolean.FALSE, resp.getVideoModeInherited());
-        assertEquals(Boolean.FALSE, resp.getVideoChainInherited());
+        assertEquals(null, shot.getVideoGenerateMode());
+        assertEquals(null, shot.getVideoChainPrevTail());
+        assertEquals(Boolean.TRUE, resp.getVideoModeInherited());
+        assertEquals(Boolean.TRUE, resp.getVideoChainInherited());
         assertEquals(DramaVideoGenerateModes.R2V, resp.getEffectiveVideoGenerateMode());
         assertFalse(resp.getEffectiveVideoChainPrevTail());
         assertTrue(shot.getCompiledPrompt().contains("<Picture"));
@@ -1255,7 +1255,7 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void generateR2vIgnoresSeriesChainUnlessShotChecksIt() {
+    void generateR2vInheritsSeriesChainWhenShotDoesNotOverrideIt() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);
         DramaShot first = pendingShot();
@@ -1287,8 +1287,8 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
         GenerateSubmitReq req = reqCaptor.getValue();
-        assertEquals(2, req.getReferences().size());
-        assertFalse(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
+        assertEquals(3, req.getReferences().size());
+        assertTrue(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
         org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
     }
 
@@ -1611,8 +1611,8 @@ class DramaStoryboardServiceTest {
         assertEquals(List.of("洛白"), created.getCharacterNames());
         assertEquals(1, created.getCastCount());
         assertEquals("幻梦侦探社", created.getLocationName());
-        assertEquals(DramaVideoGenerateModes.R2V, created.getVideoGenerateMode());
-        assertEquals(Boolean.FALSE, created.getVideoChainPrevTail());
+        assertEquals(null, created.getVideoGenerateMode());
+        assertEquals(null, created.getVideoChainPrevTail());
         assertEquals(resp.getId(), created.getId());
     }
 

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -43,6 +44,7 @@ class FlywayConfigDramaTablesTest {
         assertTrue(joined.contains("COMMENT ON COLUMN drama_shot.video_generate_mode"), "应补本镜 video_generate_mode");
         assertTrue(joined.contains("COMMENT ON COLUMN drama_shot.video_chain_prev_tail"), "应补本镜 video_chain_prev_tail");
         assertTrue(joined.contains("ck_drama_shot_video_mode"), "应补本镜生成方式约束");
-        assertTrue(joined.contains("UPDATE drama_shot AS s"), "应将旧镜的系列默认回填到本镜");
+        assertTrue(joined.contains("ALTER COLUMN video_generate_mode SET DEFAULT 'i2v'"), "新项目应默认连续分镜");
+        assertFalse(joined.contains("UPDATE drama_shot AS s"), "单镜空值应保留为继承系列设置");
     }
 }

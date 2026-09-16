@@ -41,7 +41,8 @@ public final class DramaCaptionVtt {
         for (int i = 0; i < timeline.size(); i++) {
             CaptionCue cue = timeline.get(i);
             vtt.append(i + 1).append('\n');
-            vtt.append(timestamp(cue.startSec())).append(" --> ").append(timestamp(cue.endSec())).append('\n');
+            vtt.append(timestamp(cue.startSec())).append(" --> ").append(timestamp(cue.endSec()))
+                    .append(" line:94%,end position:50% align:middle size:92%\n");
             vtt.append(cue.text().replace("-->", "→").trim()).append("\n\n");
         }
         return vtt.toString();
