@@ -29,8 +29,8 @@ import java.util.Map;
 public class OpenAiCompatChatClient {
 
     static final Duration PING_TIMEOUT = Duration.ofSeconds(10);
-    /** 结构化剧本请求包含完整剧本和严格 JSON 输出，复杂剧本允许模型最多运行 3 分钟。 */
-    static final Duration CHAT_TIMEOUT = Duration.ofSeconds(180);
+    /** 结构化剧本请求包含完整剧本和严格 JSON 输出，复杂剧本允许模型最多运行 10 分钟。 */
+    static final Duration CHAT_TIMEOUT = Duration.ofSeconds(600);
     private static final String USER_AGENT = "Mozilla/5.0 (compatible; aigc-dit/1.0; +https://www.agnes-ai.cn)";
 
     private final ObjectMapper objectMapper;
@@ -91,13 +91,11 @@ public class OpenAiCompatChatClient {
             if (!"max_completion_tokens".equals(tokenParameter)) {
                 tokenParameter = "max_tokens";
             }
-            body.put(tokenParameter, req.getMaxTokens() == null ? 8192 : req.getMaxTokens());
-            // DeepSeek-V4 默认会输出较长 reasoning，剧本阶段只需要合同内 JSON。
-            // vLLM 的 chat template 支持关闭思考，可避免 60s 客户端超时和 content 为空。
-            if (hasOption(adapterConfig, "enableThinking") || isDeepSeek(model)) {
-                body.putObject("chat_template_kwargs").put("enable_thinking",
-                        booleanOption(adapterConfig, "enableThinking", false));
-            }
+            body.put(tokenParameter, req.getMaxTokens() == null ? 32768 : req.getMaxTokens());
+            // 全部模型一律关闭 vLLM chat_template 思考：32k JSON 输出再叠加 reasoning
+            // 会把耗时顶到分钟级，触发客户端超时且无 reasoning 价值。OpenAI 兼容的
+            // 非 vLLM 后端收到未知字段会忽略，不会报错。
+            body.putObject("chat_template_kwargs").put("enable_thinking", false);
             Double temperature = numberOption(adapterConfig, "temperature");
             if (temperature != null && temperature >= 0 && temperature <= 2) {
                 body.put("temperature", temperature);
@@ -146,10 +144,6 @@ public class OpenAiCompatChatClient {
         } catch (NumberFormatException ignored) {
             return null;
         }
-    }
-
-    private static boolean isDeepSeek(String model) {
-        return model != null && model.toLowerCase(java.util.Locale.ROOT).contains("deepseek");
     }
 
     private JsonNode post(String endpoint, String apiKey, ObjectNode body, Duration timeout, boolean ping) {

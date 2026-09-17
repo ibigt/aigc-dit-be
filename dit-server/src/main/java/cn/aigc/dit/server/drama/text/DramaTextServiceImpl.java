@@ -112,7 +112,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             try {
                 AssetDraftList enriched = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
                         DramaTextPrompts.assetEnrichmentUser(toJson(script), toJson(batch)),
-                        content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 4096);
+                        content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 16384);
                 mergeAssetEnrichment(batch, enriched);
             } catch (RuntimeException e) {
                 log.warn("[drama-text] 资产批次增强失败 seriesId={} from={} to={} error={}",
@@ -194,7 +194,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                     content -> clampDurations(
                             normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
                             duration),
-                    "ShotDraftList", 8192);
+                    "ShotDraftList", 16384);
             int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
             ShotDraftList result = ShotDraftMinimizer.minimize(drafts, duration);
             log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
@@ -218,7 +218,7 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     private ScriptDoc llmParse(long seriesId, String raw) {
         return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), DramaTextPrompts.scriptUser(raw),
-                DramaTextServiceImpl::readScript, "ScriptDoc", 8192);
+                DramaTextServiceImpl::readScript, "ScriptDoc", 16384);
     }
 
     private <T> T attemptJson(long seriesId, String system, String user,

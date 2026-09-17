@@ -16,6 +16,8 @@ public final class DramaTextPrompts {
             3. 字符串字段无内容时给空字符串，数组字段无内容时给空数组，不要给 null。
             4. 人物、道具、地点名必须原样沿用剧本里出现的写法，不要改写、不要简称、不要合并同义称呼。
             5. 剧本里没有的信息不要发明。
+            6. 输出要尽量精简：能用关键词就不用整句，不要堆砌修饰语或剧情外的解释；
+               各 string 字段的具体长度上限见对应 schema 的规则。
             """;
 
     private static final String SCHEMA_SCRIPT = """
@@ -50,6 +52,9 @@ public final class DramaTextPrompts {
             - 普通家具、环境陈设、服装、餐具、文具、消耗品及仅在背景中一闪而过的物品不要收录；
             - 同一道具不要重复；没有主要道具时返回空数组，不要为了凑数添加物品；
             action 只写可视动作与环境，不要写心理独白，不要把台词搬进来。
+            - action 控制在 80 字以内，只写可视动作与环境的最小集合。
+            - sound 写 1~2 个关键声音关键词，总长不超过 20 字。
+            - dialogue 严格保留剧本原文，不要扩写、解释或补全台词。
             """;
 
     private static final String SCHEMA_ASSETS = """
@@ -82,6 +87,7 @@ public final class DramaTextPrompts {
             - 道具 image_prompt：只写该物件的外形、材质、磨损和标志性细节；静物产品级特写、纯色干净背景。
               不要写剧情用途、场面动作、人物名字或台词。
             - description 与 identity_invariants 不得互相引用，不得写「同上」。
+            - 长度上限：description 不超过 100 字，identity_invariants 不超过 80 字，image_prompt 不超过 80 字。
             """;
 
     private static final String SCHEMA_SHOTS = """
@@ -125,6 +131,9 @@ public final class DramaTextPrompts {
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
+            - 长度上限：narrative_goal 不超过 60 字（1 个景别/运镜 + 2~3 个动作关键词），
+              scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字，
+              dialogue 不要复述整段对白，只放被摄像机正面拍到的关键句。
             """;
 
     private DramaTextPrompts() {
