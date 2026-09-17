@@ -36,6 +36,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private static final int LLM_JSON_RETRIES = 2;
+    private static final int ASSET_ENRICHMENT_BATCH_SIZE = 4;
     /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
 
@@ -53,14 +54,14 @@ public class DramaTextServiceImpl implements DramaTextService {
         if (Objects.equals(PARSED_SERIES.get(), seriesId) && StringUtils.hasText(PARSED_ENGINE.get())) {
             return PARSED_ENGINE.get();
         }
-        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_PENDING;
+        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_RULES;
     }
 
     @Override
     public ScriptDoc parseScript(long seriesId, String raw) {
         if (!useLlm(seriesId)) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    DramaTextService.UNBOUND_MESSAGE);
+                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
         }
         long started = System.nanoTime();
         log.info("[drama-text] 分场开始 seriesId={} rawLength={}", seriesId, raw == null ? 0 : raw.length());
@@ -81,23 +82,80 @@ public class DramaTextServiceImpl implements DramaTextService {
         if (script == null || script.getScenes().isEmpty()) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "剧本场景为空，无法抽取资产");
         }
-        if (!useLlm(seriesId)) {
-            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    DramaTextService.UNBOUND_MESSAGE);
+        return enrichAssets(seriesId, script, DramaAssetDrafts.fromScript(script));
+    }
+
+    @Override
+    public AssetDraftList enrichAssets(long seriesId, ScriptDoc script, AssetDraftList skeleton) {
+        if (skeleton == null || skeleton.getAssets() == null || skeleton.getAssets().isEmpty()) {
+            return skeleton == null ? new AssetDraftList() : skeleton;
+        }
+        if (script == null || script.getScenes() == null || script.getScenes().isEmpty()) {
+            return skeleton;
         }
         long started = System.nanoTime();
-        log.info("[drama-text] 资产抽取开始 seriesId={} scenes={}", seriesId, script.getScenes().size());
+        log.info("[drama-text] 资产增强开始 seriesId={} assets={}", seriesId, skeleton.getAssets().size());
         try {
-            AssetDraftList result = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
-                    DramaTextPrompts.assetUser(toJson(script)),
-                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 4096);
-            log.info("[drama-text] 资产抽取完成 seriesId={} assets={} elapsedMs={}",
-                    seriesId, result.getAssets() == null ? 0 : result.getAssets().size(), elapsedMs(started));
-            return result;
+            if (!useLlm(seriesId)) {
+                log.info("[drama-text] 未绑定文本模型，保留确定性资产骨架 seriesId={}", seriesId);
+                return skeleton;
+            }
         } catch (RuntimeException e) {
-            log.warn("[drama-text] 资产抽取失败 seriesId={} elapsedMs={} error={}",
-                    seriesId, elapsedMs(started), e.getMessage());
-            throw e;
+            log.warn("[drama-text] 文本模型不可用，保留确定性资产骨架 seriesId={} error={}", seriesId, e.getMessage());
+            return skeleton;
+        }
+        List<AssetDraftList.AssetDraft> assets = skeleton.getAssets();
+        for (int from = 0; from < assets.size(); from += ASSET_ENRICHMENT_BATCH_SIZE) {
+            int to = Math.min(from + ASSET_ENRICHMENT_BATCH_SIZE, assets.size());
+            AssetDraftList batch = new AssetDraftList();
+            batch.setAssets(new ArrayList<>(assets.subList(from, to)));
+            try {
+                AssetDraftList enriched = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
+                        DramaTextPrompts.assetEnrichmentUser(toJson(script), toJson(batch)),
+                        content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 4096);
+                mergeAssetEnrichment(batch, enriched);
+            } catch (RuntimeException e) {
+                log.warn("[drama-text] 资产批次增强失败 seriesId={} from={} to={} error={}",
+                        seriesId, from, to, e.getMessage());
+            }
+        }
+        log.info("[drama-text] 资产增强完成 seriesId={} assets={} elapsedMs={}",
+                seriesId, assets.size(), elapsedMs(started));
+        return skeleton;
+    }
+
+    static void mergeAssetEnrichment(AssetDraftList skeleton, AssetDraftList enriched) {
+        if (skeleton == null || enriched == null || skeleton.getAssets() == null || enriched.getAssets() == null) {
+            return;
+        }
+        Map<String, AssetDraftList.AssetDraft> updates = new HashMap<>();
+        for (AssetDraftList.AssetDraft item : enriched.getAssets()) {
+            if (item == null || !StringUtils.hasText(item.getName()) || !StringUtils.hasText(item.getType())) {
+                continue;
+            }
+            updates.put(item.getType().strip() + "\0" + item.getName().strip(), item);
+        }
+        for (AssetDraftList.AssetDraft target : skeleton.getAssets()) {
+            if (target == null || !StringUtils.hasText(target.getName()) || !StringUtils.hasText(target.getType())) {
+                continue;
+            }
+            AssetDraftList.AssetDraft update = updates.get(target.getType().strip() + "\0" + target.getName().strip());
+            if (update == null) {
+                continue;
+            }
+            copyIfText(update.getDescription(), target::setDescription);
+            copyIfText(update.getIdentityInvariants(), target::setIdentityInvariants);
+            copyIfText(update.getImagePrompt(), target::setImagePrompt);
+            copyIfText(update.getVoiceLock(), target::setVoiceLock);
+            target.setNeedsHuman(!(StringUtils.hasText(target.getDescription())
+                    && StringUtils.hasText(target.getIdentityInvariants())
+                    && StringUtils.hasText(target.getImagePrompt())));
+        }
+    }
+
+    private static void copyIfText(String value, java.util.function.Consumer<String> setter) {
+        if (StringUtils.hasText(value)) {
+            setter.accept(value.strip());
         }
     }
 
@@ -124,7 +182,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         if (!useLlm(seriesId)) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    DramaTextService.UNBOUND_MESSAGE);
+                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
         }
         long started = System.nanoTime();
         log.info("[drama-text] 分镜草稿开始 seriesId={} scenes={} assets={} durationSec={}",

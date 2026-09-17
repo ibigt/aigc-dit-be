@@ -39,6 +39,26 @@ class ResolvedTextModelTest {
                 11L, "兼容模型", TextAdapterCatalog.OPENAI_COMPAT,
                 TextAdapterCatalog.PROVIDER_CUSTOM, "https://example.com/v1", "portable-model", config);
 
-        assertEquals(Map.of("structuredOutput", "plain_json"), resolved.adapterConfig());
+        assertEquals(Map.of("structuredOutput", "plain_json", "enableThinking", false),
+                resolved.adapterConfig());
+    }
+
+    @Test
+    void missingReasoningOptionDefaultsToDisabled() {
+        ResolvedTextModel resolved = new ResolvedTextModel(
+                11L, "兼容模型", TextAdapterCatalog.OPENAI_COMPAT,
+                TextAdapterCatalog.PROVIDER_CUSTOM, "https://example.com/v1", "portable-model", Map.of());
+
+        assertEquals(false, resolved.adapterConfig().get("enableThinking"));
+    }
+
+    @Test
+    void explicitReasoningOptionIsPreserved() {
+        ResolvedTextModel resolved = new ResolvedTextModel(
+                11L, "兼容模型", TextAdapterCatalog.OPENAI_COMPAT,
+                TextAdapterCatalog.PROVIDER_CUSTOM, "https://example.com/v1", "portable-model",
+                Map.of("enableThinking", true));
+
+        assertEquals(true, resolved.adapterConfig().get("enableThinking"));
     }
 }

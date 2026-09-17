@@ -154,6 +154,27 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void resolvedDefaultReasoningSettingIsSentToJsonRequest() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        ResolvedTextModel resolved = new ResolvedTextModel(
+                11L, "兼容模型", TextAdapterCatalog.OPENAI_COMPAT,
+                TextAdapterCatalog.PROVIDER_CUSTOM, "https://example.com/v1", "portable-model");
+        client.chat(resolved.endpoint(), "sk", resolved.chatModel(),
+                new TextChatRequest("sys", "user", true, 1024), resolved.adapterConfig());
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertEquals(false, sent.path("chat_template_kwargs").path("enable_thinking").asBoolean());
+    }
+
+    @Test
     void pingAllowsBlankApiKey() {
         AtomicReference<String> sentKey = new AtomicReference<>("unset");
         OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),

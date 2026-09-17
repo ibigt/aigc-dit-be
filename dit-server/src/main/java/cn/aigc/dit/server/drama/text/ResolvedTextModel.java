@@ -22,16 +22,15 @@ public record ResolvedTextModel(
     }
 
     public ResolvedTextModel {
-        if (adapterConfig == null || adapterConfig.isEmpty()) {
-            adapterConfig = Map.of();
-        } else {
-            Map<String, Object> configured = new LinkedHashMap<>();
+        Map<String, Object> configured = new LinkedHashMap<>();
+        if (adapterConfig != null) {
             adapterConfig.forEach((key, value) -> {
                 if (key != null && value != null) {
                     configured.put(key, value);
                 }
             });
-            adapterConfig = Collections.unmodifiableMap(configured);
         }
+        configured.putIfAbsent("enableThinking", false);
+        adapterConfig = Collections.unmodifiableMap(configured);
     }
 }

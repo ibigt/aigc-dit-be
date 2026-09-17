@@ -39,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,8 +59,6 @@ class DramaAssetServiceTest {
     private GenTaskMapper genTaskMapper;
     @Mock
     private ObjectProvider<DramaTextService> textService;
-    @Mock
-    private DramaTextService dramaTextService;
     @Mock
     private GenerateService generateService;
     @Mock
@@ -106,11 +104,8 @@ class DramaAssetServiceTest {
             asset.setId(System.identityHashCode(asset) * 1L);
             return 1;
         });
-        when(textService.getIfAvailable()).thenReturn(dramaTextService);
-        when(dramaTextService.extractAssets(anyLong(), any(ScriptDoc.class)))
-                .thenReturn(DramaAssetDrafts.fromScript(sampleDoc(), DramaStyles.require(ownedSeries().getStyleKey())));
 
-        List<DramaAssetResp> assets = service.extractFromScript(31L);
+        List<DramaAssetResp> assets = service.extractFromScript(31L, false);
         ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
         verify(assetMapper, org.mockito.Mockito.atLeast(4)).insert(captor.capture());
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "洛白".equals(item.getName())));
@@ -133,18 +128,16 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void llmAssetExtractionDoesNotFallBackWhenTextServiceIsMissing() {
+    void llmAssetExtractionFallsBackToDeterministicSkeletonWhenTextServiceIsMissing() {
         DramaEpisode episode = ownedEpisode();
         episode.setStatus(DramaContract.STATUS_LOCKED);
         episode.setScript(ScriptDocs.toMap(sampleDoc()));
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractFromScript(31L, true));
+        service.extractFromScript(31L, true);
 
-        assertEquals("剧本生成服务尚未就绪", error.getMessage());
-        verify(assetMapper, never()).insert(any(DramaAsset.class));
+        verify(assetMapper, atLeastOnce()).insert(any(DramaAsset.class));
     }
 
     @Test
@@ -356,7 +349,7 @@ class DramaAssetServiceTest {
         episode.setEpisodeNumber(1);
         episode.setName("第 1 集");
         episode.setStatus(DramaContract.STATUS_LOCKED);
-        episode.setEngine(DramaContract.ENGINE_PENDING);
+        episode.setEngine(DramaContract.ENGINE_RULES);
         return episode;
     }
 

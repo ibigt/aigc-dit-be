@@ -146,6 +146,13 @@ public final class DramaTextPrompts {
         return "从这份锁定剧本里抽资产清单 AssetDraftList：\n\n" + scriptJson;
     }
 
+    public static String assetEnrichmentUser(String scriptJson, String skeletonJson) {
+        return "为给定的确定性资产骨架补充描述字段，输出 AssetDraftList。\n"
+                + "只能返回骨架中已有的资产，禁止新增、删除、改名或改类型；name、type、state_tag、must_split 必须逐字保持不变。\n"
+                + "只补充 description、identity_invariants、image_prompt、voice_lock；缺少信息时返回空字符串。\n\n"
+                + "锁定剧本：\n" + scriptJson + "\n\n确定性资产骨架：\n" + skeletonJson;
+    }
+
     public static String repairUser(String originalUser, String contractName, String reason, String previousOutput) {
         return """
                 上一次结构化输出没有通过合同校验。请只修复格式或缺失字段，不要增删、改写剧情事实。
