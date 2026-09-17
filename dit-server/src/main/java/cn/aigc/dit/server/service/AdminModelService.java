@@ -215,6 +215,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         Map<String, Object> adapterConfig = req.getAdapterConfig() == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(req.getAdapterConfig());
+        adapterConfig.putIfAbsent("enableThinking", false);
         adapterConfig.put("chatModel", modelKey);
         model.setAdapterConfig(adapterConfig.isEmpty() ? null : adapterConfig);
         model.setPricing(mergePricing(req));

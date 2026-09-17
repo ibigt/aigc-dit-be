@@ -284,6 +284,7 @@ class AdminModelServiceTest {
             assertEquals(ModelCategory.TEXT, model.getCategory());
             assertEquals(List.of("text"), model.getCapabilities());
             assertEquals("agnes-2.5-flash", model.getAdapterConfig().get("chatModel"));
+            assertEquals(false, model.getAdapterConfig().get("enableThinking"));
             return 1;
         });
 
@@ -300,6 +301,25 @@ class AdminModelServiceTest {
         assertEquals("agnes-text", resp.getAdapterKey());
         assertEquals("文本", resp.getBadge());
         assertEquals(List.of("text"), resp.getCapabilities());
+    }
+
+    @Test
+    void createTextModelPreservesExplicitThinkingSetting() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            assertEquals(true, model.getAdapterConfig().get("enableThinking"));
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Qwen 对话");
+        req.setModelKey("Qwen/Qwen3.6-35B-A3B");
+        req.setAdapterKey("openai-compat");
+        req.setCategory(ModelCategory.TEXT);
+        req.setAdapterConfig(Map.of("enableThinking", true));
+
+        service.create(req);
     }
 
     @Test
