@@ -9,6 +9,7 @@ target/
 .project
 .settings/
 .vscode/
+.worktrees/
 *.swp
 
 .DS_Store
