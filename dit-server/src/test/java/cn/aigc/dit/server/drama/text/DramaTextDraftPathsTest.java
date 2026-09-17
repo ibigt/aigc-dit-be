@@ -79,13 +79,13 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
-    void unboundSeriesCannotInventAssetsWithRules() {
+    void unboundSeriesReturnsDeterministicAssetSkeleton() {
         DramaTextServiceImpl service = boundService();
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractAssets(UNBOUND, oneScene()));
+        AssetDraftList result = service.extractAssets(UNBOUND, oneScene());
 
-        assertTrue(error.getMessage().contains("未绑定文本模型"));
+        assertEquals(List.of("洛白", "幻梦侦探社"), result.getAssets().stream()
+                .map(AssetDraftList.AssetDraft::getName).toList());
         verify(gateway, never()).chat(anyLong(), any());
     }
 
@@ -116,23 +116,22 @@ class DramaTextDraftPathsTest {
     }
 
     @Test
-    void emptyAssetListFailsExplicitly() {
+    void emptyAssetListRetainsDeterministicSkeleton() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("{\"assets\":[]}", "m", "stop"));
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractAssets(BOUND, oneScene()));
-        assertTrue(error.getMessage().contains("AssetDraftList"));
+        AssetDraftList result = service.extractAssets(BOUND, oneScene());
+        assertEquals(2, result.getAssets().size());
+        assertTrue(result.getAssets().stream().allMatch(item -> Boolean.TRUE.equals(item.getNeedsHuman())));
     }
 
     @Test
-    void assetTransportFailureSurfaces() {
+    void assetTransportFailureRetainsDeterministicSkeleton() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenThrow(new BizException(ErrorCode.INTERNAL, "超时"));
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractAssets(BOUND, oneScene()));
-        assertEquals("超时", error.getMessage());
+        AssetDraftList result = service.extractAssets(BOUND, oneScene());
+        assertEquals(2, result.getAssets().size());
     }
 
     @Test

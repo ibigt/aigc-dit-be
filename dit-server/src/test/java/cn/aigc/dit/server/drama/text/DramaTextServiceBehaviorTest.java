@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -57,16 +58,58 @@ class DramaTextServiceBehaviorTest {
     }
 
     @Test
-    void invalidAssetContractNeverFallsBackToRuleGeneratedAssets() {
+    void invalidAssetContractDoesNotAffectScriptStrictness() {
         RecordingGateway gateway = new RecordingGateway(
                 TextChatResult.of("{\"assets\":[]}", "portable-model", "stop"));
         DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractAssets(SERIES_ID, oneScene()));
+        AssetDraftList result = service.extractAssets(SERIES_ID, oneScene());
 
-        assertTrue(error.getMessage().contains("AssetDraftList"));
+        assertEquals(List.of("洛白", "办公室"),
+                result.getAssets().stream().map(AssetDraftList.AssetDraft::getName).toList());
         assertEquals(2, gateway.users.size());
+    }
+
+    @Test
+    void failedAssetBatchRetainsSkeletonAndContinuesWithNextBatch() {
+        AssetDraftList skeleton = skeleton("角色一", "角色二", "角色三", "角色四", "角色五");
+        RecordingGateway gateway = new RecordingGateway(
+                TextChatResult.of("", "portable-model", "length"),
+                TextChatResult.of("", "portable-model", "length"),
+                TextChatResult.of("""
+                        {"assets":[{"name":"角色五","type":"角色",
+                        "description":"模型描述","identity_invariants":"固定五官",
+                        "image_prompt":"模型提示词","voice_lock":""}]}
+                        """, "portable-model", "stop"));
+
+        AssetDraftList result = new DramaTextServiceImpl(gateway)
+                .enrichAssets(SERIES_ID, oneScene(), skeleton);
+
+        assertEquals(5, result.getAssets().size());
+        assertEquals("角色一", result.getAssets().get(0).getName());
+        assertTrue(result.getAssets().get(0).getNeedsHuman());
+        assertEquals("模型描述", result.getAssets().get(4).getDescription());
+        assertFalse(result.getAssets().get(4).getNeedsHuman());
+        assertEquals(3, gateway.users.size());
+    }
+
+    @Test
+    void enrichmentCannotAddRenameOrRetypeSkeletonAssets() {
+        AssetDraftList skeleton = skeleton("洛白");
+        RecordingGateway gateway = new RecordingGateway(TextChatResult.of("""
+                {"assets":[
+                  {"name":"新增","type":"角色","description":"不应出现"},
+                  {"name":"洛白改名","type":"场景","description":"不应替换"}
+                ]}
+                """, "portable-model", "stop"));
+
+        AssetDraftList result = new DramaTextServiceImpl(gateway)
+                .enrichAssets(SERIES_ID, oneScene(), skeleton);
+
+        assertEquals(1, result.getAssets().size());
+        assertEquals("洛白", result.getAssets().get(0).getName());
+        assertEquals("角色", result.getAssets().get(0).getType());
+        assertEquals("骨架描述", result.getAssets().get(0).getDescription());
     }
 
     @Test
@@ -122,6 +165,21 @@ class DramaTextServiceBehaviorTest {
         scene.setAction("洛白抬头。");
         doc.setScenes(List.of(scene));
         return doc;
+    }
+
+    private static AssetDraftList skeleton(String... names) {
+        AssetDraftList list = new AssetDraftList();
+        for (String name : names) {
+            AssetDraftList.AssetDraft draft = new AssetDraftList.AssetDraft();
+            draft.setName(name);
+            draft.setType("角色");
+            draft.setDescription("骨架描述");
+            draft.setIdentityInvariants("骨架身份");
+            draft.setImagePrompt("骨架提示词");
+            draft.setNeedsHuman(true);
+            list.getAssets().add(draft);
+        }
+        return list;
     }
 
     private static final class RecordingGateway implements TextChatGateway {

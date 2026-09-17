@@ -39,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -127,18 +128,16 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void llmAssetExtractionDoesNotFallBackWhenTextServiceIsMissing() {
+    void llmAssetExtractionFallsBackToDeterministicSkeletonWhenTextServiceIsMissing() {
         DramaEpisode episode = ownedEpisode();
         episode.setStatus(DramaContract.STATUS_LOCKED);
         episode.setScript(ScriptDocs.toMap(sampleDoc()));
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
 
-        BizException error = assertThrows(BizException.class,
-                () -> service.extractFromScript(31L, true));
+        service.extractFromScript(31L, true);
 
-        assertEquals("剧本生成服务尚未就绪", error.getMessage());
-        verify(assetMapper, never()).insert(any(DramaAsset.class));
+        verify(assetMapper, atLeastOnce()).insert(any(DramaAsset.class));
     }
 
     @Test

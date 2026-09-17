@@ -30,7 +30,15 @@ public interface DramaTextService {
      * 正式实现必须覆盖并走文本模型合同。
      */
     default AssetDraftList extractAssets(long seriesId, ScriptDoc script) {
-        return cn.aigc.dit.server.drama.DramaAssetDrafts.fromScript(script);
+        return enrichAssets(seriesId, script,
+                cn.aigc.dit.server.drama.DramaAssetDrafts.fromScript(script));
+    }
+
+    /**
+     * 对确定性资产骨架做可选的描述增强。实现必须保留骨架身份，不得让模型新增、删除、改名或改类型。
+     */
+    default AssetDraftList enrichAssets(long seriesId, ScriptDoc script, AssetDraftList skeleton) {
+        return skeleton;
     }
 
     /**
