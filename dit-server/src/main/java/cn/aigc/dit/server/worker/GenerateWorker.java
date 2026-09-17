@@ -65,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Redis Stream 消费者：只调 Canonical SPI，落封面与作品。
@@ -94,10 +95,12 @@ public class GenerateWorker {
     private final Object dramaShotSlots = new Object();
     private final AtomicBoolean arkSubmitting = new AtomicBoolean(false);
     private volatile long arkBusyUntilMs;
+    private final AtomicLong lastHeartbeatMs = new AtomicLong(0);
     private Thread workerThread;
 
     @PostConstruct
     void start() {
+        touchHeartbeat();
         workerThread = new Thread(this::loop, "dit-generate-worker");
         workerThread.setDaemon(true);
         workerThread.start();
@@ -114,6 +117,7 @@ public class GenerateWorker {
 
     @Scheduled(fixedDelay = 5000)
     public void enqueuePending() {
+        touchHeartbeat();
         OffsetDateTime since = OffsetDateTime.now().minusHours(24);
         OffsetDateTime staleBefore = OffsetDateTime.now().minusSeconds(30);
         List<GenTask> pending = new ArrayList<>(genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
@@ -152,6 +156,7 @@ public class GenerateWorker {
 
     @Scheduled(fixedDelay = 5000)
     public void resumeStaleJobs() {
+        touchHeartbeat();
         OffsetDateTime staleBefore = OffsetDateTime.now().minusSeconds(20);
         List<GenTask> runningTasks = genTaskMapper.selectList(new LambdaQueryWrapper<GenTask>()
                 .eq(GenTask::getStatus, TaskStatus.RUNNING)
@@ -203,6 +208,7 @@ public class GenerateWorker {
         ensureGroup(stream, group);
         log.info("GenerateWorker consuming stream {} group {} as {}", stream, group, consumerName);
         while (running.get()) {
+            touchHeartbeat();
             try {
                 claimIdlePending(stream, group, consumerName);
                 List<MapRecord<String, Object, Object>> records = readStream(stream, group, consumerName);
@@ -258,6 +264,40 @@ public class GenerateWorker {
         }
     }
 
+    public void withTaskLock(Long taskId, Runnable action) {
+        if (taskId == null || action == null) {
+            return;
+        }
+        synchronized (lockFor(taskId)) {
+            action.run();
+        }
+    }
+
+    public boolean heartbeatFresh() {
+        long last = lastHeartbeatMs.get();
+        return last > 0 && System.currentTimeMillis() - last <= 30_000L;
+    }
+
+    public void cancelProviderJob(GenTask task) {
+        if (task == null || !StringUtils.hasText(task.getProviderJobId())) {
+            return;
+        }
+        try {
+            AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
+            String modelKey = model == null ? null : model.getModelKey();
+            GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
+            GenerateProvider provider = bindAndResolve(task, model, request);
+            provider.cancel(task.getProviderJobId());
+        } catch (Exception e) {
+            log.warn("cancel provider job {} for task {} failed: {}",
+                    task.getProviderJobId(), task.getId(), e.getMessage());
+        }
+    }
+
+    void touchHeartbeat() {
+        lastHeartbeatMs.set(System.currentTimeMillis());
+    }
+
     private void process(Map<Object, Object> payload) {
         Long taskId = taskIdOf(payload);
         if (taskId == null) {
@@ -309,6 +349,9 @@ public class GenerateWorker {
             GenerateProvider provider = bindAndResolve(task, model, request);
             task.setStatus(TaskStatus.RUNNING);
             task.setProgress(5);
+            if (task.getStartedAt() == null) {
+                task.setStartedAt(OffsetDateTime.now());
+            }
             genTaskMapper.updateById(task);
             SubmitResult submitted = provider.submit(request);
             task.setProviderJobId(submitted.getJobId());
@@ -355,6 +398,9 @@ public class GenerateWorker {
                 latest.setStatus(TaskStatus.RUNNING);
                 latest.setErrorMessage(null);
                 latest.setFinishedAt(null);
+                if (latest.getStartedAt() == null) {
+                    latest.setStartedAt(OffsetDateTime.now());
+                }
                 latest.setProgress(Math.max(latest.getProgress() == null ? 10 : latest.getProgress(), 55));
                 genTaskMapper.updateById(latest);
             }
@@ -406,6 +452,9 @@ public class GenerateWorker {
         task.setProgress(Math.max(task.getProgress() == null ? 0 : task.getProgress(), result.getProgress()));
         task.setStatus(TaskStatus.RUNNING);
         task.setFinishedAt(null);
+        if (task.getStartedAt() == null) {
+            task.setStartedAt(OffsetDateTime.now());
+        }
         if (GenerateTaskViews.isForeignAgnesError(task.getErrorMessage())) {
             task.setErrorMessage(null);
         }
@@ -427,6 +476,9 @@ public class GenerateWorker {
         }
         latest.setStatus(TaskStatus.RUNNING);
         latest.setFinishedAt(null);
+        if (latest.getStartedAt() == null) {
+            latest.setStartedAt(OffsetDateTime.now());
+        }
         if (GenerateTaskViews.isForeignAgnesError(latest.getErrorMessage())) {
             latest.setErrorMessage(null);
         }
@@ -440,7 +492,10 @@ public class GenerateWorker {
         boolean releaseDramaSlot = false;
         synchronized (lockFor(task.getId())) {
             GenTask latest = genTaskMapper.selectById(task.getId());
-            if (latest == null || TaskStatus.SUCCEEDED.equals(latest.getStatus()) || hasCreations(latest.getId())) {
+            if (latest == null
+                    || TaskStatus.SUCCEEDED.equals(latest.getStatus())
+                    || TaskStatus.CANCELLED.equals(latest.getStatus())
+                    || hasCreations(latest.getId())) {
                 return;
             }
             List<String> keys = result.getOutputKeys() == null || result.getOutputKeys().isEmpty()

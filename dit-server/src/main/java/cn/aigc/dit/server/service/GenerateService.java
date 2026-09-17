@@ -150,7 +150,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 .filter(ref -> AssetKind.AUDIO.equalsIgnoreCase(ref.getType()))
                 .count();
         if (audioCount == 0) {
-            if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+            if ((request.getPrompt() == null || request.getPrompt().isBlank())
+                    && !GenerateMode.allowBlankPrompt(request.getFrames())) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
             }
             return;

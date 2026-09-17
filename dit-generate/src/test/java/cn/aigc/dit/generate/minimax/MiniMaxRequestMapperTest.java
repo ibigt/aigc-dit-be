@@ -77,6 +77,21 @@ class MiniMaxRequestMapperTest {
     }
 
     @Test
+    void mapsI2vBlankPromptToDefaultText() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.MINIMAX_H3)
+                .setMode("i2v")
+                .setPrompt(" ")
+                .setDurationSec(5);
+        Map<String, Object> body = MiniMaxRequestMapper.toCreateBody(
+                request, "https://example.com/first.png", null, List.of(), List.of());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> content = (List<Map<String, Object>>) body.get("content");
+        assertEquals(cn.aigc.dit.generate.GenerateMode.DEFAULT_I2V_PROMPT, content.get(0).get("text"));
+        assertEquals("first_frame", content.get(1).get("role"));
+    }
+
+    @Test
     void maxModelClampsDurationAndResolution() {
         GenerateRequest request = new GenerateRequest()
                 .setModelKey("MiniMax-H3-Max")

@@ -106,6 +106,17 @@ public class CreditService {
         return resp;
     }
 
+    public long netByRef(String refId) {
+        if (refId == null || refId.isBlank()) {
+            return 0L;
+        }
+        return creditLedgerMapper.sumByRefId(refId);
+    }
+
+    public boolean hasRefund(String refId) {
+        return netByRef(refId) >= 0;
+    }
+
     private CreditLedgerResp toResp(CreditLedger ledger) {
         CreditLedgerResp resp = new CreditLedgerResp();
         resp.setId(ledger.getId());

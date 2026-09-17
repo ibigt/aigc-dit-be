@@ -17,6 +17,8 @@ public final class GenerateMode {
     public static final String R2V = "r2v";
     public static final String I2V = "i2v";
     public static final String T2A = "t2a";
+    /** MiniMax / Comfy / Agnes 等通道在 i2v 空提示词时使用，避免厂商拒绝空 text。 */
+    public static final String DEFAULT_I2V_PROMPT = "根据首帧画面自然生成视频";
 
     /** @deprecated 旧称，读入时规范为 {@link #I2V} */
     public static final String V2V = "v2v";
@@ -38,6 +40,17 @@ public final class GenerateMode {
             return T2A;
         }
         return hasRefs ? R2V : T2V;
+    }
+
+    public static boolean allowBlankPrompt(FramePair frames) {
+        return frames != null && frames.hasAny();
+    }
+
+    public static String i2vPrompt(String prompt) {
+        if (prompt != null && !prompt.isBlank()) {
+            return prompt.trim();
+        }
+        return DEFAULT_I2V_PROMPT;
     }
 
     public static String canonical(String mode) {

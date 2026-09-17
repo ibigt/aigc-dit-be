@@ -274,7 +274,9 @@ public class ArkGenerateProvider implements GenerateProvider {
         boolean hasAudio = request.getReferences() != null && request.getReferences().stream()
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(ref -> "audio".equals(refKind(ref)));
-        if ((request.getPrompt() == null || request.getPrompt().isBlank()) && !hasAudio) {
+        if ((request.getPrompt() == null || request.getPrompt().isBlank())
+                && !hasAudio
+                && !GenerateMode.allowBlankPrompt(request.getFrames())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
         }
         String adapterKey = AdapterCatalog.resolveKey(

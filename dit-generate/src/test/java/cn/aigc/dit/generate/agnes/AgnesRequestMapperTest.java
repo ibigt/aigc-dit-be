@@ -81,4 +81,20 @@ class AgnesRequestMapperTest {
         assertEquals("https://example.com/first.png", body.get("first_frame"));
         assertEquals("https://example.com/last.png", body.get("last_frame"));
     }
+
+    @Test
+    void mapsI2vBlankPromptToDefault() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.AGNES_VIDEO_2_5)
+                .setModelKey("agnes-video-2.5-flash")
+                .setMode("i2v")
+                .setPrompt(" ")
+                .setDurationSec(5);
+        Map<String, Object> body = AgnesRequestMapper.toVideoBody(
+                request, "https://example.com/first.png", null, List.of(), List.of());
+        assertEquals("keyframe", body.get("mode"));
+        assertEquals(cn.aigc.dit.generate.GenerateMode.DEFAULT_I2V_PROMPT, body.get("prompt"));
+        assertEquals("https://example.com/first.png", body.get("first_frame"));
+        assertFalse(body.containsKey("last_frame"));
+    }
 }

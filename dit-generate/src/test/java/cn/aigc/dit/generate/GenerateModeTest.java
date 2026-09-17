@@ -36,6 +36,13 @@ class GenerateModeTest {
     }
 
     @Test
+    void i2vAllowsBlankPromptAndFillsDefault() {
+        assertTrue(GenerateMode.allowBlankPrompt(new FramePair("a.png", null)));
+        assertEquals(GenerateMode.DEFAULT_I2V_PROMPT, GenerateMode.i2vPrompt("  "));
+        assertEquals("转身", GenerateMode.i2vPrompt(" 转身 "));
+    }
+
+    @Test
     void canonicalizesLegacyVideoModes() {
         assertEquals(GenerateMode.I2V, GenerateMode.canonical("i2v"));
         assertEquals(GenerateMode.I2V, GenerateMode.canonical("v2v"));

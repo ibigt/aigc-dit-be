@@ -42,6 +42,8 @@ public class GenerateProperties {
         private String group = "dit-workers";
         private int pollIntervalMs = 400;
         private int timeoutSeconds = 1800;
+        /** 管理端健康条展示的并发上限，默认与短剧槽位一致。 */
+        private int maxConcurrent = 8;
     }
 
     /**

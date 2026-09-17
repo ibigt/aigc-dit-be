@@ -154,7 +154,8 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
-        if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+        if ((request.getPrompt() == null || request.getPrompt().isBlank())
+                && !GenerateMode.allowBlankPrompt(request.getFrames())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
         }
         String adapterKey = AdapterCatalog.resolveKey(
@@ -248,7 +249,7 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
             }
         }
         return ComfyUiMinimaxGraph.imageToVideo(
-                request.getPrompt().trim(),
+                GenerateMode.i2vPrompt(request.getPrompt()),
                 size[0], size[1], length, seed,
                 config(request, "unetName", ComfyUiMinimaxGraph.UNET_T2V),
                 config(request, "loraName", ComfyUiMinimaxGraph.LORA_T2V),

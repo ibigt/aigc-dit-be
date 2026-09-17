@@ -96,6 +96,7 @@ dit:
       group: dit-workers
       poll-interval-ms: 2000
       timeout-seconds: ${GENERATE_TIMEOUT_SECONDS:1800}
+      max-concurrent: ${GENERATE_MAX_CONCURRENT:8}
     comfyui:
       # Adapter 始终注册。enabled 只控制 compose 是否拉起 sidecar；远程 ComfyUI 用模型 endpoint。
       enabled: ${COMFYUI_ENABLED:false}

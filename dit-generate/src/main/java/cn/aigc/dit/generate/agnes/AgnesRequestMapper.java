@@ -165,6 +165,9 @@ public final class AgnesRequestMapper {
 
     static String referencePrompt(String prompt, List<String> images, List<String> audios, String mode) {
         String text = prompt == null ? "" : prompt.trim();
+        if ("keyframe".equals(mode) && text.isBlank()) {
+            return GenerateMode.DEFAULT_I2V_PROMPT;
+        }
         if (!"reference".equals(mode)) {
             return text;
         }

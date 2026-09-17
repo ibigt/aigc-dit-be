@@ -95,7 +95,7 @@ public final class MiniMaxRequestMapper {
         String mode = GenerateMode.canonical(request == null ? null : request.getMode());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", modelName(request));
-        body.put("content", content(request == null ? null : request.getPrompt(), firstFrame, lastFrame, images, videos));
+        body.put("content", content(request == null ? null : request.getPrompt(), firstFrame, lastFrame, images, videos, mode));
         body.put("resolution", clampResolution(request));
         body.put("duration", clampSeconds(request, request == null ? null : request.getDurationSec()));
         body.put("ratio", videoRatio(mode, request == null ? null : request.getRatio()));
@@ -107,11 +107,12 @@ public final class MiniMaxRequestMapper {
                                              String firstFrame,
                                              String lastFrame,
                                              List<String> images,
-                                             List<String> videos) {
+                                             List<String> videos,
+                                             String mode) {
         List<Map<String, Object>> items = new ArrayList<>();
         Map<String, Object> text = new LinkedHashMap<>();
         text.put("type", "text");
-        text.put("text", clampPrompt(prompt));
+        text.put("text", clampPrompt(prompt, mode));
         items.add(text);
         if (firstFrame != null && !firstFrame.isBlank()) {
             items.add(imageItem(firstFrame, "first_frame"));
@@ -125,7 +126,14 @@ public final class MiniMaxRequestMapper {
     }
 
     static String clampPrompt(String prompt) {
+        return clampPrompt(prompt, null);
+    }
+
+    static String clampPrompt(String prompt, String mode) {
         String text = prompt == null ? "" : prompt.trim();
+        if (text.isBlank() && GenerateMode.I2V.equalsIgnoreCase(GenerateMode.canonical(mode))) {
+            text = GenerateMode.DEFAULT_I2V_PROMPT;
+        }
         if (text.length() <= MAX_PROMPT_CHARS) {
             return text;
         }

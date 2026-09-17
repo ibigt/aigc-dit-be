@@ -45,5 +45,6 @@ public class GenTask {
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private OffsetDateTime updatedAt;
 
+    private OffsetDateTime startedAt;
     private OffsetDateTime finishedAt;
 }

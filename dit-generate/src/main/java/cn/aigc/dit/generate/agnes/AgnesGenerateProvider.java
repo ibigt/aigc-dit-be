@@ -346,7 +346,8 @@ public class AgnesGenerateProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
-        if (request.getPrompt() == null || request.getPrompt().isBlank()) {
+        if ((request.getPrompt() == null || request.getPrompt().isBlank())
+                && !GenerateMode.allowBlankPrompt(request.getFrames())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "提示词不能为空");
         }
         if (isOfficialSeedance(request)) {
