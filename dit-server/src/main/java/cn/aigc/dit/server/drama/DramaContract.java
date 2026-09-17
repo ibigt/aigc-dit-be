@@ -33,12 +33,14 @@ public final class DramaContract {
     public static final List<Integer> DURATION_OPTIONS = List.of(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     public static final Set<Integer> DURATIONS = Set.copyOf(DURATION_OPTIONS);
 
-    /** 乙未合入：导入只存原文。 */
+    /** 尚未用文本模型成功解析。 */
     public static final String ENGINE_PENDING = "pending";
-    /** 规则分场（无可用文本模型）。 */
+    /** 历史规则分场，仅兼容旧数据；新解析不再写入。 */
     public static final String ENGINE_RULES = "rules";
     /** 文本模型分场。 */
     public static final String ENGINE_LLM = "llm";
+    /** 失败原因落库上限，避免把整段模型原文写进剧集行。 */
+    public static final int ERROR_MESSAGE_MAX = 500;
 
     public static final Set<String> ENGINES = Set.of(ENGINE_PENDING, ENGINE_RULES, ENGINE_LLM);
 
@@ -73,5 +75,13 @@ public final class DramaContract {
             return engine;
         }
         return ENGINE_PENDING;
+    }
+
+    public static String clipError(String message) {
+        if (message == null || message.isBlank()) {
+            return "文本模型调用失败";
+        }
+        String text = message.trim();
+        return text.length() <= ERROR_MESSAGE_MAX ? text : text.substring(0, ERROR_MESSAGE_MAX);
     }
 }

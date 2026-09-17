@@ -48,4 +48,9 @@ public class DramaStoryboardDraftLock {
     public void release(Long episodeId) {
         episodeMapper.releaseStoryboardDraft(episodeId);
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void fail(Long episodeId, String message) {
+        episodeMapper.failStoryboardDraft(episodeId, DramaContract.clipError(message));
+    }
 }

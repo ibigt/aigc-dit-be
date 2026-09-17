@@ -53,14 +53,14 @@ public class DramaTextServiceImpl implements DramaTextService {
         if (Objects.equals(PARSED_SERIES.get(), seriesId) && StringUtils.hasText(PARSED_ENGINE.get())) {
             return PARSED_ENGINE.get();
         }
-        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_RULES;
+        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_PENDING;
     }
 
     @Override
     public ScriptDoc parseScript(long seriesId, String raw) {
         if (!useLlm(seriesId)) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
+                    DramaTextService.UNBOUND_MESSAGE);
         }
         long started = System.nanoTime();
         log.info("[drama-text] 分场开始 seriesId={} rawLength={}", seriesId, raw == null ? 0 : raw.length());
@@ -83,7 +83,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         if (!useLlm(seriesId)) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
+                    DramaTextService.UNBOUND_MESSAGE);
         }
         long started = System.nanoTime();
         log.info("[drama-text] 资产抽取开始 seriesId={} scenes={}", seriesId, script.getScenes().size());
@@ -124,7 +124,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         if (!useLlm(seriesId)) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    "项目未绑定文本模型，请先在基础信息中选择文本模型");
+                    DramaTextService.UNBOUND_MESSAGE);
         }
         long started = System.nanoTime();
         log.info("[drama-text] 分镜草稿开始 seriesId={} scenes={} assets={} durationSec={}",

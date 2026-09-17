@@ -26,6 +26,8 @@ public class DramaEpisodeResp {
     private Boolean analyzing;
     @Schema(description = "本次分析开始时间，供进度条按已耗时恢复")
     private OffsetDateTime analyzingAt;
+    @Schema(description = "最近一次剧本分析失败原因；分析中或成功后为空")
+    private String scriptAnalyzeError;
     private Long inheritedFromEpisodeId;
     @Schema(description = "本集成片预览地址")
     private String filmUrl;

@@ -37,5 +37,7 @@ class ScriptDocsTest {
         assertFalse(ScriptDocs.hasScenes(Map.of("scenes", List.of())));
         assertEquals(DramaContract.ENGINE_PENDING, DramaContract.normalizeEngine("other"));
         assertEquals(DramaContract.ENGINE_LLM, DramaContract.normalizeEngine("llm"));
+        assertEquals("文本模型调用失败", DramaContract.clipError("  "));
+        assertEquals("文本模型超时", DramaContract.clipError("  文本模型超时  "));
     }
 }

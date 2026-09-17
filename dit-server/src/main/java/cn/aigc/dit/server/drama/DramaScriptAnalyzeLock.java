@@ -48,4 +48,9 @@ public class DramaScriptAnalyzeLock {
     public void release(Long episodeId) {
         episodeMapper.releaseScriptAnalysis(episodeId);
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void fail(Long episodeId, String message) {
+        episodeMapper.failScriptAnalysis(episodeId, DramaContract.clipError(message));
+    }
 }

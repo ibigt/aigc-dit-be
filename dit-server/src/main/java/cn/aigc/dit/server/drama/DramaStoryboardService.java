@@ -125,7 +125,7 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 拆章节并生成分镜草稿。分析闭环可关闭 LLM，快速生成规则草稿。
+     * 拆章节并生成分镜草稿。始终使用项目绑定的文本模型；{@code useLlm} 仅保留调用签名。
      */
     @Transactional
     public DramaStoryboardResp draft(Long episodeId, boolean useLlm) {
@@ -144,9 +144,13 @@ public class DramaStoryboardService {
         draftLock.claim(episodeId);
         boolean held = true;
         try {
-            DramaStoryboardResp board = finishDraft(episodeId, useLlm, durationSec, episodeBudgetSec);
+            DramaStoryboardResp board = finishDraft(episodeId, durationSec, episodeBudgetSec);
             held = false;
             return board;
+        } catch (RuntimeException e) {
+            draftLock.fail(episodeId, e.getMessage());
+            held = false;
+            throw e;
         } finally {
             if (held) {
                 draftLock.release(episodeId);
@@ -179,9 +183,9 @@ public class DramaStoryboardService {
             } catch (Exception e) {
                 log.warn("自动拆镜失败 episodeId={}: {}", episodeId, e.toString());
                 try {
-                    draftLock.release(episodeId);
+                    draftLock.fail(episodeId, e.getMessage());
                 } catch (RuntimeException ignored) {
-                    log.warn("自动拆镜释放锁失败 episodeId={}", episodeId);
+                    log.warn("自动拆镜记录失败原因失败 episodeId={}", episodeId);
                 }
             } finally {
                 if (previous != null) {
@@ -243,9 +247,13 @@ public class DramaStoryboardService {
         assertCanDraft(episodeId);
         boolean held = true;
         try {
-            DramaStoryboardResp board = finishDraft(episodeId, true, durationSec, episodeBudgetSec);
+            DramaStoryboardResp board = finishDraft(episodeId, durationSec, episodeBudgetSec);
             held = false;
             return board;
+        } catch (RuntimeException e) {
+            draftLock.fail(episodeId, e.getMessage());
+            held = false;
+            throw e;
         } finally {
             if (held) {
                 draftLock.release(episodeId);
@@ -268,10 +276,10 @@ public class DramaStoryboardService {
     }
 
     private DramaStoryboardResp finishDraft(
-            Long episodeId, boolean useLlm, Integer durationSec, Integer episodeBudgetSec) {
+            Long episodeId, Integer durationSec, Integer episodeBudgetSec) {
         DramaEpisode episode = requireEpisode(episodeId);
         ScriptDoc doc = ScriptDocs.fromMap(episode.getScript());
-        replaceStoryboard(episode, doc, useLlm, durationSec, episodeBudgetSec);
+        replaceStoryboard(episode, doc, durationSec, episodeBudgetSec);
         DramaStoryboardResp board = getStoryboard(episode.getId());
         board.setDrafting(false);
         releaseDraftLockWhenDone(episode.getId());
@@ -883,12 +891,11 @@ public class DramaStoryboardService {
     private void replaceStoryboard(
             DramaEpisode episode,
             ScriptDoc doc,
-            boolean useLlm,
             Integer requestedDuration,
             Integer episodeBudgetSec) {
         long started = System.nanoTime();
-        log.info("[drama] 分镙草稿落库开始 episodeId={} useLlm={} durationSec={}",
-                episode.getId(), useLlm, requestedDuration);
+        log.info("[drama] 分镜草稿落库开始 episodeId={} durationSec={}",
+                episode.getId(), requestedDuration);
         Long userId = UserContext.requireUserId();
         DramaSeries series = requireOwnedSeries(episode.getSeriesId());
         int fallback = resolveDraftDuration(series, requestedDuration);
@@ -904,7 +911,7 @@ public class DramaStoryboardService {
                 .filter(StringUtils::hasText)
                 .toList();
         ShotDraftList drafts = resolveDrafts(
-                episode.getSeriesId(), doc, assetNames, fallback, useLlm, episodeBudgetSec);
+                episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec);
 
         for (DramaShot shot : listShots(episode.getId())) {
             shotMapper.deleteById(shot.getId());
@@ -1002,7 +1009,7 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能生成分镜草稿");
         }
         touchSeries(episode.getSeriesId());
-        log.info("[drama] 分镙草稿落库完成 episodeId={} shots={} elapsedMs={}",
+        log.info("[drama] 分镜草稿落库完成 episodeId={} shots={} elapsedMs={}",
                 episode.getId(), shotIndex, (System.nanoTime() - started) / 1_000_000);
     }
 
@@ -1011,19 +1018,12 @@ public class DramaStoryboardService {
             ScriptDoc doc,
             List<String> assetNames,
             int duration,
-            boolean useLlm,
             Integer episodeBudgetSec) {
         DramaTextService svc = textService.getIfAvailable();
-        ShotDraftList drafts = null;
-        if (useLlm && svc == null) {
+        if (svc == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
         }
-        if (useLlm) {
-            drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec);
-        }
-        if (!useLlm && (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty())) {
-            drafts = DramaShotDrafts.fromScript(doc, assetNames, duration);
-        }
+        ShotDraftList drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec);
         if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能生成分镜草稿");
         }
@@ -1445,6 +1445,7 @@ public class DramaStoryboardService {
         board.setCanDraft(DramaContract.STATUS_LOCKED.equals(episode.getStatus()));
         board.setDrafting(draftLock.isActive(episode));
         board.setDraftingAt(Boolean.TRUE.equals(board.getDrafting()) ? episode.getStoryboardDraftingAt() : null);
+        board.setDraftError(Boolean.TRUE.equals(board.getDrafting()) ? null : episode.getStoryboardDraftError());
         board.setTextServiceAvailable(textService.getIfAvailable() != null);
         board.setLockedAssetCount(locked.size());
         board.setStaleShotCount(stale);

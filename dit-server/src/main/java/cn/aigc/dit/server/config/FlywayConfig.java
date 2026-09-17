@@ -143,6 +143,8 @@ public class FlywayConfig {
                     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
                     storyboard_drafting_at      TIMESTAMPTZ,
                     script_analyzing_at         TIMESTAMPTZ,
+                    script_analyze_error        TEXT,
+                    storyboard_draft_error      TEXT,
                     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
@@ -179,7 +181,7 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_series.text_model_id
-                IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，乙走规则引擎'
+                IS '绑定的文本模型（ai_model.id，category=text）；空表示未绑定，剧本解析/分镜拆分不可用'
                 """);
         statement.execute("""
                 UPDATE ai_model SET provider = '官方API', updated_at = NOW()
@@ -195,7 +197,7 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.engine
-                IS '分场引擎：pending 乙未合入；rules 规则分场；llm 文本模型'
+                IS '分场引擎：pending 尚未用文本模型成功解析；rules 仅兼容旧数据；llm 文本模型'
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.script
@@ -496,6 +498,22 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.script_analyzing_at
                 IS '正在一键分析剧本的开始时间；空表示空闲。超时视为僵死可重试'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS script_analyze_error TEXT
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.script_analyze_error
+                IS '最近一次剧本分析失败原因；成功或重新开始分析时清空'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS storyboard_draft_error TEXT
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.storyboard_draft_error
+                IS '最近一次分镜拆分失败原因；成功或重新开始拆镜时清空'
                 """);
     }
 }

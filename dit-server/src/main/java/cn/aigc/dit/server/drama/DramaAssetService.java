@@ -84,12 +84,12 @@ public class DramaAssetService {
     }
 
     /**
-     * 抽取剧本资产。分析闭环可关闭 LLM，使用确定性的本地规则快速完成首屏结果。
+     * 抽取剧本资产。必须使用项目绑定的文本模型，失败时不写入规则草稿。
      */
     @Transactional
     public List<DramaAssetResp> extractFromScript(Long episodeId, boolean useLlm) {
         long started = System.nanoTime();
-        log.info("[drama] 资产分析开始 episodeId={} useLlm={}", episodeId, useLlm);
+        log.info("[drama] 资产分析开始 episodeId={}", episodeId);
         DramaEpisode episode = requireEpisode(episodeId);
         if (!DramaContract.STATUS_LOCKED.equals(episode.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定分场剧本再提取资产");
@@ -99,17 +99,12 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集没有可抽取的分场剧本");
         }
         DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(episode.getSeriesId()).getStyleKey());
-        AssetDraftList drafts;
         DramaTextService svc = textService.getIfAvailable();
-        if (useLlm && svc == null) {
+        if (svc == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
         }
-        if (useLlm) {
-            drafts = svc.extractAssets(episode.getSeriesId(), doc);
-            DramaAssetDrafts.ensurePrompts(drafts, doc, style);
-        } else {
-            drafts = DramaAssetDrafts.fromScript(doc, style);
-        }
+        AssetDraftList drafts = svc.extractAssets(episode.getSeriesId(), doc);
+        DramaAssetDrafts.ensurePrompts(drafts, doc, style);
         if (drafts == null || drafts.getAssets() == null || drafts.getAssets().isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能从剧本抽出资产，请手工新增");
         }

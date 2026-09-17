@@ -39,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -58,6 +59,8 @@ class DramaAssetServiceTest {
     private GenTaskMapper genTaskMapper;
     @Mock
     private ObjectProvider<DramaTextService> textService;
+    @Mock
+    private DramaTextService dramaTextService;
     @Mock
     private GenerateService generateService;
     @Mock
@@ -103,8 +106,11 @@ class DramaAssetServiceTest {
             asset.setId(System.identityHashCode(asset) * 1L);
             return 1;
         });
+        when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(dramaTextService.extractAssets(anyLong(), any(ScriptDoc.class)))
+                .thenReturn(DramaAssetDrafts.fromScript(sampleDoc(), DramaStyles.require(ownedSeries().getStyleKey())));
 
-        List<DramaAssetResp> assets = service.extractFromScript(31L, false);
+        List<DramaAssetResp> assets = service.extractFromScript(31L);
         ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
         verify(assetMapper, org.mockito.Mockito.atLeast(4)).insert(captor.capture());
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "洛白".equals(item.getName())));
@@ -350,7 +356,7 @@ class DramaAssetServiceTest {
         episode.setEpisodeNumber(1);
         episode.setName("第 1 集");
         episode.setStatus(DramaContract.STATUS_LOCKED);
-        episode.setEngine(DramaContract.ENGINE_RULES);
+        episode.setEngine(DramaContract.ENGINE_PENDING);
         return episode;
     }
 

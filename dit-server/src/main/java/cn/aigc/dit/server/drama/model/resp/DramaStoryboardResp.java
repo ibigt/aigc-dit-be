@@ -19,6 +19,8 @@ public class DramaStoryboardResp {
     private Boolean drafting;
     @Schema(description = "本次自动拆镜开始时间")
     private OffsetDateTime draftingAt;
+    @Schema(description = "最近一次拆镜失败原因；拆镜中或成功后为空")
+    private String draftError;
     private Boolean textServiceAvailable;
     private Integer lockedAssetCount;
     private Integer staleShotCount;

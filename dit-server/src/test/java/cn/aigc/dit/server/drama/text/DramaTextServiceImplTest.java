@@ -154,14 +154,11 @@ class DramaTextServiceImplTest {
     }
 
     @Test
-    void engineNeverReportsPending() {
+    void engineReportsPendingWhenUnbound() {
         DramaTextServiceImpl service = boundService();
 
-        for (long seriesId : new long[]{UNBOUND, BOUND}) {
-            String engine = service.engine(seriesId);
-            assertTrue(DramaTextService.ENGINE_RULES.equals(engine) || DramaTextService.ENGINE_LLM.equals(engine),
-                    "engine() 不得返回 pending，否则会被 normalizeEngine 伪装成「乙未合入」");
-        }
+        assertEquals(DramaTextService.ENGINE_PENDING, service.engine(UNBOUND));
+        assertEquals(DramaTextService.ENGINE_LLM, service.engine(BOUND));
     }
 
     @Test
@@ -171,7 +168,7 @@ class DramaTextServiceImplTest {
 
         service.parseScript(BOUND, RAW);
 
-        assertEquals(DramaTextService.ENGINE_RULES, service.engine(UNBOUND),
+        assertEquals(DramaTextService.ENGINE_PENDING, service.engine(UNBOUND),
                 "同线程刚解析过 BOUND，不得把 UNBOUND 也报成 llm");
     }
 

@@ -50,6 +50,12 @@ public class DramaEpisode {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private OffsetDateTime scriptAnalyzingAt;
 
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String scriptAnalyzeError;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String storyboardDraftError;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 

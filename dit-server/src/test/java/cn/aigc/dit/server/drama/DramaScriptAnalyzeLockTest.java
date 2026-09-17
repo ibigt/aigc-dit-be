@@ -57,4 +57,11 @@ class DramaScriptAnalyzeLockTest {
 
         verify(episodeMapper).claimScriptAnalysis(org.mockito.ArgumentMatchers.eq(31L), any(), any());
     }
+
+    @Test
+    void failWritesErrorAndClearsTimestamp() {
+        lock.fail(31L, "  文本模型超时  ");
+
+        verify(episodeMapper).failScriptAnalysis(31L, "文本模型超时");
+    }
 }

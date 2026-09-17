@@ -205,7 +205,7 @@ public class DramaController {
         return CommonResult.success(dramaService.bindVideoGenerateMode(id, req));
     }
 
-    @Operation(summary = "剧本页绑定文本模型；传 null 解绑并回退规则分场")
+    @Operation(summary = "剧本页绑定文本模型；传 null 解绑，解析与拆镜将不可用")
     @PutMapping("/series/{id}/text-model")
     public CommonResult<DramaSeriesResp> bindTextModel(
             @PathVariable Long id,

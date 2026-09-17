@@ -162,8 +162,9 @@ class DramaStoryboardServiceTest {
                 pendingAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(4L, "古铜怀表", DramaContract.ASSET_TYPE_PROP),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        stubLlmDrafts();
 
-        DramaStoryboardResp board = service.draft(31L, false);
+        DramaStoryboardResp board = service.draft(31L);
 
         assertTrue(storedShots.size() >= 4 && storedShots.size() <= 8);
         DramaShot first = storedShots.get(0);
@@ -243,8 +244,9 @@ class DramaStoryboardServiceTest {
         when(assetMapper.selectList(any())).thenReturn(List.of(
                 lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        stubLlmDrafts();
 
-        service.draft(31L, false, 15);
+        service.draft(31L, true, 15);
 
         assertFalse(storedShots.isEmpty());
         assertTrue(storedShots.stream().allMatch(item ->
@@ -263,6 +265,33 @@ class DramaStoryboardServiceTest {
 
         BizException error = assertThrows(BizException.class,
                 () -> service.draft(31L, true, 15));
+
+        assertEquals("剧本生成服务尚未就绪", error.getMessage());
+        assertTrue(storedShots.isEmpty());
+        verify(episodeMapper).failStoryboardDraft(org.mockito.ArgumentMatchers.eq(31L), any());
+    }
+
+    @Test
+    void getStoryboardReportsDraftErrorWhenIdle() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStoryboardDraftError("文本模型超时");
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        assertEquals("文本模型超时", board.getDraftError());
+        assertEquals(DramaContract.STATUS_NOT_STARTED, board.getStatus());
+    }
+
+    @Test
+    void draftWithoutLlmDoesNotInventRuleShots() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+
+        BizException error = assertThrows(BizException.class, () -> service.draft(31L, false));
 
         assertEquals("剧本生成服务尚未就绪", error.getMessage());
         assertTrue(storedShots.isEmpty());
@@ -1767,6 +1796,17 @@ class DramaStoryboardServiceTest {
         assertEquals("夏安", resp.getReferences().get(1).getName());
     }
 
+    private void stubLlmDrafts() {
+        DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
+        when(textService.getIfAvailable()).thenReturn(llm);
+        when(llm.draftShots(org.mockito.ArgumentMatchers.anyLong(), any(ScriptDoc.class), any(),
+                org.mockito.ArgumentMatchers.anyInt(), any()))
+                .thenAnswer(invocation -> DramaShotDrafts.fromScript(
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3)));
+    }
+
     private static DramaEpisode ownedEpisode() {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);
@@ -1775,7 +1815,7 @@ class DramaStoryboardServiceTest {
         episode.setEpisodeNumber(1);
         episode.setName("第 1 集");
         episode.setStatus(DramaContract.STATUS_LOCKED);
-        episode.setEngine(DramaContract.ENGINE_RULES);
+        episode.setEngine(DramaContract.ENGINE_PENDING);
         return episode;
     }
 

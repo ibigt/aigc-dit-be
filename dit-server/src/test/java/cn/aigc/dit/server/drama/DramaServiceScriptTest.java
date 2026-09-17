@@ -105,14 +105,14 @@ class DramaServiceScriptTest {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(textService.getIfAvailable()).thenReturn(dramaTextService);
-        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_RULES);
+        when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
         when(dramaTextService.parseScript(21L, "第1场 日 内")).thenReturn(sampleDoc());
 
         DramaScriptImportReq req = new DramaScriptImportReq();
         req.setSourceText("第1场 日 内");
         DramaEpisodeResp resp = service.importSource(31L, req);
 
-        assertEquals(DramaContract.ENGINE_RULES, episode.getEngine());
+        assertEquals(DramaContract.ENGINE_LLM, episode.getEngine());
         assertEquals(DramaContract.STATUS_PENDING_CONFIRM, episode.getStatus());
         assertEquals("幻梦侦探社", episode.getScript().get("title"));
         assertTrue(resp.getTextServiceAvailable());
@@ -240,6 +240,7 @@ class DramaServiceScriptTest {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(textChatGateway.llmAvailable(21L)).thenReturn(true);
         when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
         when(dramaTextService.parseScript(anyLong(), anyString())).thenReturn(sampleDoc());
         when(assetService.extractFromScript(31L, true)).thenReturn(List.of());
@@ -259,6 +260,44 @@ class DramaServiceScriptTest {
         org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).draft(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
         org.mockito.Mockito.verify(analyzeLock).claim(31L);
         org.mockito.Mockito.verify(analyzeLock).release(31L);
+    }
+
+    @Test
+    void analyzeScriptRequiresBoundTextModel() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(textChatGateway.llmAvailable(21L)).thenReturn(false);
+
+        cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq req = new cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq();
+        req.setSourceText("第一场 日 内");
+        BizException error = assertThrows(BizException.class, () -> service.analyzeScript(31L, req));
+
+        assertEquals("当前项目未绑定可用文本模型，无法分析剧本", error.getMessage());
+        org.mockito.Mockito.verify(analyzeLock, org.mockito.Mockito.never()).claim(31L);
+        org.mockito.Mockito.verify(episodeMapper, org.mockito.Mockito.never()).updateById(any(DramaEpisode.class));
+    }
+
+    @Test
+    void analyzeScriptParseFailureKeepsPendingAndRecordsError() {
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(textService.getIfAvailable()).thenReturn(dramaTextService);
+        when(textChatGateway.llmAvailable(21L)).thenReturn(true);
+        when(dramaTextService.parseScript(anyLong(), anyString()))
+                .thenThrow(new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "文本模型超时"));
+
+        cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq req = new cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq();
+        req.setSourceText("第一场 日 内");
+        BizException error = assertThrows(BizException.class, () -> service.analyzeScript(31L, req));
+
+        assertEquals("文本模型超时", error.getMessage());
+        assertNull(episode.getScript());
+        assertEquals(DramaContract.STATUS_NOT_STARTED, episode.getStatus());
+        assertEquals(DramaContract.ENGINE_PENDING, episode.getEngine());
+        org.mockito.Mockito.verify(analyzeLock).claim(31L);
+        org.mockito.Mockito.verify(analyzeLock).fail(31L, "文本模型超时");
+        org.mockito.Mockito.verify(analyzeLock, org.mockito.Mockito.never()).release(31L);
+        org.mockito.Mockito.verify(episodeMapper, org.mockito.Mockito.never()).updateById(any(DramaEpisode.class));
     }
 
     private static DramaEpisode ownedEpisode() {

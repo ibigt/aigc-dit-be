@@ -294,7 +294,11 @@ public class DramaService {
      * 不能包在同一个事务里：文本模型调用可能持续数分钟，分场落库与后台拆镜必须各自短事务提交。
      */
     public DramaScriptAnalyzeResp analyzeScript(Long id, DramaScriptAnalyzeReq req) {
-        requireEpisode(id);
+        DramaEpisode episode = requireEpisode(id);
+        requireTextService();
+        if (!textChatGateway.llmAvailable(episode.getSeriesId())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前项目未绑定可用文本模型，无法分析剧本");
+        }
         String raw = req.getSourceText().trim();
         DramaScriptImportReq importReq = new DramaScriptImportReq();
         importReq.setSourceText(raw);
@@ -303,6 +307,7 @@ public class DramaService {
         if (analyzeLock != null) {
             analyzeLock.claim(id);
         }
+        boolean failed = false;
         try {
             // 分场、资产与分镜均使用项目绑定的文本模型；失败时显式返回诊断，不伪造规则结果。
             ops.importSource(id, importReq);
@@ -316,10 +321,6 @@ public class DramaService {
             result.setAssets(assets);
             result.setStoryboard(storyboard);
             result.setEngine(result.getEpisode().getEngine());
-            if (DramaContract.ENGINE_RULES.equals(result.getEngine())
-                    && textChatGateway.llmAvailable(result.getEpisode().getSeriesId())) {
-                result.getWarnings().add("文本模型调用失败，本次已降级为规则分析；请检查模型标识或服务状态后重试。");
-            }
             result.getWarnings().add("分镜正在后台按剧本自动拆分，打开「分镜」页可查看进度。");
             ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
                     ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
@@ -328,8 +329,14 @@ public class DramaService {
             result.setActualSceneCount(sceneCount);
             result.setActualShotCount(0);
             return result;
-        } finally {
+        } catch (RuntimeException e) {
+            failed = true;
             if (analyzeLock != null) {
+                analyzeLock.fail(id, e.getMessage());
+            }
+            throw e;
+        } finally {
+            if (!failed && analyzeLock != null) {
                 analyzeLock.release(id);
             }
         }
@@ -486,6 +493,7 @@ public class DramaService {
         boolean analyzing = analyzeLock != null && analyzeLock.isActive(episode);
         resp.setAnalyzing(analyzing);
         resp.setAnalyzingAt(analyzing ? episode.getScriptAnalyzingAt() : null);
+        resp.setScriptAnalyzeError(analyzing ? null : episode.getScriptAnalyzeError());
         if (withBody) {
             resp.setSourceText(episode.getSourceText());
             resp.setScript(episode.getScript());
