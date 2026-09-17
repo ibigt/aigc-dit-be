@@ -11,8 +11,10 @@ package cn.aigc.dit.server.drama.text;
  */
 public interface DramaTextService {
 
+    String ENGINE_PENDING = "pending";
     String ENGINE_RULES = "rules";
     String ENGINE_LLM = "llm";
+    String UNBOUND_MESSAGE = "项目未绑定文本模型，请先在基础信息中选择文本模型";
 
     /**
      * 该系列的引擎标识。{@code rules} 仅供旧数据和旧扩展兼容；

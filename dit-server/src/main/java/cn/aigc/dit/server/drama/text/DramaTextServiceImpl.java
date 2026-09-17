@@ -54,7 +54,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         if (Objects.equals(PARSED_SERIES.get(), seriesId) && StringUtils.hasText(PARSED_ENGINE.get())) {
             return PARSED_ENGINE.get();
         }
-        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_RULES;
+        return useLlm(seriesId) ? ENGINE_LLM : ENGINE_PENDING;
     }
 
     @Override
