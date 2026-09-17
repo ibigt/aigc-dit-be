@@ -73,8 +73,9 @@ Only these fields may be copied from a valid model result:
 - `description`;
 - `identityInvariants`;
 - `imagePrompt`;
-- `voiceLock`;
-- validated `stateTag` and `mustSplit` values when they do not change the asset name or type.
+- `voiceLock`.
+
+`name`, `type`, `stateTag`, and `mustSplit` remain exactly as produced by the deterministic skeleton because all four contribute to asset identity and persistence behavior.
 
 Blank model fields never overwrite non-blank skeleton fields. A successfully enriched item is marked `needsHuman=false` only when `description`, `identityInvariants`, and `imagePrompt` are all non-blank. Otherwise it remains `needsHuman=true`.
 
