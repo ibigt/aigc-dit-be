@@ -4,6 +4,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDurations;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,8 +36,18 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /**
+     * 仅在严格解析失败后使用：容忍 MiniMax 等模型夹带的双斜线/块注释与尾逗号。
+     * 合法 JSON 仍走 {@link #MAPPER}，成功路径行为不变。
+     */
+    private static final ObjectMapper LENIENT_MAPPER = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .configure(JsonParser.Feature.ALLOW_COMMENTS, true)
+            .configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true);
+
     private static final int LLM_JSON_RETRIES = 2;
     private static final int ASSET_ENRICHMENT_BATCH_SIZE = 4;
+    static final int MAX_JSON_TOKENS = 32768;
     /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
 
@@ -145,7 +156,10 @@ public class DramaTextServiceImpl implements DramaTextService {
             }
             copyIfText(update.getDescription(), target::setDescription);
             copyIfText(update.getIdentityInvariants(), target::setIdentityInvariants);
-            copyIfText(update.getImagePrompt(), target::setImagePrompt);
+            if (StringUtils.hasText(update.getImagePrompt())
+                    && !DramaAssetDrafts.shouldReplaceImagePrompt(update.getImagePrompt())) {
+                target.setImagePrompt(update.getImagePrompt().strip());
+            }
             copyIfText(update.getVoiceLock(), target::setVoiceLock);
             target.setNeedsHuman(!(StringUtils.hasText(target.getDescription())
                     && StringUtils.hasText(target.getIdentityInvariants())
@@ -225,10 +239,11 @@ public class DramaTextServiceImpl implements DramaTextService {
                               java.util.function.Function<String, T> reader, String what, int maxTokens) {
         String requestUser = user;
         String lastReason = "输出未通过合同校验";
+        int tokens = maxTokens;
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
-            TextChatRequest req = new TextChatRequest(system, requestUser, true, maxTokens);
+            TextChatRequest req = new TextChatRequest(system, requestUser, true, tokens);
             log.info("[drama-text] 模型请求开始 contract={} seriesId={} attempt={} maxTokens={} userLength={}",
-                    what, seriesId, attempt, maxTokens, requestUser == null ? 0 : requestUser.length());
+                    what, seriesId, attempt, tokens, requestUser == null ? 0 : requestUser.length());
             TextChatResult response = gateway.chat(seriesId, req);
             String content = response.getContent();
             T value = reader.apply(content);
@@ -239,14 +254,31 @@ public class DramaTextServiceImpl implements DramaTextService {
                 return value;
             }
             String reason = invalidOutputReason(content, what);
+            if (truncatedByLength(response.getFinishReason())) {
+                reason = "输出被 max_tokens 截断（finish_reason=" + response.getFinishReason() + "）。" + reason;
+                tokens = nextMaxTokens(tokens);
+            }
             lastReason = reason;
-            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={}",
+            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={} nextMaxTokens={}",
                     what, seriesId, attempt, reason, response.getModel(),
-                    response.getFinishReason(), content == null ? 0 : content.length());
+                    response.getFinishReason(), content == null ? 0 : content.length(), tokens);
             requestUser = DramaTextPrompts.repairUser(user, what, reason, content);
         }
         throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
                 "文本模型输出未通过 " + what + " 合同：" + lastReason);
+    }
+
+    static boolean truncatedByLength(String finishReason) {
+        if (!StringUtils.hasText(finishReason)) {
+            return false;
+        }
+        String value = finishReason.trim().toLowerCase();
+        return "length".equals(value) || "max_tokens".equals(value);
+    }
+
+    static int nextMaxTokens(int current) {
+        int safe = Math.max(1, current);
+        return (int) Math.min(MAX_JSON_TOKENS, (long) safe * 2);
     }
 
     /**
@@ -270,7 +302,12 @@ public class DramaTextServiceImpl implements DramaTextService {
             return "未知输出合同 " + what;
         }
         try {
-            Object parsed = MAPPER.readValue(json, type);
+            Object parsed;
+            try {
+                parsed = MAPPER.readValue(json, type);
+            } catch (JsonProcessingException strict) {
+                parsed = LENIENT_MAPPER.readValue(json, type);
+            }
             if (parsed instanceof ScriptDoc doc) {
                 if (doc.getScenes() == null || doc.getScenes().isEmpty()) {
                     return "scenes 缺失或为空";
@@ -315,15 +352,8 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     static ScriptDoc readScript(String content) {
-        String json = extractJsonObject(content);
-        if (json == null) {
-            return null;
-        }
-        try {
-            return normalize(MAPPER.readValue(json, ScriptDoc.class));
-        } catch (JsonProcessingException e) {
-            return null;
-        }
+        ScriptDoc doc = parseJson(content, ScriptDoc.class);
+        return doc == null ? null : normalize(doc);
     }
 
     /** 模型可能包代码围栏或前后带解释文字；取最外层花括号。 */
@@ -335,6 +365,27 @@ public class DramaTextServiceImpl implements DramaTextService {
         int start = text.indexOf('{');
         int end = text.lastIndexOf('}');
         return start >= 0 && end > start ? text.substring(start, end + 1) : null;
+    }
+
+    /**
+     * 先严格解析；失败再容忍注释与尾逗号。不放宽合同字段，也不改写合法 JSON 的语义。
+     */
+    static <T> T parseJson(String content, Class<T> type) {
+        String json = extractJsonObject(content);
+        if (json == null) {
+            return null;
+        }
+        try {
+            return MAPPER.readValue(json, type);
+        } catch (JsonProcessingException strict) {
+            try {
+                T value = LENIENT_MAPPER.readValue(json, type);
+                log.info("[drama-text] JSON 经注释/尾逗号容错解析成功 type={}", type.getSimpleName());
+                return value;
+            } catch (JsonProcessingException ignored) {
+                return null;
+            }
+        }
     }
 
     /**
@@ -401,15 +452,7 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     private static <T> T readList(String content, Class<T> type) {
-        String json = extractJsonObject(content);
-        if (json == null) {
-            return null;
-        }
-        try {
-            return MAPPER.readValue(json, type);
-        } catch (JsonProcessingException e) {
-            return null;
-        }
+        return parseJson(content, type);
     }
 
     static AssetDraftList normalizeAssets(AssetDraftList list) {

@@ -72,6 +72,7 @@ public class DramaAssetService {
                 .orderByAsc(DramaAsset::getType)
                 .orderByAsc(DramaAsset::getId));
         applySucceededQuietly(assets);
+        repairIncompletePrompts(assets, episode.getSeriesId());
         Map<Long, GenTask> tasks = loadTasks(assets);
         return assets.stream()
                 .map(item -> toResp(item, item.getGenTaskId() == null ? null : tasks.get(item.getGenTaskId())))
@@ -135,9 +136,12 @@ public class DramaAssetService {
         asset.setStatus(DramaContract.STATUS_NOT_STARTED);
         asset.setIdentityVersion(0);
         applySave(asset, req, true);
-        if (!StringUtils.hasText(asset.getImagePrompt())) {
-            DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(episode.getSeriesId()).getStyleKey());
-            asset.setImagePrompt(DramaAssetDrafts.buildPrompt(asset.getType(), asset.getName(), style));
+        DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(episode.getSeriesId()).getStyleKey());
+        if (!StringUtils.hasText(asset.getImagePrompt())
+                || DramaAssetDrafts.shouldReplaceImagePrompt(
+                asset.getImagePrompt(), asset.getType(), style.key())) {
+            asset.setImagePrompt(DramaAssetDrafts.buildPrompt(
+                    asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants()));
             asset.setDescription(asset.getImagePrompt());
         }
         ensureUnique(asset, null);
@@ -246,7 +250,7 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         AiModel model = requireBoundImageModel(series);
-        String prompt = resolveImagePrompt(asset);
+        String prompt = withIdentityConstraint(completeImagePrompt(asset, series), asset.getIdentityInvariants());
         if (!StringUtils.hasText(prompt)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先填写提示词");
         }
@@ -303,7 +307,7 @@ public class DramaAssetService {
         if (!StringUtils.hasText(asset.getImageStorageKey())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先上传或生成参考图再锁定");
         }
-        String prompt = resolveImagePrompt(asset);
+        String prompt = completeImagePrompt(asset, requireOwnedSeries(asset.getSeriesId()));
         if (!StringUtils.hasText(prompt)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先填写提示词再锁定");
         }
@@ -377,6 +381,7 @@ public class DramaAssetService {
     }
 
     private void fillEmpty(DramaAsset current, AssetDraftList.AssetDraft draft, String type, String stateTag) {
+        DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(current.getSeriesId()).getStyleKey());
         if (!StringUtils.hasText(current.getDescription()) && StringUtils.hasText(draft.getDescription())) {
             current.setDescription(draft.getDescription().trim());
         }
@@ -384,11 +389,13 @@ public class DramaAssetService {
             current.setIdentityInvariants(draft.getIdentityInvariants().trim());
         }
         if ((!StringUtils.hasText(current.getImagePrompt())
-                || DramaAssetDrafts.shouldReplaceImagePrompt(current.getImagePrompt()))
+                || DramaAssetDrafts.shouldReplaceImagePrompt(
+                current.getImagePrompt(), type, style.key()))
                 && StringUtils.hasText(draft.getImagePrompt())) {
             current.setImagePrompt(draft.getImagePrompt().trim());
             if (!StringUtils.hasText(current.getDescription())
-                    || DramaAssetDrafts.shouldReplaceImagePrompt(current.getDescription())) {
+                    || DramaAssetDrafts.shouldReplaceImagePrompt(
+                    current.getDescription(), type, style.key())) {
                 current.setDescription(current.getImagePrompt());
             }
         }
@@ -430,8 +437,11 @@ public class DramaAssetService {
         }
         if (req.getImagePrompt() != null) {
             asset.setImagePrompt(blankToNull(req.getImagePrompt()));
+            // 清空或改写 imagePrompt 时同步 description，避免 resolveImagePrompt 回落到旧描述。
             if (StringUtils.hasText(asset.getImagePrompt())) {
                 asset.setDescription(asset.getImagePrompt());
+            } else if (!StringUtils.hasText(req.getImagePrompt())) {
+                asset.setDescription(null);
             }
         }
         if (req.getVoiceLock() != null) {
@@ -683,6 +693,52 @@ public class DramaAssetService {
         return type + "\0" + name + "\0" + (StringUtils.hasText(stateTag) ? stateTag : DramaContract.STATE_TAG_BASE);
     }
 
+    private void repairIncompletePrompts(List<DramaAsset> assets, Long seriesId) {
+        if (assets == null || assets.isEmpty()) {
+            return;
+        }
+        DramaSeries series = requireOwnedSeries(seriesId);
+        DramaStyles.Spec style = DramaStyles.require(series.getStyleKey());
+        for (DramaAsset asset : assets) {
+            if (asset == null || DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
+                continue;
+            }
+            if (!DramaAssetDrafts.shouldReplaceImagePrompt(
+                    asset.getImagePrompt(), asset.getType(), style.key())) {
+                continue;
+            }
+            String rebuilt = DramaAssetDrafts.buildPrompt(
+                    asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
+            asset.setImagePrompt(rebuilt);
+            if (!StringUtils.hasText(asset.getDescription())
+                    || DramaAssetDrafts.shouldReplaceImagePrompt(
+                    asset.getDescription(), asset.getType(), style.key())) {
+                asset.setDescription(rebuilt);
+            }
+            assetMapper.updateById(asset);
+        }
+    }
+
+    private String completeImagePrompt(DramaAsset asset, DramaSeries series) {
+        DramaStyles.Spec style = DramaStyles.require(series.getStyleKey());
+        String prompt = resolveImagePrompt(asset);
+        if (!DramaAssetDrafts.shouldReplaceImagePrompt(prompt, asset.getType(), style.key())) {
+            return prompt;
+        }
+        String rebuilt = DramaAssetDrafts.buildPrompt(
+                asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
+        if (StringUtils.hasText(rebuilt) && !rebuilt.equals(prompt)) {
+            asset.setImagePrompt(rebuilt);
+            if (!StringUtils.hasText(asset.getDescription())
+                    || DramaAssetDrafts.shouldReplaceImagePrompt(
+                    asset.getDescription(), asset.getType(), style.key())) {
+                asset.setDescription(rebuilt);
+            }
+            assetMapper.updateById(asset);
+        }
+        return rebuilt;
+    }
+
     static String resolveImagePrompt(DramaAsset asset) {
         if (StringUtils.hasText(asset.getImagePrompt())) {
             return asset.getImagePrompt().trim();
@@ -698,6 +754,18 @@ public class DramaAssetService {
             prompt.append(asset.getIdentityInvariants().trim());
         }
         return prompt.toString();
+    }
+
+    /** 生图时把设定摘要并进 prompt，避免服装/发型只写在摘要里却未进入模型。 */
+    static String withIdentityConstraint(String prompt, String identity) {
+        if (!StringUtils.hasText(prompt) || !StringUtils.hasText(identity)) {
+            return prompt;
+        }
+        String id = identity.trim();
+        if (prompt.contains(id)) {
+            return prompt;
+        }
+        return prompt + "外形与服装必须符合：" + id + "。";
     }
 
     static String trimPrompt(String prompt) {

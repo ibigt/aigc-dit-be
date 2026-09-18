@@ -153,12 +153,13 @@ class DramaAssetServiceTest {
         asset.setImageStorageKey("users/7/assets/luobai.png");
         asset.setImagePrompt("中性背景全身参考图，洛白");
         when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
 
         DramaAssetResp resp = service.lock(9L);
         assertEquals(DramaContract.STATUS_LOCKED, resp.getStatus());
         assertEquals(1, resp.getIdentityVersion());
         assertTrue(resp.getReferenceEligible());
-        verify(assetMapper).updateById(asset);
+        verify(assetMapper, org.mockito.Mockito.atLeastOnce()).updateById(asset);
         verify(storyboardService).invalidateByAsset(31L, 9L);
     }
 
@@ -210,6 +211,8 @@ class DramaAssetServiceTest {
         assertEquals(9L, extraCaptor.getValue().get("assetId"));
         assertEquals(31L, extraCaptor.getValue().get("episodeId"));
         assertEquals(100L, asset.getGenTaskId());
+        assertTrue(reqCaptor.getValue().getPrompt().contains("洛白角色设定图"));
+        assertTrue(reqCaptor.getValue().getPrompt().contains("同一张图内三视图排列"));
     }
 
     @Test
@@ -219,9 +222,39 @@ class DramaAssetServiceTest {
         asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         when(assetMapper.selectList(any())).thenReturn(List.of(asset));
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
 
         List<DramaAssetResp> list = service.listByEpisode(31L);
         assertFalse(list.get(0).getReferenceEligible());
+    }
+
+    @Test
+    void listByEpisodeRepairsIncompleteCharacterPrompt() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setImagePrompt("浅灰背景的角色三视图：正面全身、侧面半身、面部特写");
+        asset.setDescription("浅灰背景的角色三视图：正面全身、侧面半身、面部特写");
+        asset.setIdentityInvariants("男性；青年；锐利眼神；冷峻气质；修长身形");
+        when(assetMapper.selectList(any())).thenReturn(List.of(asset));
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        DramaSeries series = ownedSeries();
+        series.setStyleKey(DramaStyles.LIVE_REALISM);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+
+        List<DramaAssetResp> list = service.listByEpisode(31L);
+        String prompt = list.get(0).getImagePrompt();
+        assertTrue(prompt.contains("洛白角色设定图"));
+        assertTrue(prompt.contains("单独站立"));
+        assertTrue(prompt.contains("固定四格设定拼版"));
+        assertTrue(prompt.contains("半写实 CG 角色设定立绘"));
+        assertTrue(prompt.contains("现代都市常服"));
+        assertTrue(prompt.contains("禁止正面大头照"));
+        assertTrue(!prompt.contains("面部特写"));
+        assertTrue(prompt.contains("浅灰或纯白干净背景"));
+        assertTrue(prompt.contains("高精度二次元写实"));
+        assertTrue(prompt.length() > 80);
+        assertEquals(prompt, asset.getDescription());
+        verify(assetMapper).updateById(asset);
     }
 
     @Test

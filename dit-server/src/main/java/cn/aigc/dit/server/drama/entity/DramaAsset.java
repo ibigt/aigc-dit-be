@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.drama.entity;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -22,8 +23,14 @@ public class DramaAsset {
     private String name;
     private String type;
     private String stateTag;
+
+    /** 允许保存空值，否则清空提示词无法落库，列表会一直读到旧长文案。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String description;
+
     private String identityInvariants;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String imagePrompt;
     private String voiceLock;
     private String voiceReferenceKey;

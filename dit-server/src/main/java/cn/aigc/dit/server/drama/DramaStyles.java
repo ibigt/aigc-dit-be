@@ -36,7 +36,7 @@ public final class DramaStyles {
         register(new Spec(
                 LIVE_REALISM,
                 "真人写实风",
-                "真人写实风，当代都市实拍，现代常服，电影级摄影，自然肤质与真实光影，浅景深，胶片质感，不要古装，不要武侠仙侠，不要卡通漫画线稿",
+                "高精度二次元写实，半写实3D渲染，精致CG质感，3D国漫轻写实厚涂，棚拍柔光，写实皮肤毛发与布料质感，不要卡通平涂线稿",
                 "/drama/styles/live-realism.jpg"));
         register(new Spec(
                 ANIME_WUXIA,

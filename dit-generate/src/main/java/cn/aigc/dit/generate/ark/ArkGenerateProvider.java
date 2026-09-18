@@ -96,17 +96,9 @@ public class ArkGenerateProvider implements GenerateProvider {
                     || images.isEmpty()) {
                 throw e;
             }
-            if ((!videos.isEmpty() || !audios.isEmpty())
-                    && (!videos.isEmpty() || ArkRequestMapper.supportsAudioOnly(request))) {
-                log.warn("Seedance rejected reference images as real person, retrying without images taskId={}",
-                        request.getTaskId());
-                return createTask(request, apiKey, v3Base, GenerateMode.R2V,
-                        null, null, List.of(), videos, audios);
-            }
-            log.warn("Seedance rejected reference images as real person, retrying text-only t2v taskId={}",
+            log.warn("Seedance rejected reference images as real person, failing taskId={}",
                     request.getTaskId());
-            return createTask(request, apiKey, v3Base, GenerateMode.T2V,
-                    null, null, List.of(), List.of(), List.of());
+            throw new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
         }
     }
 

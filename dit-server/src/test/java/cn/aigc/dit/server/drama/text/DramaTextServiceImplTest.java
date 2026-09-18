@@ -205,6 +205,8 @@ class DramaTextServiceImplTest {
         assertTrue(DramaTextPrompts.scriptSystem().contains("每场最多 3 个"));
         assertTrue(DramaTextPrompts.scriptSystem().contains("没有主要道具时返回空数组"));
         assertTrue(DramaTextPrompts.assetSystem().contains("只允许从各场 props 数组引用"));
+        assertTrue(DramaTextPrompts.assetSystem().contains("image_prompt 一律输出空字符串"));
+        assertTrue(DramaTextPrompts.assetSystem().contains("服装款式颜色与鞋履"));
     }
 
     @Test
@@ -229,6 +231,86 @@ class DramaTextServiceImplTest {
                 DramaTextServiceImpl.invalidOutputReason("{\"assets\":[]}", "AssetDraftList"));
         assertEquals("shots 缺失或为空",
                 DramaTextServiceImpl.invalidOutputReason("{\"shots\":[]}", "ShotDraftList"));
+        assertEquals("shots 缺失或为空",
+                DramaTextServiceImpl.invalidOutputReason("""
+                        {
+                          // MiniMax 偶发注释
+                          "shots": [],
+                        }
+                        """, "ShotDraftList"),
+                "注释/尾逗号应能解析，再落到合同空数组诊断");
+    }
+
+    @Test
+    void parseJsonRecoversCommentsAndTrailingCommasWithoutChangingStrictJson() {
+        ScriptDoc strict = DramaTextServiceImpl.parseJson(GOOD_JSON, ScriptDoc.class);
+        assertNotNull(strict);
+        assertEquals("幻梦侦探社", strict.getScenes().get(0).getHeading().split("\\s")[0]);
+
+        ScriptDoc commented = DramaTextServiceImpl.readScript("""
+                {
+                  // chapter notes
+                  "title": "幻梦侦探社",
+                  "scenes": [{
+                    "index": 1,
+                    "heading": "幻梦侦探社 日 内",
+                    "characters": ["洛白"],
+                    "props": [],
+                    "dialogue": [],
+                    "location": "幻梦侦探社",
+                    "action": "风扇转动。 https://example.com/a",
+                  }],
+                }
+                """);
+        assertNotNull(commented);
+        assertEquals("风扇转动。 https://example.com/a", commented.getScenes().get(0).getAction(),
+                "字符串内的 // 不得被当成注释剥掉");
+    }
+
+    @Test
+    void extractAssetsRequests16384TokensForEnrichment() {
+        DramaTextServiceImpl service = boundService();
+        when(gateway.chat(anyLong(), any())).thenReturn(reply("""
+                {"assets":[{"name":"洛白","type":"角色","state_tag":"base",
+                  "description":"青年男性","identity_invariants":"同一张脸","image_prompt":""}]}
+                """));
+        ScriptDoc script = DramaTextServiceImpl.readScript(GOOD_JSON);
+
+        service.extractAssets(BOUND, script);
+
+        ArgumentCaptor<TextChatRequest> sent = ArgumentCaptor.forClass(TextChatRequest.class);
+        verify(gateway).chat(eq(BOUND), sent.capture());
+        assertEquals(16384, sent.getValue().getMaxTokens());
+    }
+
+    @Test
+    void lengthFinishReasonBumpsMaxTokensOnRetry() {
+        DramaTextServiceImpl service = boundService();
+        when(gateway.chat(anyLong(), any()))
+                .thenReturn(TextChatResult.of("{\"assets\":[{\"name\":\"洛白\"", "minimax-m1", "length"))
+                .thenReturn(reply("""
+                        {"assets":[{"name":"洛白","type":"角色","state_tag":"base",
+                          "description":"青年男性","identity_invariants":"同一张脸","image_prompt":"三视图"}]}
+                        """));
+        ScriptDoc script = DramaTextServiceImpl.readScript(GOOD_JSON);
+
+        service.extractAssets(BOUND, script);
+
+        ArgumentCaptor<TextChatRequest> sent = ArgumentCaptor.forClass(TextChatRequest.class);
+        verify(gateway, times(2)).chat(eq(BOUND), sent.capture());
+        assertEquals(16384, sent.getAllValues().get(0).getMaxTokens());
+        assertEquals(32768, sent.getAllValues().get(1).getMaxTokens());
+        assertTrue(sent.getAllValues().get(1).getUser().contains("finish_reason=length"));
+    }
+
+    @Test
+    void truncatedByLengthRecognizesVendorAliases() {
+        assertTrue(DramaTextServiceImpl.truncatedByLength("length"));
+        assertTrue(DramaTextServiceImpl.truncatedByLength("MAX_TOKENS"));
+        assertTrue(!DramaTextServiceImpl.truncatedByLength("stop"));
+        assertEquals(16384, DramaTextServiceImpl.nextMaxTokens(8192));
+        assertEquals(DramaTextServiceImpl.MAX_JSON_TOKENS,
+                DramaTextServiceImpl.nextMaxTokens(DramaTextServiceImpl.MAX_JSON_TOKENS));
     }
 
     @Test

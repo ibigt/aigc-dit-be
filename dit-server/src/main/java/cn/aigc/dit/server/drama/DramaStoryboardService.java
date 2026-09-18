@@ -701,10 +701,7 @@ public class DramaStoryboardService {
         List<DramaAsset> sendRefs = i2v ? List.of() : refs;
         String prompt = effectivePrompt(shot);
         boolean includePrevTailPicture = chainPrev && !StringUtils.hasText(shot.getPromptOverride());
-        if (!i2v && AdapterCatalog.isArk(adapter) && !StringUtils.hasText(shot.getPromptOverride())) {
-            sendRefs = orderRefsForArk(refs);
-            prompt = compileSubmitPrompt(shot, assets, prefix, sendRefs, options, includePrevTailPicture);
-        } else if (includePrevTailPicture) {
+        if (includePrevTailPicture) {
             prompt = compileSubmitPrompt(shot, assets, prefix, sendRefs, options, true);
         } else if (i2v && !StringUtils.hasText(shot.getPromptOverride())) {
             prompt = compileSubmitPrompt(shot, assets, prefix, refs, options, false);
@@ -2041,34 +2038,6 @@ public class DramaStoryboardService {
         return DramaStoryboardCompiler.compile(
                 stylePrefix, active, audioRefs,
                 toShotContent(shot, assets, opts.i2v() ? List.of() : pictured), opts).prompt();
-    }
-
-    /**
-     * 官方 Seedance 报错指向 content[1]，即第一张参考图。角色设定图正脸放第一张最容易被拒，场景/道具先行。
-     */
-    static List<DramaAsset> orderRefsForArk(List<DramaAsset> refs) {
-        List<DramaAsset> scenes = new ArrayList<>();
-        List<DramaAsset> props = new ArrayList<>();
-        List<DramaAsset> rest = new ArrayList<>();
-        if (refs != null) {
-            for (DramaAsset asset : refs) {
-                if (asset == null) {
-                    continue;
-                }
-                if (DramaContract.ASSET_TYPE_SCENE.equals(asset.getType())) {
-                    scenes.add(asset);
-                } else if (DramaContract.ASSET_TYPE_PROP.equals(asset.getType())) {
-                    props.add(asset);
-                } else {
-                    rest.add(asset);
-                }
-            }
-        }
-        List<DramaAsset> ordered = new ArrayList<>(scenes.size() + props.size() + rest.size());
-        ordered.addAll(scenes);
-        ordered.addAll(props);
-        ordered.addAll(rest);
-        return ordered;
     }
 
     private static String stylePrefixOf(DramaSeries series) {

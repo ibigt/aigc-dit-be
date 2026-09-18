@@ -66,8 +66,8 @@ public final class DramaTextPrompts {
                   "type": "角色|场景|道具",
                   "state_tag": "base|dream|costume",
                   "description": "完整人物/场景/道具描述，永不缩写",
-                  "identity_invariants": "青年男性；清冷骨相；黑碎盖；修长；立领长风衣轮廓；锐利眼神",
-                  "image_prompt": "浅灰或纯白背景的角色三视图：正面全身、侧面半身、面部特写",
+                  "identity_invariants": "男性；青年；清冷骨相；黑碎盖；修长；深灰立领长风衣；黑色长裤；皮鞋；锐利眼神",
+                  "image_prompt": "",
                   "voice_lock": "洛白固定声音，没有就留空",
                   "must_split": false
                 }
@@ -81,13 +81,13 @@ public final class DramaTextPrompts {
               state_tag 给 dream 或 costume，must_split 给 true，
               identity_invariants 写明「与本体同一张脸和发型；禁止写成另一个人」。
             - 状态条目绝不能并进本体 description，本体 description 里不得出现入梦/湿身字样。
-            - 角色 image_prompt：中性浅灰或纯白背景的三视图参考图（正面全身、侧面半身、面部特写）；
-              不要写剧情动作、首次出场、分镜格子、设定表排版或其它人物。
-            - 场景 image_prompt：无人场景概念图，写空间陈设、材质与光线；不要人物、不要整场剧情动作。
-            - 道具 image_prompt：只写该物件的外形、材质、磨损和标志性细节；静物产品级特写、纯色干净背景。
-              不要写剧情用途、场面动作、人物名字或台词。
+            - 角色 / 场景 / 道具的 image_prompt 一律输出空字符串，由服务端按项目视觉风格生成完整设定图长句。
+              禁止自行填写「浅灰背景的角色三视图」或任何短句。
+            - 角色 identity_invariants 必须能把该人和其他角色区分开，写清：性别、年龄段、发型、脸型五官、身材、
+              服装款式颜色与鞋履。三人不得共用同一套外貌；不要把男性写成女性，不要把中年写成少女。
+            - 场景不要人物、不要整场剧情动作。道具只写外形、材质、磨损和标志性细节，不要剧情用途或人物名字。
             - description 与 identity_invariants 不得互相引用，不得写「同上」。
-            - 长度上限：description 不超过 100 字，identity_invariants 不超过 80 字，image_prompt 不超过 80 字。
+            - 长度上限：description 不超过 100 字，identity_invariants 不超过 80 字；image_prompt 一律留空。
             """;
 
     private static final String SCHEMA_SHOTS = """
@@ -158,7 +158,8 @@ public final class DramaTextPrompts {
     public static String assetEnrichmentUser(String scriptJson, String skeletonJson) {
         return "为给定的确定性资产骨架补充描述字段，输出 AssetDraftList。\n"
                 + "只能返回骨架中已有的资产，禁止新增、删除、改名或改类型；name、type、state_tag、must_split 必须逐字保持不变。\n"
-                + "只补充 description、identity_invariants、image_prompt、voice_lock；缺少信息时返回空字符串。\n\n"
+                + "只补充 description、identity_invariants、voice_lock；image_prompt 一律输出空字符串，由服务端按项目风格生成完整设定图。\n"
+                + "缺少信息时返回空字符串。\n\n"
                 + "锁定剧本：\n" + scriptJson + "\n\n确定性资产骨架：\n" + skeletonJson;
     }
 

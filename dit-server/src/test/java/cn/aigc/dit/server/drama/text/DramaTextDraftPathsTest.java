@@ -91,11 +91,10 @@ class DramaTextDraftPathsTest {
 
     @Test
     void dreamStateIsSplitEvenWhenModelForgetStateTag() {
-        DramaTextServiceImpl service = boundService();
-        when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of(ASSETS_JSON, "m", "stop"));
+        AssetDraftList list = DramaTextServiceImpl.normalizeAssets(
+                DramaTextServiceImpl.parseJson(ASSETS_JSON, AssetDraftList.class));
 
-        List<AssetDraftList.AssetDraft> assets = service.extractAssets(BOUND, oneScene()).getAssets();
-
+        List<AssetDraftList.AssetDraft> assets = list.getAssets();
         AssetDraftList.AssetDraft dream = named(assets, "洛白·入梦");
         assertEquals(DramaContract.STATE_TAG_DREAM, dream.getStateTag());
         assertTrue(dream.getMustSplit());
@@ -105,11 +104,10 @@ class DramaTextDraftPathsTest {
 
     @Test
     void duplicateAndUnnamedAssetsAreDroppedAndBlanksMarkedNeedsHuman() {
-        DramaTextServiceImpl service = boundService();
-        when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of(ASSETS_JSON, "m", "stop"));
+        AssetDraftList list = DramaTextServiceImpl.normalizeAssets(
+                DramaTextServiceImpl.parseJson(ASSETS_JSON, AssetDraftList.class));
 
-        List<AssetDraftList.AssetDraft> assets = service.extractAssets(BOUND, oneScene()).getAssets();
-
+        List<AssetDraftList.AssetDraft> assets = list.getAssets();
         assertEquals(4, assets.size(), "重复的洛白与无名条目都要丢掉");
         assertTrue(assets.stream().noneMatch(item -> "  ".equals(item.getName())));
         assertTrue(named(assets, "夏安").getNeedsHuman(), "identity_invariants 为空必须标 needs_human");
@@ -188,6 +186,33 @@ class DramaTextDraftPathsTest {
                 .stream().map(ShotDraftList.ShotDraft::getTitle).toList();
         assertEquals(List.of("前场第一", "后场先出"), titles,
                 "同场且总时长不超过 15 秒的前两镜应合并");
+    }
+
+    @Test
+    void shotDraftAcceptsMinimaxStyleCommentsAndTrailingCommas() {
+        DramaTextServiceImpl service = boundService();
+        when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("""
+                {
+                  // MiniMax-M3 sometimes emits non-standard comments
+                  "shots": [
+                    {
+                      "title": "侦探社开场",
+                      "duration_sec": 7,
+                      "character_names": ["洛白"],
+                      "prop_names": ["古铜怀表"],
+                    },
+                  ],
+                }
+                """, "MiniMax-M3", "stop"));
+
+        List<ShotDraftList.ShotDraft> shots = service
+                .draftShots(BOUND, oneScene(), List.of("洛白", "古铜怀表"))
+                .getShots();
+
+        assertEquals(1, shots.size());
+        assertEquals("侦探社开场", shots.get(0).getTitle());
+        assertEquals(7, shots.get(0).getDurationSec());
+        assertEquals(List.of("洛白"), shots.get(0).getCharacterNames());
     }
 
     @Test

@@ -183,37 +183,28 @@ class ArkGenerateProviderTest {
     }
 
     @Test
-    void submitR2vRetriesT2vWhenReferenceLooksLikeRealPerson() throws Exception {
+    void submitR2vFailsWhenReferenceLooksLikeRealPerson() {
         http.postError = new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
-        http.postBody = """
-                {"id":"cgt-t2v-fallback","status":"queued"}
-                """;
         storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
 
-        SubmitResult submitted = provider.submit(
-                video("r2v").setReferences(List.of(new ReferenceAsset("image", "users/8/assets/a.png"))));
-        assertEquals("cgt-t2v-fallback", submitted.getJobId());
-        assertEquals(2, http.postCount);
-        JsonNode body = mapper.readTree(http.lastJson);
-        assertEquals(1, body.get("content").size());
-        assertEquals("text", body.get("content").get(0).get("type").asText());
+        BizException error = org.junit.jupiter.api.Assertions.assertThrows(BizException.class, () -> provider.submit(
+                video("r2v").setReferences(List.of(new ReferenceAsset("image", "users/8/assets/a.png")))));
+        assertEquals(ArkErrors.REAL_PERSON_MESSAGE, error.getMessage());
+        assertEquals(1, http.postCount);
     }
 
     @Test
-    void realPersonFallbackKeepsSeedance25AudioReference() throws Exception {
+    void submitR2vFailsRealPersonEvenWithAudioReference() {
         http.postError = new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
-        http.postBody = "{\"id\":\"cgt-audio-fallback\",\"status\":\"queued\"}";
         storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
         storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
 
-        provider.submit(video("r2v").setReferences(List.of(
-                new ReferenceAsset("image", "users/8/assets/a.png"),
-                new ReferenceAsset("audio", "users/8/assets/voice.wav"))));
-
-        JsonNode content = mapper.readTree(http.lastJson).get("content");
-        assertEquals(2, content.size());
-        assertEquals("text", content.get(0).get("type").asText());
-        assertEquals("audio_url", content.get(1).get("type").asText());
+        BizException error = org.junit.jupiter.api.Assertions.assertThrows(BizException.class, () -> provider.submit(
+                video("r2v").setReferences(List.of(
+                        new ReferenceAsset("image", "users/8/assets/a.png"),
+                        new ReferenceAsset("audio", "users/8/assets/voice.wav")))));
+        assertEquals(ArkErrors.REAL_PERSON_MESSAGE, error.getMessage());
+        assertEquals(1, http.postCount);
     }
 
     @Test
