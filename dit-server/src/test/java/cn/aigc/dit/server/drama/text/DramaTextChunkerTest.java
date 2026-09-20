@@ -52,9 +52,45 @@ class DramaTextChunkerTest {
     }
 
     @Test
-    void noSceneMarkersKeepsWholeRawEvenWhenLong() {
-        String raw = "没有场标记的长散文".repeat(500);
+    void noSceneMarkersKeepsWholeRawWhenUnderBudget() {
+        String raw = "没有场标记的短散文";
         assertEquals(1, DramaTextChunker.packRawChunks(raw, 100).size());
+    }
+
+    @Test
+    void noSceneMarkersSplitsWhenOverBudget() {
+        String raw = "没有场标记的长散文".repeat(500);
+        assertTrue(DramaTextChunker.packRawChunks(raw, 100).size() >= 2,
+                "无场标记但超预算时应预切，避免整本一次输出");
+    }
+
+    @Test
+    void afterTruncationSplitsMarkedScenesOnePerChunk() {
+        String raw = """
+                标题
+
+                第一场 甲 日 内
+                甲：一。
+
+                第二场 乙 日 内
+                乙：二。
+
+                第三场 丙 日 内
+                丙：三。
+                """;
+        List<String> finer = DramaTextChunker.packRawChunksAfterTruncation(raw);
+        assertEquals(3, finer.size(), "截断后应按场细拆，每场一片");
+        assertTrue(finer.get(0).contains("第一场"));
+        assertTrue(finer.get(2).contains("第三场"));
+    }
+
+    @Test
+    void afterTruncationSplitsUnmarkedLongRawByParagraphBudget() {
+        String raw = ("段落内容很多字".repeat(80) + "\n\n").repeat(4);
+        assertTrue(DramaTextChunker.packRawChunks(raw).size() >= 1);
+        List<String> finer = DramaTextChunker.packRawChunksAfterTruncation(raw);
+        assertTrue(finer.size() >= 2, "无场标记长文截断后应按段落预算切开");
+        assertTrue(finer.stream().allMatch(part -> !part.isBlank()));
     }
 
     @Test

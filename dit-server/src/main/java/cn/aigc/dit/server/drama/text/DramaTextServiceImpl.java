@@ -300,29 +300,49 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         log.info("[drama-text] 分场分片 seriesId={} chunks={} rawLength={}",
                 seriesId, chunks.size(), raw == null ? 0 : raw.length());
+        return mergeParsedChunks(seriesId, chunks);
+    }
+
+    private ScriptDoc mergeParsedChunks(long seriesId, List<String> chunks) {
         ScriptDoc merged = new ScriptDoc();
         List<ScriptDoc.Scene> scenes = new ArrayList<>();
+        int total = Math.max(1, chunks.size());
+        int failed = 0;
+        String lastError = null;
         for (int i = 0; i < chunks.size(); i++) {
             int chunkIndex = i + 1;
-            ScriptDoc part = parseRawChunk(seriesId, chunks.get(i), chunkIndex, chunks.size());
-            if (chunkIndex == 1) {
-                merged.setTitle(part.getTitle());
-                merged.setLogline(part.getLogline());
-                merged.setStylePrefix(part.getStylePrefix());
+            try {
+                ScriptDoc part = parseRawChunk(seriesId, chunks.get(i), chunkIndex, total);
+                if (scenes.isEmpty()) {
+                    merged.setTitle(part.getTitle());
+                    merged.setLogline(part.getLogline());
+                    merged.setStylePrefix(part.getStylePrefix());
+                }
+                scenes.addAll(safe(part.getScenes()));
+            } catch (RuntimeException e) {
+                failed++;
+                lastError = e.getMessage();
+                log.warn("[drama-text] 分场分片失败已跳过 seriesId={} chunk={}/{} error={}",
+                        seriesId, chunkIndex, total, e.getMessage());
             }
-            scenes.addAll(safe(part.getScenes()));
         }
         merged.setScenes(scenes);
         ScriptDoc normalized = normalize(merged);
         if (normalized == null) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                    "文本模型输出未通过 ScriptDoc 合同：分片合并后 scenes 为空");
+                    "文本模型输出未通过 ScriptDoc 合同："
+                            + (lastError != null ? lastError : "分片合并后 scenes 为空"));
+        }
+        if (failed > 0) {
+            log.warn("[drama-text] 分场部分分片失败 seriesId={} failedChunks={} keptScenes={}",
+                    seriesId, failed, normalized.getScenes().size());
         }
         return normalized;
     }
 
     /**
-     * 解析一片原文；若被 max_tokens 截断则按场标记缩片重跑，禁止把残缺 JSON 塞进 repair。
+     * 解析一片原文。截断或合同失败且仍可细拆时再切；禁止把残缺大输出塞进 length-repair。
+     * 仅影响分场；拆镜路径不经过此处。
      */
     private ScriptDoc parseRawChunk(long seriesId, String raw, int chunkIndex, int chunkTotal) {
         String user = chunkTotal <= 1
@@ -335,33 +355,23 @@ public class DramaTextServiceImpl implements DramaTextService {
                     DramaTextServiceImpl::readScript, "ScriptDoc", 16384,
                     TruncationPolicy.BUMP_ONLY_NO_REPAIR);
         } catch (TruncatedOutputException truncated) {
-            List<String> segments = ScriptParser.splitRawSegments(raw);
-            if (segments.size() <= 1) {
-                throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                        "文本模型输出未通过 ScriptDoc 合同：" + truncated.getMessage());
-            }
-            int mid = Math.max(1, segments.size() / 2);
-            log.warn("[drama-text] 分场截断后缩片重跑 seriesId={} chunk={}/{} segments={} -> {}+{}",
-                    seriesId, chunkIndex, chunkTotal, segments.size(), mid, segments.size() - mid);
-            ScriptDoc left = parseRawChunk(seriesId, String.join("\n\n", segments.subList(0, mid)),
-                    chunkIndex, chunkTotal);
-            ScriptDoc right = parseRawChunk(seriesId, String.join("\n\n", segments.subList(mid, segments.size())),
-                    chunkIndex, chunkTotal);
-            ScriptDoc merged = new ScriptDoc();
-            merged.setTitle(left.getTitle());
-            merged.setLogline(left.getLogline());
-            merged.setStylePrefix(left.getStylePrefix());
-            List<ScriptDoc.Scene> scenes = new ArrayList<>();
-            scenes.addAll(safe(left.getScenes()));
-            scenes.addAll(safe(right.getScenes()));
-            merged.setScenes(scenes);
-            ScriptDoc normalized = normalize(merged);
-            if (normalized == null) {
-                throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
-                        "文本模型输出未通过 ScriptDoc 合同：缩片合并后 scenes 为空");
-            }
-            return normalized;
+            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, truncated.getMessage());
+        } catch (BizException contractFailed) {
+            // MiniMax 常见：finish_reason=stop 但 JSON 非法/空 scenes，同样尝试细拆。
+            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, contractFailed.getMessage());
         }
+    }
+
+    private ScriptDoc resplitParseChunk(
+            long seriesId, String raw, int chunkIndex, int chunkTotal, String reason) {
+        List<String> finer = DramaTextChunker.packRawChunksAfterTruncation(raw);
+        if (finer.size() <= 1) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    reason == null ? "分场输出未通过合同" : reason);
+        }
+        log.warn("[drama-text] 分场失败后细拆重跑 seriesId={} chunk={}/{} length={} -> subChunks={} reason={}",
+                seriesId, chunkIndex, chunkTotal, raw == null ? 0 : raw.length(), finer.size(), reason);
+        return mergeParsedChunks(seriesId, finer);
     }
 
     private ShotDraftList llmDraftShots(
@@ -583,6 +593,11 @@ public class DramaTextServiceImpl implements DramaTextService {
                     continue;
                 }
                 throw new TruncatedOutputException(reason);
+            }
+            if (policy == TruncationPolicy.BUMP_ONLY_NO_REPAIR) {
+                // 禁止把 MiniMax 大段非法 JSON 塞进 repair（会二次撑爆/截断）；原任务再试一次。
+                requestUser = user;
+                continue;
             }
             if (truncated) {
                 tokens = nextMaxTokens(tokens);

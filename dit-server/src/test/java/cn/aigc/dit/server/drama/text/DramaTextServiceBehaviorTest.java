@@ -25,7 +25,7 @@ class DramaTextServiceBehaviorTest {
             """;
 
     @Test
-    void invalidContractRetryIncludesConcreteRepairFeedback() {
+    void invalidContractRetryReplaysOriginalTaskWithoutStuffingBrokenOutput() {
         RecordingGateway gateway = new RecordingGateway(
                 TextChatResult.of("不是 JSON", "portable-model", "stop"),
                 TextChatResult.of(GOOD_JSON, "portable-model", "stop"));
@@ -35,11 +35,9 @@ class DramaTextServiceBehaviorTest {
 
         assertEquals(1, result.getScenes().size());
         assertEquals(2, gateway.users.size());
-        String repair = gateway.users.get(1);
-        assertTrue(repair.contains("返回内容中没有完整 JSON 对象"));
-        assertTrue(repair.contains("不是 JSON"));
-        assertTrue(repair.contains("ScriptDoc"));
-        assertTrue(!repair.equals(gateway.users.get(0)), "第二次请求不能原样重放第一次请求");
+        assertEquals(gateway.users.get(0), gateway.users.get(1),
+                "分场 BUMP_ONLY：合同失败应重放原任务，禁止把残缺大输出塞进 repair");
+        assertTrue(!gateway.users.get(1).contains("上一次结构化输出"));
     }
 
     @Test
@@ -171,13 +169,18 @@ class DramaTextServiceBehaviorTest {
         assertTrue(DramaTextChunker.packRawChunks(raw.toString()).size() >= 2);
 
         RecordingGateway gateway = new RecordingGateway((user) -> {
-            if (user != null && user.contains("上一次结构化输出")) {
-                return TextChatResult.of(sceneJson(2, "地点2"), "portable-model", "stop");
-            }
-            if (user != null && user.contains("第 1/") && user.contains("片段")) {
+            // 仅第一大片连续失败；细拆或后续片应能出 scenes。
+            if (user != null && user.contains("第 1/") && user.contains("片段")
+                    && user.contains("地点1") && user.contains("地点2")) {
                 return TextChatResult.of("不是 JSON", "portable-model", "stop");
             }
-            return TextChatResult.of(sceneJson(4, "地点4"), "portable-model", "stop");
+            if (user != null && user.contains("地点1")) {
+                return TextChatResult.of(sceneJson(1, "地点1"), "portable-model", "stop");
+            }
+            if (user != null && user.contains("地点2")) {
+                return TextChatResult.of(sceneJson(1, "地点2"), "portable-model", "stop");
+            }
+            return TextChatResult.of(sceneJson(1, "地点4"), "portable-model", "stop");
         });
         DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
 
@@ -185,9 +188,42 @@ class DramaTextServiceBehaviorTest {
 
         assertTrue(doc.getScenes().size() >= 2);
         assertTrue(gateway.users.stream().anyMatch(u -> u.contains("片段")));
-        long repairs = gateway.users.stream().filter(u -> u.contains("上一次结构化输出")).count();
-        assertEquals(1, repairs, "只应重试坏片，不应整本原样重放");
-        assertTrue(gateway.users.size() >= 3, "至少：坏片首次 + 坏片修复 + 后续片");
+        assertTrue(gateway.users.stream().noneMatch(u -> u.contains("上一次结构化输出")),
+                "分场不应再把残缺输出塞进 repair");
+        assertTrue(gateway.users.size() >= 3, "坏片重试/细拆 + 后续片");
+    }
+
+    @Test
+    void parseScriptResplitsBySceneAfterMaxTokensTruncation() {
+        String raw = """
+                标题
+
+                第一场 地点1 日 内
+                洛白：甲。
+
+                第二场 地点2 日 内
+                夏安：乙。
+                """;
+        assertEquals(1, DramaTextChunker.packRawChunks(raw).size(), "短多场首次仍单次请求");
+
+        RecordingGateway gateway = new RecordingGateway((user) -> {
+            // 首次整本请求被截断；细拆后的片段请求成功。
+            if (user != null && user.contains("片段")) {
+                if (user.contains("地点1") || user.contains("第一场")) {
+                    return TextChatResult.of(sceneJson(1, "地点1"), "portable-model", "stop");
+                }
+                return TextChatResult.of(sceneJson(1, "地点2"), "portable-model", "stop");
+            }
+            return TextChatResult.of("{\"title\":\"残\",\"scenes\":[{\"index\":1,\"heading\":\"残",
+                    "portable-model", "length");
+        });
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ScriptDoc doc = service.parseScript(SERIES_ID, raw);
+
+        assertTrue(doc.getScenes().size() >= 2);
+        assertTrue(gateway.users.stream().anyMatch(u -> u.contains("片段")));
+        assertTrue(gateway.users.size() >= 3, "整本截断 bump 后细拆至少两片子请求");
     }
 
     @Test

@@ -22,6 +22,11 @@ public final class DramaTextChunker {
     public static final int CHAR_BUDGET = 5000;
 
     /**
+     * 分场截断后细拆时，无场标记长文的切段预算（仅失败重试路径使用）。
+     */
+    public static final int CHAR_BUDGET_AFTER_TRUNCATION = 1800;
+
+    /**
      * 已废弃强制按场数切分：短剧本多场标记不应为「稳」而付出 N 次串行 LLM。
      * 保留常量供测试/兼容调用，{@link #packRawChunks(String)} 不再使用强制场数阈值。
      */
@@ -60,7 +65,9 @@ public final class DramaTextChunker {
         int maxPer = Math.max(1, maxScenesPerChunk);
         List<String> segments = ScriptParser.splitRawSegments(text);
         if (segments.size() <= 1) {
-            return List.of(text);
+            // 无场标记时：超预算按段落/长度预切，避免 MiniMax 整本一次输出必炸；
+            // 未超预算仍单片，不影响短剧本与正常模型速度。
+            return splitOversizedUnmarked(text, limit);
         }
         if (text.length() <= limit && segments.size() < forceAt) {
             return List.of(text);
@@ -71,6 +78,63 @@ public final class DramaTextChunker {
             chunks.add(String.join("\n\n", pack));
         }
         return chunks;
+    }
+
+    /**
+     * 分场被 max_tokens 截断后的细拆：有场标记则每场一片；无标记则按段落/长度切。
+     * 仅失败重试调用，不影响正常模型的首次打包。
+     */
+    public static List<String> packRawChunksAfterTruncation(String raw) {
+        String text = raw == null ? "" : raw;
+        List<String> segments = ScriptParser.splitRawSegments(text);
+        if (segments.size() > 1) {
+            return List.copyOf(segments);
+        }
+        int budget = Math.min(CHAR_BUDGET_AFTER_TRUNCATION, Math.max(800, text.length() / 2));
+        return splitOversizedUnmarked(text, budget);
+    }
+
+    /**
+     * 无场标记长文：优先空行切段，仍过大再硬切。
+     */
+    static List<String> splitOversizedUnmarked(String raw, int budget) {
+        String text = raw == null ? "" : raw;
+        int limit = Math.max(1, budget);
+        if (text.length() <= limit) {
+            return List.of(text);
+        }
+        String[] paragraphs = text.split("\\n\\s*\\n");
+        if (paragraphs.length <= 1) {
+            List<String> hard = new ArrayList<>();
+            for (int i = 0; i < text.length(); i += limit) {
+                hard.add(text.substring(i, Math.min(text.length(), i + limit)));
+            }
+            return hard;
+        }
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String paragraph : paragraphs) {
+            String piece = paragraph == null ? "" : paragraph.strip();
+            if (piece.isEmpty()) {
+                continue;
+            }
+            if (current.length() > 0 && current.length() + piece.length() + 2 > limit) {
+                chunks.add(current.toString());
+                current = new StringBuilder();
+            }
+            if (current.length() > 0) {
+                current.append("\n\n");
+            }
+            current.append(piece);
+            if (current.length() >= limit) {
+                chunks.add(current.toString());
+                current = new StringBuilder();
+            }
+        }
+        if (current.length() > 0) {
+            chunks.add(current.toString());
+        }
+        return chunks.isEmpty() ? List.of(text) : chunks;
     }
 
     /**
