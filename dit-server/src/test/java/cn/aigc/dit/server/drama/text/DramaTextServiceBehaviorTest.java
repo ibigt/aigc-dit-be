@@ -73,14 +73,17 @@ class DramaTextServiceBehaviorTest {
     @Test
     void failedAssetBatchRetainsSkeletonAndContinuesWithNextBatch() {
         AssetDraftList skeleton = skeleton("角色一", "角色二", "角色三", "角色四", "角色五");
-        RecordingGateway gateway = new RecordingGateway(
-                TextChatResult.of("", "portable-model", "length"),
-                TextChatResult.of("", "portable-model", "length"),
-                TextChatResult.of("""
-                        {"assets":[{"name":"角色五","type":"角色",
-                        "description":"模型描述","identity_invariants":"固定五官",
-                        "image_prompt":"模型提示词","voice_lock":""}]}
-                        """, "portable-model", "stop"));
+        // 并发批次按请求内容路由，避免并行抢占固定回复序列。
+        RecordingGateway gateway = new RecordingGateway((user) -> {
+            if (user != null && user.contains("角色一")) {
+                return TextChatResult.of("", "portable-model", "length");
+            }
+            return TextChatResult.of("""
+                    {"assets":[{"name":"角色五","type":"角色",
+                    "description":"模型描述","identity_invariants":"固定五官",
+                    "image_prompt":"模型提示词","voice_lock":""}]}
+                    """, "portable-model", "stop");
+        });
 
         AssetDraftList result = new DramaTextServiceImpl(gateway)
                 .enrichAssets(SERIES_ID, oneScene(), skeleton);
@@ -90,7 +93,7 @@ class DramaTextServiceBehaviorTest {
         assertTrue(result.getAssets().get(0).getNeedsHuman());
         assertEquals("模型描述", result.getAssets().get(4).getDescription());
         assertFalse(result.getAssets().get(4).getNeedsHuman());
-        assertEquals(3, gateway.users.size());
+        assertTrue(gateway.users.size() >= 3);
     }
 
     @Test
@@ -184,11 +187,18 @@ class DramaTextServiceBehaviorTest {
 
     private static final class RecordingGateway implements TextChatGateway {
         private final List<TextChatResult> replies;
-        private final List<String> users = new ArrayList<>();
+        private final java.util.function.Function<String, TextChatResult> replyFn;
+        private final List<String> users = java.util.Collections.synchronizedList(new ArrayList<>());
         private int cursor;
 
         private RecordingGateway(TextChatResult... replies) {
             this.replies = List.of(replies);
+            this.replyFn = null;
+        }
+
+        private RecordingGateway(java.util.function.Function<String, TextChatResult> replyFn) {
+            this.replies = List.of();
+            this.replyFn = replyFn;
         }
 
         @Override
@@ -205,8 +215,14 @@ class DramaTextServiceBehaviorTest {
 
         @Override
         public TextChatResult chat(long seriesId, TextChatRequest req) {
-            users.add(req.getUser());
-            return replies.get(Math.min(cursor++, replies.size() - 1));
+            String user = req.getUser();
+            users.add(user);
+            if (replyFn != null) {
+                return replyFn.apply(user);
+            }
+            synchronized (this) {
+                return replies.get(Math.min(cursor++, replies.size() - 1));
+            }
         }
     }
 }

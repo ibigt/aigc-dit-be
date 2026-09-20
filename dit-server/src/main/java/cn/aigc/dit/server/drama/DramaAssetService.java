@@ -382,10 +382,17 @@ public class DramaAssetService {
 
     private void fillEmpty(DramaAsset current, AssetDraftList.AssetDraft draft, String type, String stateTag) {
         DramaStyles.Spec style = DramaStyles.require(requireOwnedSeries(current.getSeriesId()).getStyleKey());
-        if (!StringUtils.hasText(current.getDescription()) && StringUtils.hasText(draft.getDescription())) {
+        // 异步增强会再次 upsert：允许用 LLM 描述覆盖确定性骨架模板，不覆盖用户手改长文。
+        if ((!StringUtils.hasText(current.getDescription())
+                || DramaAssetDrafts.shouldReplaceImagePrompt(
+                current.getDescription(), type, style.key()))
+                && StringUtils.hasText(draft.getDescription())) {
             current.setDescription(draft.getDescription().trim());
         }
-        if (!StringUtils.hasText(current.getIdentityInvariants()) && StringUtils.hasText(draft.getIdentityInvariants())) {
+        if ((!StringUtils.hasText(current.getIdentityInvariants())
+                || DramaAssetDrafts.shouldReplaceImagePrompt(
+                current.getIdentityInvariants(), type, style.key()))
+                && StringUtils.hasText(draft.getIdentityInvariants())) {
             current.setIdentityInvariants(draft.getIdentityInvariants().trim());
         }
         if ((!StringUtils.hasText(current.getImagePrompt())

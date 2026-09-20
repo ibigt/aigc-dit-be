@@ -22,6 +22,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 剧本理解层实现。分场、资产与分镜均使用系列绑定的文本模型；
@@ -47,6 +52,8 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     private static final int LLM_JSON_RETRIES = 2;
     private static final int ASSET_ENRICHMENT_BATCH_SIZE = 4;
+    /** 资产批次有限并发，墙钟近似降为 ceil(N/batch)/concurrency。 */
+    private static final int ASSET_ENRICHMENT_CONCURRENCY = 2;
     static final int MAX_JSON_TOKENS = 32768;
     /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
@@ -116,23 +123,64 @@ public class DramaTextServiceImpl implements DramaTextService {
             return skeleton;
         }
         List<AssetDraftList.AssetDraft> assets = skeleton.getAssets();
+        List<int[]> ranges = new ArrayList<>();
         for (int from = 0; from < assets.size(); from += ASSET_ENRICHMENT_BATCH_SIZE) {
-            int to = Math.min(from + ASSET_ENRICHMENT_BATCH_SIZE, assets.size());
-            AssetDraftList batch = new AssetDraftList();
-            batch.setAssets(new ArrayList<>(assets.subList(from, to)));
+            ranges.add(new int[]{from, Math.min(from + ASSET_ENRICHMENT_BATCH_SIZE, assets.size())});
+        }
+        if (ranges.size() == 1) {
+            enrichAssetBatch(seriesId, script, assets, ranges.get(0)[0], ranges.get(0)[1]);
+        } else {
+            int workers = Math.min(ASSET_ENRICHMENT_CONCURRENCY, ranges.size());
+            ExecutorService pool = Executors.newFixedThreadPool(workers);
             try {
-                AssetDraftList enriched = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
-                        DramaTextPrompts.assetEnrichmentUser(toJson(script), toJson(batch)),
-                        content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 16384);
-                mergeAssetEnrichment(batch, enriched);
-            } catch (RuntimeException e) {
-                log.warn("[drama-text] 资产批次增强失败 seriesId={} from={} to={} error={}",
-                        seriesId, from, to, e.getMessage());
+                List<Future<?>> futures = new ArrayList<>(ranges.size());
+                for (int[] range : ranges) {
+                    int from = range[0];
+                    int to = range[1];
+                    futures.add(pool.submit(() -> enrichAssetBatch(seriesId, script, assets, from, to)));
+                }
+                for (Future<?> future : futures) {
+                    try {
+                        future.get();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("[drama-text] 资产增强并发被中断 seriesId={}", seriesId);
+                        break;
+                    } catch (ExecutionException e) {
+                        log.warn("[drama-text] 资产增强并发任务异常 seriesId={} error={}",
+                                seriesId, e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+                    }
+                }
+            } finally {
+                pool.shutdown();
+                try {
+                    if (!pool.awaitTermination(2, TimeUnit.MINUTES)) {
+                        pool.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    pool.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
             }
         }
         log.info("[drama-text] 资产增强完成 seriesId={} assets={} elapsedMs={}",
                 seriesId, assets.size(), elapsedMs(started));
         return skeleton;
+    }
+
+    private void enrichAssetBatch(
+            long seriesId, ScriptDoc script, List<AssetDraftList.AssetDraft> assets, int from, int to) {
+        AssetDraftList batch = new AssetDraftList();
+        batch.setAssets(new ArrayList<>(assets.subList(from, to)));
+        try {
+            AssetDraftList enriched = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
+                    DramaTextPrompts.assetEnrichmentUser(toJson(script), toJson(batch)),
+                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 16384);
+            mergeAssetEnrichment(batch, enriched);
+        } catch (RuntimeException e) {
+            log.warn("[drama-text] 资产批次增强失败 seriesId={} from={} to={} error={}",
+                    seriesId, from, to, e.getMessage());
+        }
     }
 
     static void mergeAssetEnrichment(AssetDraftList skeleton, AssetDraftList enriched) {

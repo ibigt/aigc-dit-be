@@ -162,7 +162,17 @@ public class DramaStoryboardService {
      * 分析结束后立刻占锁，让分镜页能显示「正在自动拆镜中」，真正的 LLM 拆镜在后台跑。
      */
     public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec) {
-        log.info("[drama] 自动分镜排队 episodeId={} episodeBudgetSec={}", episodeId, episodeBudgetSec);
+        enqueueAutoDraft(episodeId, episodeBudgetSec, null);
+    }
+
+    /**
+     * 与 {@link #enqueueAutoDraft(Long, Integer)} 相同：同步占拆镜锁，后台再跑。
+     * {@code beforeDraft} 在真正拆镜前执行（如资产 LLM 增强），失败只打日志不阻断拆镜。
+     * 占锁发生在入队当下，避免「分析已完成但尚未占锁」的空窗里被手动点拆镜。
+     */
+    public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec, Runnable beforeDraft) {
+        log.info("[drama] 自动分镜排队 episodeId={} episodeBudgetSec={} hasBeforeDraft={}",
+                episodeId, episodeBudgetSec, beforeDraft != null);
         LoginUser user = UserContext.require();
         try {
             draftLock.claim(episodeId);
@@ -177,6 +187,16 @@ public class DramaStoryboardService {
             LoginUser previous = UserContext.get();
             UserContext.set(user);
             try {
+                if (beforeDraft != null) {
+                    try {
+                        log.info("[drama] 自动分镜前置任务开始 episodeId={}", episodeId);
+                        beforeDraft.run();
+                        log.info("[drama] 自动分镜前置任务完成 episodeId={}", episodeId);
+                    } catch (Exception e) {
+                        log.warn("[drama] 自动分镜前置任务失败，继续拆镜 episodeId={}: {}",
+                                episodeId, e.toString());
+                    }
+                }
                 log.info("[drama] 自动分镜开始 episodeId={}", episodeId);
                 ops().runClaimedDraft(episodeId, null, episodeBudgetSec);
                 log.info("[drama] 自动分镜完成 episodeId={}", episodeId);
