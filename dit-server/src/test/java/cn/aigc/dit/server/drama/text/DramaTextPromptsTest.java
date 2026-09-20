@@ -22,6 +22,10 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("同一场允许只有 1 镜"));
         assertTrue(system.contains("15 秒内优先合并"));
         assertTrue(system.contains("不要仅因景别变化或运镜变化拆镜"));
+        assertTrue(system.contains("dialogue（台词）优先完整保留"));
+        assertTrue(system.contains("禁止摘要、改写、删半句"));
+        assertTrue(system.contains("dialogue 不受上述字数上限约束"));
+        assertFalse(system.contains("只放被摄像机正面拍到的关键句"));
         assertFalse(system.contains("一场至少 2 镜"));
         assertFalse(system.contains("不要压成少数超长镜"));
         assertFalse(system.contains("全部镜头必须等于用户指定的秒数"));
@@ -39,9 +43,25 @@ class DramaTextPromptsTest {
         assertTrue(user.contains("本集故事体量大约 30 秒"));
         assertTrue(user.contains("镜头数量以最少且完整为目标"));
         assertTrue(user.contains("15 秒内优先合并成一镜"));
+        assertTrue(user.contains("台词必须尽量原样保留"));
+        assertTrue(user.contains("不得为压缩体积而丢掉或改写台词"));
+        assertFalse(user.contains("禁止复述剧本全文"));
         assertFalse(user.contains("大约 6 个只是参考"));
         assertFalse(user.contains("各镜秒数之和尽量接近"));
         assertFalse(user.contains("必须是 8，不得改成其它秒数"));
+    }
+
+    @Test
+    void chunkPromptsMarkFragmentBounds() {
+        String script = DramaTextPrompts.scriptUserChunk("原文", 2, 3);
+        assertTrue(script.contains("第 2/3 片段"));
+        assertTrue(script.contains("服务端会重编号"));
+
+        String shot = DramaTextPrompts.shotUserChunk("{}", "洛白", 8, null, 1, 2);
+        assertTrue(shot.contains("第 1/2 片段"));
+        assertTrue(shot.contains("服务端会映射回全集场次号"));
+        assertTrue(shot.contains("shots 必须是非空数组"));
+        assertTrue(shot.contains("禁止输出思考过程"));
     }
 
     @Test

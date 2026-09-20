@@ -158,6 +158,231 @@ class DramaTextServiceBehaviorTest {
         assertEquals("洛白：终于找到了。", result.getShots().get(0).getDialogue());
     }
 
+    @Test
+    void parseScriptChunksLongMarkedRawAndRetriesOnlyFailedChunk() {
+        // 超 CHAR_BUDGET 才切分；每片最多 2 场。
+        String padding = "动作描写".repeat(400);
+        StringBuilder raw = new StringBuilder("长剧\n\n");
+        for (int i = 1; i <= 4; i++) {
+            raw.append("第").append(i).append("场 地点").append(i).append(" 日 内\n")
+                    .append(padding).append("\n角色：台词").append(i).append("。\n\n");
+        }
+        assertTrue(raw.length() > DramaTextChunker.CHAR_BUDGET);
+        assertTrue(DramaTextChunker.packRawChunks(raw.toString()).size() >= 2);
+
+        RecordingGateway gateway = new RecordingGateway((user) -> {
+            if (user != null && user.contains("上一次结构化输出")) {
+                return TextChatResult.of(sceneJson(2, "地点2"), "portable-model", "stop");
+            }
+            if (user != null && user.contains("第 1/") && user.contains("片段")) {
+                return TextChatResult.of("不是 JSON", "portable-model", "stop");
+            }
+            return TextChatResult.of(sceneJson(4, "地点4"), "portable-model", "stop");
+        });
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ScriptDoc doc = service.parseScript(SERIES_ID, raw.toString());
+
+        assertTrue(doc.getScenes().size() >= 2);
+        assertTrue(gateway.users.stream().anyMatch(u -> u.contains("片段")));
+        long repairs = gateway.users.stream().filter(u -> u.contains("上一次结构化输出")).count();
+        assertEquals(1, repairs, "只应重试坏片，不应整本原样重放");
+        assertTrue(gateway.users.size() >= 3, "至少：坏片首次 + 坏片修复 + 后续片");
+    }
+
+    @Test
+    void draftShotsChunksOversizedScriptAndRemapsChapterIndexes() {
+        ScriptDoc script = multiSceneScript(4);
+        assertEquals(2, DramaTextChunker.packScenes(script.getScenes()).size());
+
+        RecordingGateway gateway = new RecordingGateway((user) -> {
+            if (user != null && user.contains("地点3")) {
+                return threeSceneShotReply("地点1", "地点2", "地点3");
+            }
+            return shotReply(1, "地点4");
+        });
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ShotDraftList result = service.draftShots(SERIES_ID, script, List.of("洛白", "地点1", "地点2", "地点3", "地点4"));
+
+        assertEquals(4, result.getShots().size());
+        assertEquals(List.of(1, 2, 3, 4),
+                result.getShots().stream().map(ShotDraftList.ShotDraft::getChapterIndex).toList());
+        assertTrue(gateway.users.stream().anyMatch(u -> u.contains("片段")));
+        assertEquals(2, gateway.users.size());
+    }
+
+    @Test
+    void draftShotsChunksTwoShortScenesWithoutNeedingLargeInput() {
+        ScriptDoc script = multiSceneScript(2);
+        RecordingGateway gateway = new RecordingGateway(twoSceneShotReply("地点1", "地点2"));
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ShotDraftList result = service.draftShots(SERIES_ID, script, List.of("洛白", "地点1", "地点2"));
+
+        assertEquals(2, result.getShots().size());
+        assertEquals(List.of(1, 2),
+                result.getShots().stream().map(ShotDraftList.ShotDraft::getChapterIndex).toList());
+        assertEquals(1, gateway.users.size(), "不超过每片场数上限时应合并为单次请求");
+    }
+
+    @Test
+    void shotTruncationBumpsTokensWithoutLengthRepairPayload() {
+        ScriptDoc script = multiSceneScript(1);
+        RecordingGateway gateway = new RecordingGateway(
+                TextChatResult.of("{\"shots\":[{\"title\":\"残缺\"", "portable-model", "length"),
+                shotReply(1, "地点1"));
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ShotDraftList result = service.draftShots(SERIES_ID, script, List.of("洛白", "地点1"));
+
+        assertEquals(1, result.getShots().size());
+        assertEquals(2, gateway.users.size());
+        assertTrue(gateway.users.get(1).contains("为这份剧本出章节"), "截断后应重放原任务");
+        assertTrue(!gateway.users.get(1).contains("上一次结构化输出"), "禁止把残缺 JSON 塞进 length-repair");
+        assertTrue(!gateway.users.get(1).contains("残缺"));
+    }
+
+    @Test
+    void draftShotsSkipsFailedChunkAndKeepsSuccessfulOnes() {
+        ScriptDoc script = multiSceneScript(4);
+        RecordingGateway gateway = new RecordingGateway((user) -> {
+            if (user != null && user.contains("第 1/2")) {
+                return TextChatResult.of("{\"shots\":[]}", "portable-model", "stop");
+            }
+            return shotReply(1, "地点4");
+        });
+        DramaTextServiceImpl service = new DramaTextServiceImpl(gateway);
+
+        ShotDraftList result = service.draftShots(SERIES_ID, script, List.of("洛白", "地点1", "地点2", "地点3", "地点4"));
+
+        assertEquals(1, result.getShots().size());
+        assertEquals(4, result.getShots().get(0).getChapterIndex());
+        assertTrue(gateway.users.size() >= 3, "坏片应重试后再跳过，好片继续");
+    }
+
+    @Test
+    void readShotsSalvagesNestedShotsArray() {
+        String messy = """
+                说明文字
+                {"meta":{"note":"x"},"shots":[]}
+                后面又给了一份：
+                {"shots":[{"chapter_index":1,"index":1,"title":"开场","duration_sec":8,
+                  "character_names":["洛白"],"prop_names":[],"location_name":"地点1","cast_count":1}]}
+                """;
+        ShotDraftList list = DramaTextServiceImpl.readShots(messy);
+        assertEquals(1, list.getShots().size());
+        assertEquals("开场", list.getShots().get(0).getTitle());
+    }
+
+    @Test
+    void assetsForScenesKeepsOnlySceneRelevantNames() {
+        ScriptDoc.Scene scene = new ScriptDoc.Scene();
+        scene.setCharacters(List.of("洛白"));
+        scene.setLocation("地点1");
+        scene.setProps(List.of());
+        List<String> picked = DramaTextServiceImpl.assetsForScenes(
+                List.of(scene), List.of("洛白", "地点1", "无关角色", "地点9"));
+        assertEquals(List.of("洛白", "地点1"), picked);
+    }
+
+    private static TextChatResult shotReply(int localChapter, String location) {
+        return TextChatResult.of("""
+                {"shots":[{"chapter_index":%d,"index":1,"title":"%s开场","duration_sec":10,
+                 "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                 "continuity_in":"入画","continuity_out":"出画",
+                 "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1}]}
+                """.formatted(localChapter, location, location, location), "portable-model", "stop");
+    }
+
+    private static TextChatResult twoSceneShotReply(String location1, String location2) {
+        return TextChatResult.of("""
+                {"shots":[
+                  {"chapter_index":1,"index":1,"title":"%s开场","duration_sec":10,
+                   "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                   "continuity_in":"入画","continuity_out":"出画",
+                   "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1},
+                  {"chapter_index":2,"index":1,"title":"%s开场","duration_sec":10,
+                   "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                   "continuity_in":"入画","continuity_out":"出画",
+                   "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1}
+                ]}
+                """.formatted(location1, location1, location1, location2, location2, location2),
+                "portable-model", "stop");
+    }
+
+    private static TextChatResult threeSceneShotReply(String location1, String location2, String location3) {
+        return TextChatResult.of("""
+                {"shots":[
+                  {"chapter_index":1,"index":1,"title":"%s开场","duration_sec":10,
+                   "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                   "continuity_in":"入画","continuity_out":"出画",
+                   "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1},
+                  {"chapter_index":2,"index":1,"title":"%s开场","duration_sec":10,
+                   "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                   "continuity_in":"入画","continuity_out":"出画",
+                   "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1},
+                  {"chapter_index":3,"index":1,"title":"%s开场","duration_sec":10,
+                   "narrative_goal":"角色走动。","scene":"%s日戏","dialogue":"",
+                   "continuity_in":"入画","continuity_out":"出画",
+                   "character_names":["洛白"],"prop_names":[],"location_name":"%s","cast_count":1}
+                ]}
+                """.formatted(
+                        location1, location1, location1,
+                        location2, location2, location2,
+                        location3, location3, location3),
+                "portable-model", "stop");
+    }
+
+    @Test
+    void remapShotChunkMapsLocalChapterToAbsoluteSceneIndex() {
+        ScriptDoc.Scene scene = new ScriptDoc.Scene();
+        scene.setIndex(5);
+        ShotDraftList part = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setTitle("测试");
+        part.getShots().add(shot);
+        ShotDraftList.ChapterDraft chapter = new ShotDraftList.ChapterDraft();
+        chapter.setIndex(1);
+        chapter.setSceneIndex(1);
+        part.getChapters().add(chapter);
+
+        DramaTextServiceImpl.remapShotChunk(part, List.of(scene));
+
+        assertEquals(5, part.getShots().get(0).getChapterIndex());
+        assertEquals(5, part.getChapters().get(0).getIndex());
+        assertEquals(5, part.getChapters().get(0).getSceneIndex());
+    }
+
+    private static String sceneJson(int index, String location) {
+        return """
+                {"title":"长剧","scenes":[
+                  {"index":%d,"heading":"%s 日 内","characters":["洛白"],"props":[],
+                   "location":"%s","time":"日","interior":true,"action":"走动。",
+                   "sound":"","dialogue":[{"speaker":"洛白","line":"台词。"}]}
+                ]}
+                """.formatted(index, location, location);
+    }
+
+    private static ScriptDoc multiSceneScript(int scenes) {
+        ScriptDoc doc = new ScriptDoc();
+        doc.setTitle("长剧");
+        List<ScriptDoc.Scene> list = new ArrayList<>();
+        for (int i = 1; i <= scenes; i++) {
+            ScriptDoc.Scene scene = new ScriptDoc.Scene();
+            scene.setIndex(i);
+            scene.setHeading("地点" + i + " 日 内");
+            scene.setLocation("地点" + i);
+            scene.setCharacters(List.of("洛白"));
+            scene.setAction("角色在地点" + i + "走动。");
+            scene.setDialogue(List.of());
+            list.add(scene);
+        }
+        doc.setScenes(list);
+        return doc;
+    }
+
     private static ScriptDoc oneScene() {
         ScriptDoc doc = new ScriptDoc();
         ScriptDoc.Scene scene = new ScriptDoc.Scene();

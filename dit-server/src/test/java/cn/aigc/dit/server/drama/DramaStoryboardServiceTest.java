@@ -1671,6 +1671,30 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void createShotInsertsBeforeGivenShotAndRenumbers() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        storedChapters.add(pendingChapter());
+        for (int i = 1; i <= 2; i++) {
+            DramaShot shot = pendingShot();
+            shot.setId(200L + i);
+            shot.setShotIndex(i);
+            shot.setTitle("镜 " + i);
+            storedShots.add(shot);
+        }
+        DramaShotCreateReq req = new DramaShotCreateReq();
+        req.setBeforeShotId(201L);
+
+        DramaShotResp resp = service.createShot(31L, req);
+
+        assertEquals(Integer.valueOf(1), resp.getShotIndex());
+        assertEquals(3, storedShots.size());
+        assertEquals(2, storedShots.stream().filter(item -> item.getId() == 201L).findFirst().orElseThrow().getShotIndex());
+        assertEquals(3, storedShots.stream().filter(item -> item.getId() == 202L).findFirst().orElseThrow().getShotIndex());
+        assertEquals(List.of("洛白"), resp.getCharacterNames());
+    }
+
+    @Test
     void createShotRejectsWhenChapterIsFull() {
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
         storedChapters.add(pendingChapter());

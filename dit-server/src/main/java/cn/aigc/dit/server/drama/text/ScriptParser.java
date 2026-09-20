@@ -32,6 +32,51 @@ public final class ScriptParser {
     private ScriptParser() {
     }
 
+    /**
+     * 按场标记切成原文片段；无场标记时返回整本单段。
+     * 首段含标题/梗概等场前前缀，便于分片 LLM 仍能看到剧本元信息。
+     */
+    public static List<String> splitRawSegments(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return List.of(raw == null ? "" : raw);
+        }
+        String normalized = raw.replace("\r\n", "\n").replace('\r', '\n');
+        List<String> lines = new ArrayList<>();
+        for (String line : normalized.split("\n", -1)) {
+            lines.add(line);
+        }
+        int firstScene = 0;
+        while (firstScene < lines.size() && !SCENE_START.matcher(lines.get(firstScene).strip()).matches()) {
+            firstScene++;
+        }
+        if (firstScene == lines.size()) {
+            return List.of(normalized);
+        }
+        List<String> segments = new ArrayList<>();
+        String header = firstScene == 0 ? "" : String.join("\n", lines.subList(0, firstScene)).strip();
+        int start = firstScene;
+        for (int i = firstScene + 1; i < lines.size(); i++) {
+            if (SCENE_START.matcher(lines.get(i).strip()).matches()) {
+                segments.add(joinSegment(header, lines, start, i));
+                header = "";
+                start = i;
+            }
+        }
+        segments.add(joinSegment(header, lines, start, lines.size()));
+        return segments;
+    }
+
+    private static String joinSegment(String header, List<String> lines, int from, int to) {
+        String body = String.join("\n", lines.subList(from, to)).strip();
+        if (!StringUtils.hasText(header)) {
+            return body;
+        }
+        if (!StringUtils.hasText(body)) {
+            return header;
+        }
+        return header + "\n\n" + body;
+    }
+
     public static ScriptDoc parse(String raw) {
         ScriptDoc doc = new ScriptDoc();
         if (!StringUtils.hasText(raw)) {

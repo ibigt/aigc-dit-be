@@ -167,9 +167,11 @@ class DramaTextDraftPathsTest {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(TextChatResult.of("""
                 {"shots":[
-                  {"chapter_index":2,"index":1,"title":"后场先出","duration_sec":6,"character_names":["洛白"]},
-                  {"chapter_index":1,"index":2,"title":"前场第二","duration_sec":7,"continuity_in":"洛白站在桌前","character_names":["洛白"]},
-                  {"chapter_index":1,"index":1,"title":"前场第一","duration_sec":5,"continuity_out":"洛白站在桌前","character_names":["洛白"]}
+                  {"chapter_index":1,"index":2,"title":"前场第二","duration_sec":7,
+                   "continuity_in":"洛白站在桌前","character_names":["洛白"]},
+                  {"chapter_index":1,"index":1,"title":"前场第一","duration_sec":5,
+                   "continuity_out":"洛白站在桌前","character_names":["洛白"]},
+                  {"chapter_index":2,"index":1,"title":"后场先出","duration_sec":6,"character_names":["洛白"]}
                 ]}
                 """, "m", "stop"));
 

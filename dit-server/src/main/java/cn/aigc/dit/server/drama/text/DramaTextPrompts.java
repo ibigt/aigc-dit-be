@@ -102,10 +102,10 @@ public final class DramaTextPrompts {
                   "duration_sec": 15,
                   "narrative_goal": "全景。风扇转动，夏安往白板贴照片，洛白用书盖脸。",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "",
+                  "dialogue": "局长：洛老弟，别睡了。\\n洛白：科学解决不了的，就轮到我们。",
                   "continuity_in": "风扇叶片入画",
                   "continuity_out": "洛白用书盖脸",
-                  "character_names": ["夏安", "洛白"],
+                  "character_names": ["局长", "洛白"],
                   "prop_names": ["白板"],
                   "location_name": "幻梦侦探社",
                   "cast_count": 2
@@ -131,9 +131,11 @@ public final class DramaTextPrompts {
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
-            - 长度上限：narrative_goal 不超过 60 字（1 个景别/运镜 + 2~3 个动作关键词），
-              scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字，
-              dialogue 不要复述整段对白，只放被摄像机正面拍到的关键句。
+            - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中
+             （格式「说话人：原文」；同镜多句用换行分隔）。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
+              纯动作镜可留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
+            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字（1 个景别/运镜 + 2~3 个动作关键词），
+              scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字；dialogue 不受上述字数上限约束。
             """;
 
     private DramaTextPrompts() {
@@ -145,6 +147,17 @@ public final class DramaTextPrompts {
 
     public static String scriptUser(String raw) {
         return "把下面这份剧本原文切成分场 ScriptDoc：\n\n" + raw;
+    }
+
+    /**
+     * 分片分场：只解析本片段，服务端合并后重编号。
+     */
+    public static String scriptUserChunk(String raw, int chunkIndex, int chunkTotal) {
+        return "把下面这份剧本原文片段切成分场 ScriptDoc。"
+                + "这是第 " + chunkIndex + "/" + chunkTotal + " 片段；只输出本片段的 scenes，"
+                + "index 从 1 连续递增即可（服务端会重编号）。"
+                + "title、logline、style_prefix 仅在第 1 片段填写，后续片段可留空。\n\n"
+                + raw;
     }
 
     public static String assetSystem() {
@@ -198,9 +211,41 @@ public final class DramaTextPrompts {
 
     public static String shotUser(
             String scriptJson, String assetNames, int fallbackSec, Integer episodeBudgetSec) {
+        return shotUserBody(scriptJson, assetNames, fallbackSec, episodeBudgetSec, null, null);
+    }
+
+    /**
+     * 分片拆镜：只为本片段 scenes 出镜；chapter_index 对应该片段内 scene index。
+     */
+    public static String shotUserChunk(
+            String scriptJson,
+            String assetNames,
+            int fallbackSec,
+            Integer episodeBudgetSec,
+            int chunkIndex,
+            int chunkTotal) {
+        return shotUserBody(scriptJson, assetNames, fallbackSec, episodeBudgetSec, chunkIndex, chunkTotal);
+    }
+
+    private static String shotUserBody(
+            String scriptJson,
+            String assetNames,
+            int fallbackSec,
+            Integer episodeBudgetSec,
+            Integer chunkIndex,
+            Integer chunkTotal) {
         StringBuilder text = new StringBuilder();
         text.append("为这份剧本出章节与分镜草稿 ShotDraftList。");
+        if (chunkIndex != null && chunkTotal != null) {
+            text.append("这是第 ").append(chunkIndex).append("/").append(chunkTotal)
+                    .append(" 片段；只为本片段的 scenes 出镜，chapter_index 对应该片段内 scene index（从 1 起），")
+                    .append("服务端会映射回全集场次号。");
+        }
         text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
+        text.append("\n硬性体积要求：只输出 ShotDraftList JSON，shots 必须是非空数组；");
+        text.append("禁止输出思考过程、禁止在 JSON 外写解释；");
+        text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，单场通常 1～4 镜即可；");
+        text.append("但 scenes 中的台词必须尽量原样保留到对应分镜 dialogue，禁止摘要或删句来省体积。");
         text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
         text.append("\n每条分镜的 duration_sec 按该镜对白长短和动作节拍自行估计，只能是 5 到 15 的整数秒。");
         text.append("不要所有镜头填同一个秒数。无法判断时再用 ").append(fallbackSec).append(" 秒。");
@@ -210,7 +255,8 @@ public final class DramaTextPrompts {
                     .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
         text.append("\n镜头数量以最少且完整为目标：同一场景、时间和可见状态连续的内容，应在 15 秒内优先合并成一镜。");
-        text.append("只有场景/时间跳转、状态无法连续、参考能力受限或完整表达超过 15 秒时才拆分；不得为减少镜头而跳过情节。");
+        text.append("只有场景/时间跳转、状态无法连续、参考能力受限或完整表达超过 15 秒时才拆分；");
+        text.append("不得为减少镜头而跳过情节，也不得为压缩体积而丢掉或改写台词。");
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();
     }

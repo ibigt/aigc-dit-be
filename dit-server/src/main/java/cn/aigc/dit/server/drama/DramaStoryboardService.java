@@ -513,8 +513,8 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 手工补一镜。可插到指定镜之后（胶片条中间的 +），否则挂到指定章节末尾。
-     * 人物 / 道具 / 地点沿用前一镜，避免新镜一进来就是空镜编不出 prompt。
+     * 手工补一镜。可插到指定镜之后 / 之前（胶片条两侧的 +），否则挂到指定章节末尾。
+     * 人物 / 道具 / 地点沿用锚点镜，避免新镜一进来就是空镜编不出 prompt。
      */
     @Transactional
     public DramaShotResp createShot(Long episodeId, DramaShotCreateReq req) {
@@ -526,27 +526,42 @@ public class DramaStoryboardService {
         if (chapters.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成分镜草稿再增删分镜");
         }
+        if (req != null && req.getAfterShotId() != null && req.getBeforeShotId() != null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "afterShotId 与 beforeShotId 不能同时传");
+        }
         List<DramaShot> shots = listShots(episodeId);
         DramaShot after = resolveAfterShot(episodeId, req);
-        DramaChapter chapter = after != null
-                ? chapterOf(after.getChapterId())
-                : pickChapter(chapters, req == null ? null : req.getChapterId());
+        DramaShot before = resolveBeforeShot(episodeId, req);
+        DramaChapter chapter;
+        DramaShot template;
+        int index;
+        if (before != null) {
+            chapter = chapterOf(before.getChapterId());
+            template = before;
+            index = before.getShotIndex() == null ? 1 : before.getShotIndex();
+        } else if (after != null) {
+            chapter = chapterOf(after.getChapterId());
+            template = after;
+            index = after.getShotIndex() + 1;
+        } else {
+            chapter = pickChapter(chapters, req == null ? null : req.getChapterId());
+            if (chapter == null) {
+                throw new BizException(ErrorCode.NOT_FOUND, "章节不属于本剧集");
+            }
+            List<DramaShot> siblings = shots.stream()
+                    .filter(item -> chapter.getId().equals(item.getChapterId()))
+                    .toList();
+            template = siblings.isEmpty() ? null : siblings.get(siblings.size() - 1);
+            index = shots.stream().mapToInt(item -> item.getShotIndex() == null ? 0 : item.getShotIndex()).max().orElse(0) + 1;
+        }
         if (chapter == null) {
             throw new BizException(ErrorCode.NOT_FOUND, "章节不属于本剧集");
         }
-        List<DramaShot> siblings = shots.stream()
-                .filter(item -> chapter.getId().equals(item.getChapterId()))
-                .toList();
-        if (siblings.size() >= DramaContract.MAX_SHOTS_PER_CHAPTER) {
+        long siblingCount = shots.stream().filter(item -> chapter.getId().equals(item.getChapterId())).count();
+        if (siblingCount >= DramaContract.MAX_SHOTS_PER_CHAPTER) {
             throw new BizException(ErrorCode.BAD_REQUEST,
                     "单场最多 " + DramaContract.MAX_SHOTS_PER_CHAPTER + " 镜");
         }
-        DramaShot template = after != null
-                ? after
-                : (siblings.isEmpty() ? null : siblings.get(siblings.size() - 1));
-        int index = after != null
-                ? after.getShotIndex() + 1
-                : shots.stream().mapToInt(item -> item.getShotIndex() == null ? 0 : item.getShotIndex()).max().orElse(0) + 1;
         shiftShotIndexes(shots, index, 1);
 
         DramaShot shot = new DramaShot();
@@ -626,6 +641,17 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.NOT_FOUND, "分镜不属于本剧集");
         }
         return after;
+    }
+
+    private DramaShot resolveBeforeShot(Long episodeId, DramaShotCreateReq req) {
+        if (req == null || req.getBeforeShotId() == null) {
+            return null;
+        }
+        DramaShot before = requireShot(req.getBeforeShotId());
+        if (!episodeId.equals(before.getEpisodeId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "分镜不属于本剧集");
+        }
+        return before;
     }
 
     private void shiftShotIndexes(List<DramaShot> shots, int fromIndex, int delta) {

@@ -48,15 +48,36 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final ObjectMapper LENIENT_MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .configure(JsonParser.Feature.ALLOW_COMMENTS, true)
-            .configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true);
+            .configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
+            .configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true)
+            .configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
 
     private static final int LLM_JSON_RETRIES = 2;
     private static final int ASSET_ENRICHMENT_BATCH_SIZE = 4;
     /** 资产批次有限并发，墙钟近似降为 ceil(N/batch)/concurrency。 */
     private static final int ASSET_ENRICHMENT_CONCURRENCY = 2;
+    /** 分镜分片有限并发，墙钟近似降为 ceil(packs)/concurrency。 */
+    private static final int SHOT_DRAFT_CONCURRENCY = 2;
     static final int MAX_JSON_TOKENS = 32768;
     /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
+
+    /**
+     * 截断处理策略。分场/分镜禁止把残缺输出塞进 repair；资产仍可 bump+repair。
+     */
+    enum TruncationPolicy {
+        /** 截断后加倍 max_tokens，并用 repairUser 附带上次残缺输出（资产路径）。 */
+        BUMP_AND_REPAIR,
+        /** 截断后只加倍 max_tokens、重放原任务；禁止 length-repair；仍截断则抛 {@link TruncatedOutputException}。 */
+        BUMP_ONLY_NO_REPAIR
+    }
+
+    /** 输出被 max_tokens 截断且不宜再整包 repair 时抛出，供上层缩片重跑。 */
+    static final class TruncatedOutputException extends RuntimeException {
+        TruncatedOutputException(String reason) {
+            super(reason);
+        }
+    }
 
     /**
      * 本线程最近一次 parseScript 的实际引擎，供 {@link #engine(long)} 与落库同源读取。
@@ -250,13 +271,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         log.info("[drama-text] 分镜草稿开始 seriesId={} scenes={} assets={} durationSec={}",
                 seriesId, script.getScenes().size(), safe(assetNames).size(), duration);
         try {
-            ShotDraftList drafts = attemptJson(seriesId, DramaTextPrompts.shotSystem(),
-                    DramaTextPrompts.shotUser(
-                            toJson(script), String.join("、", safe(assetNames)), duration, episodeBudgetSec),
-                    content -> clampDurations(
-                            normalizeShots(readList(content, ShotDraftList.class), script, safe(assetNames)),
-                            duration),
-                    "ShotDraftList", 16384);
+            ShotDraftList drafts = llmDraftShots(seriesId, script, safe(assetNames), duration, episodeBudgetSec);
             int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
             ShotDraftList result = ShotDraftMinimizer.minimize(drafts, duration);
             log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
@@ -279,15 +294,264 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     private ScriptDoc llmParse(long seriesId, String raw) {
-        return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), DramaTextPrompts.scriptUser(raw),
-                DramaTextServiceImpl::readScript, "ScriptDoc", 16384);
+        List<String> chunks = DramaTextChunker.packRawChunks(raw);
+        if (chunks.size() <= 1) {
+            return parseRawChunk(seriesId, raw, 1, 1);
+        }
+        log.info("[drama-text] 分场分片 seriesId={} chunks={} rawLength={}",
+                seriesId, chunks.size(), raw == null ? 0 : raw.length());
+        ScriptDoc merged = new ScriptDoc();
+        List<ScriptDoc.Scene> scenes = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            int chunkIndex = i + 1;
+            ScriptDoc part = parseRawChunk(seriesId, chunks.get(i), chunkIndex, chunks.size());
+            if (chunkIndex == 1) {
+                merged.setTitle(part.getTitle());
+                merged.setLogline(part.getLogline());
+                merged.setStylePrefix(part.getStylePrefix());
+            }
+            scenes.addAll(safe(part.getScenes()));
+        }
+        merged.setScenes(scenes);
+        ScriptDoc normalized = normalize(merged);
+        if (normalized == null) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    "文本模型输出未通过 ScriptDoc 合同：分片合并后 scenes 为空");
+        }
+        return normalized;
+    }
+
+    /**
+     * 解析一片原文；若被 max_tokens 截断则按场标记缩片重跑，禁止把残缺 JSON 塞进 repair。
+     */
+    private ScriptDoc parseRawChunk(long seriesId, String raw, int chunkIndex, int chunkTotal) {
+        String user = chunkTotal <= 1
+                ? DramaTextPrompts.scriptUser(raw)
+                : DramaTextPrompts.scriptUserChunk(raw, chunkIndex, chunkTotal);
+        try {
+            log.info("[drama-text] 分场分片请求 seriesId={} chunk={}/{} length={}",
+                    seriesId, chunkIndex, chunkTotal, raw == null ? 0 : raw.length());
+            return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), user,
+                    DramaTextServiceImpl::readScript, "ScriptDoc", 16384,
+                    TruncationPolicy.BUMP_ONLY_NO_REPAIR);
+        } catch (TruncatedOutputException truncated) {
+            List<String> segments = ScriptParser.splitRawSegments(raw);
+            if (segments.size() <= 1) {
+                throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                        "文本模型输出未通过 ScriptDoc 合同：" + truncated.getMessage());
+            }
+            int mid = Math.max(1, segments.size() / 2);
+            log.warn("[drama-text] 分场截断后缩片重跑 seriesId={} chunk={}/{} segments={} -> {}+{}",
+                    seriesId, chunkIndex, chunkTotal, segments.size(), mid, segments.size() - mid);
+            ScriptDoc left = parseRawChunk(seriesId, String.join("\n\n", segments.subList(0, mid)),
+                    chunkIndex, chunkTotal);
+            ScriptDoc right = parseRawChunk(seriesId, String.join("\n\n", segments.subList(mid, segments.size())),
+                    chunkIndex, chunkTotal);
+            ScriptDoc merged = new ScriptDoc();
+            merged.setTitle(left.getTitle());
+            merged.setLogline(left.getLogline());
+            merged.setStylePrefix(left.getStylePrefix());
+            List<ScriptDoc.Scene> scenes = new ArrayList<>();
+            scenes.addAll(safe(left.getScenes()));
+            scenes.addAll(safe(right.getScenes()));
+            merged.setScenes(scenes);
+            ScriptDoc normalized = normalize(merged);
+            if (normalized == null) {
+                throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                        "文本模型输出未通过 ScriptDoc 合同：缩片合并后 scenes 为空");
+            }
+            return normalized;
+        }
+    }
+
+    private ShotDraftList llmDraftShots(
+            long seriesId,
+            ScriptDoc script,
+            List<String> assetNames,
+            int duration,
+            Integer episodeBudgetSec) {
+        List<List<ScriptDoc.Scene>> packs = DramaTextChunker.packScenes(script.getScenes());
+        log.info("[drama-text] 分镜分片 seriesId={} chunks={} scenes={} concurrency={}",
+                seriesId, packs.size(), script.getScenes().size(),
+                Math.min(SHOT_DRAFT_CONCURRENCY, Math.max(1, packs.size())));
+        int chunkTotal = Math.max(1, packs.size());
+        @SuppressWarnings("unchecked")
+        List<ShotDraftList.ShotDraft>[] parts = new List[packs.size()];
+        RuntimeException[] errors = new RuntimeException[packs.size()];
+        if (packs.size() <= 1) {
+            try {
+                parts[0] = draftShotPack(
+                        seriesId, script, assetNames, duration, episodeBudgetSec,
+                        packs.get(0), 1, chunkTotal);
+            } catch (RuntimeException e) {
+                errors[0] = e;
+                log.warn("[drama-text] 分镜分片失败已跳过 seriesId={} chunk={}/{} error={}",
+                        seriesId, 1, chunkTotal, e.getMessage());
+            }
+        } else {
+            int workers = Math.min(SHOT_DRAFT_CONCURRENCY, packs.size());
+            ExecutorService pool = Executors.newFixedThreadPool(workers);
+            try {
+                List<Future<?>> futures = new ArrayList<>(packs.size());
+                for (int i = 0; i < packs.size(); i++) {
+                    final int idx = i;
+                    futures.add(pool.submit(() -> {
+                        try {
+                            parts[idx] = draftShotPack(
+                                    seriesId, script, assetNames, duration, episodeBudgetSec,
+                                    packs.get(idx), idx + 1, chunkTotal);
+                        } catch (RuntimeException e) {
+                            errors[idx] = e;
+                            log.warn("[drama-text] 分镜分片失败已跳过 seriesId={} chunk={}/{} error={}",
+                                    seriesId, idx + 1, chunkTotal, e.getMessage());
+                        }
+                    }));
+                }
+                for (Future<?> future : futures) {
+                    try {
+                        future.get();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("[drama-text] 分镜并发被中断 seriesId={}", seriesId);
+                        break;
+                    } catch (ExecutionException e) {
+                        log.warn("[drama-text] 分镜并发任务异常 seriesId={} error={}",
+                                seriesId, e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+                    }
+                }
+            } finally {
+                pool.shutdown();
+                try {
+                    if (!pool.awaitTermination(30, TimeUnit.MINUTES)) {
+                        pool.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    pool.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        ShotDraftList merged = new ShotDraftList();
+        List<ShotDraftList.ShotDraft> shots = new ArrayList<>();
+        int failedChunks = 0;
+        String lastChunkError = null;
+        for (int i = 0; i < packs.size(); i++) {
+            if (errors[i] != null) {
+                failedChunks++;
+                lastChunkError = errors[i].getMessage();
+                continue;
+            }
+            if (parts[i] != null) {
+                shots.addAll(parts[i]);
+            }
+        }
+        merged.setShots(shots);
+        ShotDraftList normalized = clampDurations(normalizeShots(merged, script, assetNames), duration);
+        if (normalized == null || normalized.getShots() == null || normalized.getShots().isEmpty()) {
+            throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                    "文本模型输出未通过 ShotDraftList 合同："
+                            + (lastChunkError != null ? lastChunkError : "分片合并后 shots 为空"));
+        }
+        if (failedChunks > 0) {
+            log.warn("[drama-text] 分镜部分分片失败 seriesId={} failedChunks={} keptShots={}",
+                    seriesId, failedChunks, normalized.getShots().size());
+        }
+        return normalized;
+    }
+
+    /**
+     * 拆一片场次；截断时若片内仍有多场则对半分再跑，禁止 length-repair 附带残缺输出。
+     * 单场合同失败向上抛，由 {@link #llmDraftShots} 决定跳过或整集失败。
+     */
+    private List<ShotDraftList.ShotDraft> draftShotPack(
+            long seriesId,
+            ScriptDoc script,
+            List<String> assetNames,
+            int duration,
+            Integer episodeBudgetSec,
+            List<ScriptDoc.Scene> pack,
+            int chunkIndex,
+            int chunkTotal) {
+        ScriptDoc chunkDoc = scriptChunk(script, pack);
+        String assets = String.join("、", assetsForScenes(pack, assetNames));
+        String user = chunkTotal <= 1 && pack.size() == script.getScenes().size()
+                ? DramaTextPrompts.shotUser(toJson(chunkDoc), assets, duration, episodeBudgetSec)
+                : DramaTextPrompts.shotUserChunk(
+                        toJson(chunkDoc), assets, duration, episodeBudgetSec, chunkIndex, chunkTotal);
+        try {
+            log.info("[drama-text] 分镜分片请求 seriesId={} chunk={}/{} scenes={} assetNames={}",
+                    seriesId, chunkIndex, chunkTotal, pack.size(), assets);
+            ShotDraftList part = attemptJson(seriesId, DramaTextPrompts.shotSystem(), user,
+                    content -> clampDurations(
+                            normalizeShots(readShots(content), chunkDoc, assetNames),
+                            duration),
+                    "ShotDraftList", 16384, TruncationPolicy.BUMP_ONLY_NO_REPAIR);
+            remapShotChunk(part, pack);
+            return part.getShots() == null ? List.of() : part.getShots();
+        } catch (TruncatedOutputException truncated) {
+            if (pack.size() <= 1) {
+                throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                        "文本模型输出未通过 ShotDraftList 合同：" + truncated.getMessage());
+            }
+            int mid = Math.max(1, pack.size() / 2);
+            log.warn("[drama-text] 分镜截断后缩片重跑 seriesId={} chunk={}/{} scenes={} -> {}+{}",
+                    seriesId, chunkIndex, chunkTotal, pack.size(), mid, pack.size() - mid);
+            List<ShotDraftList.ShotDraft> shots = new ArrayList<>();
+            shots.addAll(draftShotPack(seriesId, script, assetNames, duration, episodeBudgetSec,
+                    pack.subList(0, mid), chunkIndex, chunkTotal));
+            shots.addAll(draftShotPack(seriesId, script, assetNames, duration, episodeBudgetSec,
+                    pack.subList(mid, pack.size()), chunkIndex, chunkTotal));
+            return shots;
+        }
+    }
+
+    /**
+     * 分镜提示只带本场相关资产名，避免把全集 20+ 资产塞进单场请求诱发超长空 shots。
+     */
+    static List<String> assetsForScenes(List<ScriptDoc.Scene> scenes, List<String> allowed) {
+        Set<String> allow = new LinkedHashSet<>(safe(allowed));
+        if (allow.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> picked = new LinkedHashSet<>();
+        for (ScriptDoc.Scene scene : safe(scenes)) {
+            if (scene == null) {
+                continue;
+            }
+            for (String name : safe(scene.getCharacters())) {
+                if (StringUtils.hasText(name) && allow.contains(name.strip())) {
+                    picked.add(name.strip());
+                }
+            }
+            for (String name : safe(scene.getProps())) {
+                if (StringUtils.hasText(name) && allow.contains(name.strip())) {
+                    picked.add(name.strip());
+                }
+            }
+            if (StringUtils.hasText(scene.getLocation()) && allow.contains(scene.getLocation().strip())) {
+                picked.add(scene.getLocation().strip());
+            }
+        }
+        if (picked.isEmpty()) {
+            return new ArrayList<>(allow);
+        }
+        return new ArrayList<>(picked);
     }
 
     private <T> T attemptJson(long seriesId, String system, String user,
                               java.util.function.Function<String, T> reader, String what, int maxTokens) {
+        return attemptJson(seriesId, system, user, reader, what, maxTokens, TruncationPolicy.BUMP_AND_REPAIR);
+    }
+
+    private <T> T attemptJson(long seriesId, String system, String user,
+                              java.util.function.Function<String, T> reader, String what, int maxTokens,
+                              TruncationPolicy truncationPolicy) {
         String requestUser = user;
         String lastReason = "输出未通过合同校验";
         int tokens = maxTokens;
+        TruncationPolicy policy = truncationPolicy == null
+                ? TruncationPolicy.BUMP_AND_REPAIR
+                : truncationPolicy;
         for (int attempt = 1; attempt <= LLM_JSON_RETRIES; attempt++) {
             TextChatRequest req = new TextChatRequest(system, requestUser, true, tokens);
             log.info("[drama-text] 模型请求开始 contract={} seriesId={} attempt={} maxTokens={} userLength={}",
@@ -302,18 +566,125 @@ public class DramaTextServiceImpl implements DramaTextService {
                 return value;
             }
             String reason = invalidOutputReason(content, what);
-            if (truncatedByLength(response.getFinishReason())) {
+            boolean truncated = truncatedByLength(response.getFinishReason());
+            if (truncated) {
                 reason = "输出被 max_tokens 截断（finish_reason=" + response.getFinishReason() + "）。" + reason;
-                tokens = nextMaxTokens(tokens);
             }
             lastReason = reason;
-            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={} nextMaxTokens={}",
+            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={} nextMaxTokens={} truncationPolicy={}",
                     what, seriesId, attempt, reason, response.getModel(),
-                    response.getFinishReason(), content == null ? 0 : content.length(), tokens);
-            requestUser = DramaTextPrompts.repairUser(user, what, reason, content);
+                    response.getFinishReason(), content == null ? 0 : content.length(),
+                    truncated ? nextMaxTokens(tokens) : tokens, policy);
+            if (truncated && policy == TruncationPolicy.BUMP_ONLY_NO_REPAIR) {
+                int bumped = nextMaxTokens(tokens);
+                if (bumped > tokens) {
+                    tokens = bumped;
+                    requestUser = user;
+                    continue;
+                }
+                throw new TruncatedOutputException(reason);
+            }
+            if (truncated) {
+                tokens = nextMaxTokens(tokens);
+            }
+            String previous = content;
+            if ("ShotDraftList".equals(what) && content != null && content.length() > 4000) {
+                previous = content.substring(0, 500) + "\n…(已截断过长无效输出，请只返回非空 shots 数组)…";
+            }
+            requestUser = DramaTextPrompts.repairUser(user, what, reason, previous);
+        }
+        if (policy == TruncationPolicy.BUMP_ONLY_NO_REPAIR
+                && lastReason != null
+                && lastReason.contains("max_tokens 截断")) {
+            throw new TruncatedOutputException(lastReason);
         }
         throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
                 "文本模型输出未通过 " + what + " 合同：" + lastReason);
+    }
+
+    private static ScriptDoc scriptChunk(ScriptDoc full, List<ScriptDoc.Scene> pack) {
+        ScriptDoc chunk = new ScriptDoc();
+        if (full != null) {
+            chunk.setTitle(full.getTitle());
+            chunk.setLogline(full.getLogline());
+            chunk.setStylePrefix(full.getStylePrefix());
+        }
+        List<ScriptDoc.Scene> local = new ArrayList<>(pack.size());
+        for (int i = 0; i < pack.size(); i++) {
+            ScriptDoc.Scene source = pack.get(i);
+            ScriptDoc.Scene copy = copyScene(source);
+            copy.setIndex(i + 1);
+            local.add(copy);
+        }
+        chunk.setScenes(local);
+        return chunk;
+    }
+
+    private static ScriptDoc.Scene copyScene(ScriptDoc.Scene source) {
+        ScriptDoc.Scene copy = new ScriptDoc.Scene();
+        if (source == null) {
+            return copy;
+        }
+        copy.setIndex(source.getIndex());
+        copy.setSlug(source.getSlug());
+        copy.setHeading(source.getHeading());
+        copy.setCharacters(source.getCharacters() == null ? new ArrayList<>() : new ArrayList<>(source.getCharacters()));
+        copy.setProps(source.getProps() == null ? new ArrayList<>() : new ArrayList<>(source.getProps()));
+        copy.setLocation(source.getLocation());
+        copy.setTime(source.getTime());
+        copy.setInterior(source.getInterior());
+        copy.setAction(source.getAction());
+        copy.setSound(source.getSound());
+        if (source.getDialogue() == null) {
+            copy.setDialogue(new ArrayList<>());
+        } else {
+            List<ScriptDoc.Dialogue> lines = new ArrayList<>(source.getDialogue().size());
+            for (ScriptDoc.Dialogue line : source.getDialogue()) {
+                if (line == null) {
+                    continue;
+                }
+                ScriptDoc.Dialogue bit = new ScriptDoc.Dialogue();
+                bit.setSpeaker(line.getSpeaker());
+                bit.setLine(line.getLine());
+                lines.add(bit);
+            }
+            copy.setDialogue(lines);
+        }
+        return copy;
+    }
+
+    /**
+     * 把分片内 1..k 的 chapter_index 映射回全集场次号。
+     */
+    static void remapShotChunk(ShotDraftList part, List<ScriptDoc.Scene> absoluteScenes) {
+        if (part == null || absoluteScenes == null || absoluteScenes.isEmpty()) {
+            return;
+        }
+        Map<Integer, Integer> localToAbs = new HashMap<>();
+        for (int i = 0; i < absoluteScenes.size(); i++) {
+            ScriptDoc.Scene scene = absoluteScenes.get(i);
+            int absolute = scene.getIndex() == null || scene.getIndex() < 1 ? i + 1 : scene.getIndex();
+            localToAbs.put(i + 1, absolute);
+        }
+        for (ShotDraftList.ChapterDraft chapter : safe(part.getChapters())) {
+            if (chapter == null) {
+                continue;
+            }
+            Integer mapped = localToAbs.get(chapter.getIndex() == null ? 1 : chapter.getIndex());
+            if (mapped != null) {
+                chapter.setIndex(mapped);
+                chapter.setSceneIndex(mapped);
+            }
+        }
+        for (ShotDraftList.ShotDraft shot : safe(part.getShots())) {
+            if (shot == null) {
+                continue;
+            }
+            Integer mapped = localToAbs.get(shot.getChapterIndex() == null ? 1 : shot.getChapterIndex());
+            if (mapped != null) {
+                shot.setChapterIndex(mapped);
+            }
+        }
     }
 
     static boolean truncatedByLength(String finishReason) {
@@ -370,6 +741,10 @@ public class DramaTextServiceImpl implements DramaTextService {
             }
             if (parsed instanceof ShotDraftList list) {
                 if (list.getShots() == null || list.getShots().isEmpty()) {
+                    if (content.length() > 4000) {
+                        return "shots 缺失或为空（输出过长 contentLength=" + content.length()
+                                + "，请只返回含非空 shots 数组的最小 JSON，禁止长篇解释）";
+                    }
                     return "shots 缺失或为空";
                 }
                 return "分镜经合同清洗后为空（章节引用、名称或字段无效）";
@@ -404,19 +779,117 @@ public class DramaTextServiceImpl implements DramaTextService {
         return doc == null ? null : normalize(doc);
     }
 
+    /**
+     * 读取分镜 JSON；若外层对象 shots 为空但正文里另有 shots 数组（MiniMax 常见），尝试抢救。
+     */
+    static ShotDraftList readShots(String content) {
+        ShotDraftList list = parseJson(content, ShotDraftList.class);
+        if (list != null && list.getShots() != null && !list.getShots().isEmpty()) {
+            return list;
+        }
+        String array = extractJsonArrayAfterKey(content, "shots");
+        if (array == null) {
+            return list;
+        }
+        ShotDraftList salvaged = parseJson("{\"shots\":" + array + "}", ShotDraftList.class);
+        if (salvaged != null && salvaged.getShots() != null && !salvaged.getShots().isEmpty()) {
+            log.info("[drama-text] ShotDraftList 经 shots 数组抢救解析成功 count={}", salvaged.getShots().size());
+            return salvaged;
+        }
+        return list;
+    }
+
     /** 模型可能包代码围栏或前后带解释文字；取最外层花括号。 */
     private static String extractJsonObject(String content) {
         if (!StringUtils.hasText(content)) {
             return null;
         }
-        String text = content.strip().replaceAll("^```[a-zA-Z]*", "").replaceAll("```$", "").strip();
+        String text = stripFence(content);
         int start = text.indexOf('{');
         int end = text.lastIndexOf('}');
         return start >= 0 && end > start ? text.substring(start, end + 1) : null;
     }
 
     /**
-     * 先严格解析；失败再容忍注释与尾逗号。不放宽合同字段，也不改写合法 JSON 的语义。
+     * 在正文中定位 {@code "key": [ ... ]} 的数组（括号配对），优先返回非空数组。
+     */
+    static String extractJsonArrayAfterKey(String content, String key) {
+        if (!StringUtils.hasText(content) || !StringUtils.hasText(key)) {
+            return null;
+        }
+        String text = stripFence(content);
+        String quoted = "\"" + key + "\"";
+        String empty = null;
+        int from = 0;
+        while (from < text.length()) {
+            int keyAt = text.indexOf(quoted, from);
+            if (keyAt < 0) {
+                break;
+            }
+            String array = extractArrayAfter(text, keyAt + quoted.length());
+            from = keyAt + quoted.length();
+            if (array == null) {
+                continue;
+            }
+            String compact = array.replaceAll("\\s+", "");
+            if ("[]".equals(compact)) {
+                if (empty == null) {
+                    empty = array;
+                }
+                continue;
+            }
+            return array;
+        }
+        return empty;
+    }
+
+    private static String extractArrayAfter(String text, int afterKey) {
+        int colon = text.indexOf(':', afterKey);
+        if (colon < 0) {
+            return null;
+        }
+        int start = colon + 1;
+        while (start < text.length() && Character.isWhitespace(text.charAt(start))) {
+            start++;
+        }
+        if (start >= text.length() || text.charAt(start) != '[') {
+            return null;
+        }
+        int depth = 0;
+        boolean inString = false;
+        boolean escape = false;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (inString) {
+                if (escape) {
+                    escape = false;
+                } else if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '[') {
+                depth++;
+            } else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String stripFence(String content) {
+        return content.strip().replaceAll("^```[a-zA-Z]*", "").replaceAll("```$", "").strip();
+    }
+
+    /**
+     * 先严格解析；失败再容忍注释、尾逗号、未加引号字段名与单引号。
      */
     static <T> T parseJson(String content, Class<T> type) {
         String json = extractJsonObject(content);
@@ -428,7 +901,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         } catch (JsonProcessingException strict) {
             try {
                 T value = LENIENT_MAPPER.readValue(json, type);
-                log.info("[drama-text] JSON 经注释/尾逗号容错解析成功 type={}", type.getSimpleName());
+                log.info("[drama-text] JSON 经容错解析成功 type={}", type.getSimpleName());
                 return value;
             } catch (JsonProcessingException ignored) {
                 return null;
