@@ -4,6 +4,7 @@ import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.drama.model.req.DramaAssetGenerateReq;
 import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaFilmAssembleReq;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
@@ -401,10 +402,12 @@ public class DramaController {
         return CommonResult.success(dramaFilmService.get(id));
     }
 
-    @Operation(summary = "按镜序拼接本集已出片镜头；缺镜仍可预览")
+    @Operation(summary = "按镜序拼接本集已出片镜头；可传 shotIds 选择性入片，缺镜仍可预览")
     @PostMapping("/episodes/{id}/film/assemble")
-    public CommonResult<DramaFilmResp> assembleFilm(@PathVariable Long id) {
-        return CommonResult.success(dramaFilmService.assemble(id));
+    public CommonResult<DramaFilmResp> assembleFilm(
+            @PathVariable Long id,
+            @RequestBody(required = false) DramaFilmAssembleReq req) {
+        return CommonResult.success(dramaFilmService.assemble(id, req == null ? null : req.getShotIds()));
     }
 
     @Operation(summary = "本集成片中文字幕（按镜头实际时长累计 WebVTT）")

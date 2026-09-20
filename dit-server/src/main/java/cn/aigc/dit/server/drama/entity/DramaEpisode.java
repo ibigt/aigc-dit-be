@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.entity;
 
+import cn.aigc.dit.server.mybatis.JsonLongListTypeHandler;
 import cn.aigc.dit.server.mybatis.JsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.FieldStrategy;
@@ -10,6 +11,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -43,6 +45,9 @@ public class DramaEpisode {
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private OffsetDateTime filmAssembledAt;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS, typeHandler = JsonLongListTypeHandler.class)
+    private List<Long> filmShotIds;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private OffsetDateTime storyboardDraftingAt;

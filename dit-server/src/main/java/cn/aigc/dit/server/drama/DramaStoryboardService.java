@@ -1834,10 +1834,15 @@ public class DramaStoryboardService {
         return TaskStatus.PENDING.equals(status) || TaskStatus.RUNNING.equals(status);
     }
 
+    /** 真正占用中的任务：排队/跑着，或官方 Seedance 误杀后仍需轮询。已成功不算占用。 */
     static boolean isActiveGenerateTask(GenTask task) {
-        return task != null
-                && !TaskStatus.CANCELLED.equals(task.getStatus())
-                && (!TaskStatus.FAILED.equals(task.getStatus()) || GenerateTaskViews.shouldKeepPolling(task));
+        if (task == null) {
+            return false;
+        }
+        if (isGeneratingStatus(task.getStatus())) {
+            return true;
+        }
+        return TaskStatus.FAILED.equals(task.getStatus()) && GenerateTaskViews.shouldKeepPolling(task);
     }
 
     private cn.aigc.dit.server.drama.model.resp.DramaAssetResp toLockedAsset(DramaAsset asset) {

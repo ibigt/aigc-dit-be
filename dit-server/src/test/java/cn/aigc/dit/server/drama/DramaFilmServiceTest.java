@@ -26,6 +26,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -85,6 +86,7 @@ class DramaFilmServiceTest {
         List<DramaShot> shots = List.of(clip(11L, 1, "users/7/a.mp4"), clip(22L, 2, "users/7/b.mp4"));
         episode.setFilmKey("users/7/drama/31/film.mp4");
         episode.setFilmFingerprint(DramaFilms.fingerprint(shots));
+        episode.setFilmShotIds(List.of(11L, 22L));
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(shotMapper.selectList(any())).thenReturn(shots);
 
@@ -98,6 +100,18 @@ class DramaFilmServiceTest {
     }
 
     @Test
+    void getMarksStaleWhenIncludedShotDeleted() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        episode.setFilmFingerprint("abc");
+        episode.setFilmShotIds(List.of(11L, 22L));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(shotMapper.selectList(any())).thenReturn(List.of(clip(11L, 1, "users/7/a.mp4")));
+
+        assertTrue(service.get(31L).getStale());
+    }
+
+    @Test
     void discardAssembledFilmDeletesObjectsAndClearsEpisode() throws Exception {
         storage.put("users/7/drama/31/film.mp4", "assembled".getBytes(), "video/mp4");
         storage.put("users/7/drama/31/film-poster.webp", "poster".getBytes(), "image/webp");
@@ -105,6 +119,7 @@ class DramaFilmServiceTest {
         episode.setFilmKey("users/7/drama/31/film.mp4");
         episode.setFilmPosterKey("users/7/drama/31/film-poster.webp");
         episode.setFilmFingerprint("abc");
+        episode.setFilmShotIds(List.of(11L, 22L));
         episode.setFilmAssembledAt(java.time.OffsetDateTime.parse("2026-09-14T04:00:00Z"));
         when(episodeMapper.selectById(31L)).thenReturn(episode);
 
@@ -112,8 +127,9 @@ class DramaFilmServiceTest {
 
         assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film.mp4"));
         assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film-poster.webp"));
-        assertEquals(null, episode.getFilmKey());
-        assertEquals(null, episode.getFilmFingerprint());
+        assertNull(episode.getFilmKey());
+        assertNull(episode.getFilmFingerprint());
+        assertNull(episode.getFilmShotIds());
         verify(episodeMapper).updateById(episode);
     }
 
@@ -149,10 +165,11 @@ class DramaFilmServiceTest {
         assertEquals(1, concatPayloads.size());
         assertEquals(List.of("first", "second"), concatPayloads.get(0));
         assertEquals("users/7/drama/31/film.mp4", episode.getFilmKey());
+        assertEquals(List.of(11L, 22L), episode.getFilmShotIds());
         assertEquals(DramaFilms.fingerprint(List.of(
-                clip(22L, 2, "users/7/b.mp4"),
                 clip(11L, 1, "users/7/a.mp4"),
-                clip(33L, 3, null))), episode.getFilmFingerprint());
+                clip(22L, 2, "users/7/b.mp4"))), episode.getFilmFingerprint());
+        assertEquals(List.of(11L, 22L), resp.getIncludedShotIds());
         assertFalse(resp.getComplete());
         assertEquals(List.of(3), resp.getMissingShotIndexes());
         assertEquals("/api/media?key=users%2F7%2Fdrama%2F31%2Ffilm.mp4", resp.getFilmUrl());
@@ -160,6 +177,43 @@ class DramaFilmServiceTest {
         ArgumentCaptor<DramaEpisode> captor = ArgumentCaptor.forClass(DramaEpisode.class);
         verify(episodeMapper).updateById(captor.capture());
         assertEquals("users/7/drama/31/film-poster.webp", captor.getValue().getFilmPosterKey());
+    }
+
+    @Test
+    void assembleFiltersShotIdsAndOrdersByShotIndex() throws Exception {
+        storage.put("users/7/b.mp4", "second".getBytes(), "video/mp4");
+        storage.put("users/7/a.mp4", "first".getBytes(), "video/mp4");
+        storage.put("users/7/c.mp4", "third".getBytes(), "video/mp4");
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(shotMapper.selectList(any())).thenReturn(List.of(
+                clip(11L, 1, "users/7/a.mp4"),
+                clip(22L, 2, "users/7/b.mp4"),
+                clip(33L, 3, "users/7/c.mp4")));
+
+        DramaFilmResp resp = service.assemble(31L, List.of(33L, 11L));
+
+        assertEquals(List.of("first", "third"), concatPayloads.get(0));
+        assertEquals(List.of(11L, 33L), episode.getFilmShotIds());
+        assertEquals(DramaFilms.fingerprint(List.of(
+                clip(11L, 1, "users/7/a.mp4"),
+                clip(33L, 3, "users/7/c.mp4"))), episode.getFilmFingerprint());
+        assertEquals(List.of(11L, 33L), resp.getIncludedShotIds());
+        assertFalse(resp.getStale());
+    }
+
+    @Test
+    void assembleRejectsForeignOrUnreadyShotIds() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(shotMapper.selectList(any())).thenReturn(List.of(
+                clip(11L, 1, "users/7/a.mp4"),
+                clip(22L, 2, null)));
+
+        BizException foreign = assertThrows(BizException.class, () -> service.assemble(31L, List.of(11L, 99L)));
+        assertTrue(foreign.getMessage().contains("不属于本集"));
+
+        BizException unready = assertThrows(BizException.class, () -> service.assemble(31L, List.of(22L)));
+        assertTrue(unready.getMessage().contains("尚未出片"));
     }
 
     private static DramaEpisode ownedEpisode() {

@@ -12,12 +12,15 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 成片指纹与响应：按 {@code shot_index} 拼接 {@code shotId:videoKey:durationSec:dialogue} 再 SHA-256。
  * 时长和对白都纳入指纹，避免改镜长或字幕后成片页仍显示未过期。
+ * 新成片指纹只对实际入片镜头计算；历史成片无 {@code film_shot_ids} 时仍按全集分镜比对。
  */
 public final class DramaFilms {
 
@@ -74,11 +77,41 @@ public final class DramaFilms {
         return sha256Hex(payload.toString());
     }
 
+    /**
+     * 解析入片镜头：有 {@code filmShotIds} 时按该有序列表取镜；若某 id 已删则返回 {@code null}（视为 stale）。
+     * 历史成片未记录入片清单时，回退为全集有序分镜（与旧指纹算法一致）。
+     */
+    public static List<DramaShot> resolveIncludedShots(DramaEpisode episode, List<DramaShot> shots) {
+        List<Long> ids = episode == null ? null : episode.getFilmShotIds();
+        if (ids == null || ids.isEmpty()) {
+            return ordered(shots);
+        }
+        Map<Long, DramaShot> byId = new HashMap<>();
+        for (DramaShot shot : ordered(shots)) {
+            if (shot != null && shot.getId() != null) {
+                byId.put(shot.getId(), shot);
+            }
+        }
+        List<DramaShot> included = new ArrayList<>(ids.size());
+        for (Long id : ids) {
+            DramaShot shot = byId.get(id);
+            if (shot == null) {
+                return null;
+            }
+            included.add(shot);
+        }
+        return included;
+    }
+
     public static boolean stale(DramaEpisode episode, List<DramaShot> shots) {
         if (episode == null || !StringUtils.hasText(episode.getFilmKey())) {
             return false;
         }
-        return !fingerprint(shots).equals(episode.getFilmFingerprint());
+        List<DramaShot> included = resolveIncludedShots(episode, shots);
+        if (included == null) {
+            return true;
+        }
+        return !fingerprint(included).equals(episode.getFilmFingerprint());
     }
 
     public static DramaFilmResp describe(DramaEpisode episode, List<DramaShot> shots) {
@@ -90,6 +123,9 @@ public final class DramaFilms {
             resp.setFilmUrl(MediaUrls.of(episode.getFilmKey()));
             resp.setPosterUrl(MediaUrls.of(episode.getFilmPosterKey()));
             resp.setAssembledAt(episode.getFilmAssembledAt());
+            if (episode.getFilmShotIds() != null && !episode.getFilmShotIds().isEmpty()) {
+                resp.setIncludedShotIds(new ArrayList<>(episode.getFilmShotIds()));
+            }
         }
         resp.setStale(stale(episode, ordered));
         resp.setComplete(missing.isEmpty() && !ordered.isEmpty());

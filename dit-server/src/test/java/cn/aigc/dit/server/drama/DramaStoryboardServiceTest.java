@@ -1718,11 +1718,16 @@ class DramaStoryboardServiceTest {
         generated.setId(201L);
         generated.setShotIndex(1);
         generated.setVideoKey("users/7/videos/1.mp4");
+        generated.setGenTaskId(500L);
         storedShots.add(generated);
         DramaShot other = pendingShot();
         other.setId(202L);
         other.setShotIndex(2);
         storedShots.add(other);
+        GenTask done = new GenTask();
+        done.setId(500L);
+        done.setStatus(TaskStatus.SUCCEEDED);
+        when(genTaskMapper.selectById(500L)).thenReturn(done);
 
         DramaStoryboardResp board = service.deleteShot(201L);
 
@@ -1731,6 +1736,48 @@ class DramaStoryboardServiceTest {
         assertEquals(202L, storedShots.get(0).getId());
         assertEquals(1, storedShots.get(0).getShotIndex());
         verify(filmService).discardAssembledFilm(31L);
+    }
+
+    @Test
+    void deleteShotRejectsWhileGenerating() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        DramaShot generating = pendingShot();
+        generating.setId(201L);
+        generating.setShotIndex(1);
+        generating.setGenTaskId(500L);
+        storedShots.add(generating);
+        DramaShot other = pendingShot();
+        other.setId(202L);
+        other.setShotIndex(2);
+        storedShots.add(other);
+        GenTask running = new GenTask();
+        running.setId(500L);
+        running.setStatus(TaskStatus.RUNNING);
+        when(genTaskMapper.selectById(500L)).thenReturn(running);
+
+        assertEquals("该镜正在生成，请等任务结束再删除",
+                assertThrows(BizException.class, () -> service.deleteShot(201L)).getMessage());
+        verify(filmService, never()).discardAssembledFilm(org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void isActiveGenerateTaskIgnoresSucceeded() {
+        GenTask succeeded = new GenTask();
+        succeeded.setStatus(TaskStatus.SUCCEEDED);
+        assertFalse(DramaStoryboardService.isActiveGenerateTask(succeeded));
+
+        GenTask running = new GenTask();
+        running.setStatus(TaskStatus.RUNNING);
+        assertTrue(DramaStoryboardService.isActiveGenerateTask(running));
+
+        GenTask pending = new GenTask();
+        pending.setStatus(TaskStatus.PENDING);
+        assertTrue(DramaStoryboardService.isActiveGenerateTask(pending));
+
+        GenTask failed = new GenTask();
+        failed.setStatus(TaskStatus.FAILED);
+        assertFalse(DramaStoryboardService.isActiveGenerateTask(failed));
     }
 
     @Test

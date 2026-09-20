@@ -26,5 +26,7 @@ public class DramaFilmResp {
     private Integer shotCount;
     private Integer readyShotCount;
     private OffsetDateTime assembledAt;
+    @Schema(description = "最近一次成片入片的 shot id 有序列表；无成片或历史成片未记录时为空")
+    private List<Long> includedShotIds = new ArrayList<>();
     private List<DramaFilmShotResp> shots = new ArrayList<>();
 }

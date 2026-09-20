@@ -22,7 +22,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -49,9 +53,13 @@ public class DramaFilmService {
     }
 
     public DramaFilmResp assemble(Long episodeId) {
+        return assemble(episodeId, null);
+    }
+
+    public DramaFilmResp assemble(Long episodeId, List<Long> shotIds) {
         DramaEpisode episode = requireEpisode(episodeId);
         List<DramaShot> shots = listShots(episode.getId());
-        List<DramaShot> clips = DramaFilms.clips(shots);
+        List<DramaShot> clips = resolveAssembleClips(shots, shotIds);
         if (clips.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集还没有已出片镜头，无法拼接成片");
         }
@@ -79,7 +87,8 @@ public class DramaFilmService {
             }
             episode.setFilmKey(filmKey);
             episode.setFilmPosterKey(StringUtils.hasText(posterKey) ? posterKey : null);
-            episode.setFilmFingerprint(DramaFilms.fingerprint(shots));
+            episode.setFilmFingerprint(DramaFilms.fingerprint(clips));
+            episode.setFilmShotIds(clips.stream().map(DramaShot::getId).toList());
             episode.setFilmAssembledAt(OffsetDateTime.now());
             episodeMapper.updateById(episode);
             return DramaFilms.describe(episode, shots);
@@ -109,7 +118,8 @@ public class DramaFilmService {
         }
         boolean hadFilm = StringUtils.hasText(episode.getFilmKey())
                 || StringUtils.hasText(episode.getFilmPosterKey())
-                || StringUtils.hasText(episode.getFilmFingerprint());
+                || StringUtils.hasText(episode.getFilmFingerprint())
+                || (episode.getFilmShotIds() != null && !episode.getFilmShotIds().isEmpty());
         if (!hadFilm) {
             return;
         }
@@ -119,9 +129,44 @@ public class DramaFilmService {
         episode.setFilmKey(null);
         episode.setFilmPosterKey(null);
         episode.setFilmFingerprint(null);
+        episode.setFilmShotIds(null);
         episode.setFilmAssembledAt(null);
         episodeMapper.updateById(episode);
         log.info("discarded assembled film for episode {}", episodeId);
+    }
+
+    /**
+     * shotIds 为空：本集全部已出片。有值：须属本集且已出片，结果按镜序，忽略请求顺序。
+     */
+    static List<DramaShot> resolveAssembleClips(List<DramaShot> shots, List<Long> shotIds) {
+        if (shotIds == null || shotIds.isEmpty()) {
+            return DramaFilms.clips(shots);
+        }
+        Map<Long, DramaShot> byId = new HashMap<>();
+        for (DramaShot shot : shots) {
+            if (shot != null && shot.getId() != null) {
+                byId.putIfAbsent(shot.getId(), shot);
+            }
+        }
+        Set<Long> unique = new LinkedHashSet<>();
+        for (Long id : shotIds) {
+            if (id == null) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "分镜 id 无效");
+            }
+            unique.add(id);
+        }
+        List<DramaShot> selected = new ArrayList<>(unique.size());
+        for (Long id : unique) {
+            DramaShot shot = byId.get(id);
+            if (shot == null) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "分镜不属于本集或不存在");
+            }
+            if (!StringUtils.hasText(shot.getVideoKey())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "分镜尚未出片，无法入片");
+            }
+            selected.add(shot);
+        }
+        return DramaFilms.ordered(selected);
     }
 
     private List<DramaShot> listShots(Long episodeId) {
