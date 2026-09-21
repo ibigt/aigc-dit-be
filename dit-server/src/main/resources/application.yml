@@ -108,6 +108,7 @@ dit:
       base-url: ${RUNNINGHUB_BASE_URL:https://www.runninghub.ai}
       api-key: ${RUNNINGHUB_API_KEY:}
       t2i-path: ${RUNNINGHUB_T2I_PATH:rhart-image-g-2/text-to-image}
+      i2i-path: ${RUNNINGHUB_I2I_PATH:rhart-image-g-2/image-to-image}
       t2v-path: ${RUNNINGHUB_T2V_PATH:rhart-video/sparkvideo-2.0/text-to-video}
       r2v-path: ${RUNNINGHUB_R2V_PATH:rhart-video/sparkvideo-2.0/multimodal-video}
       max-calls: ${RUNNINGHUB_MAX_CALLS:0}

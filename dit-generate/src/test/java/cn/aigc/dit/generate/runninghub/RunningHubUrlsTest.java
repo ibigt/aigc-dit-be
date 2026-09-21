@@ -30,7 +30,9 @@ class RunningHubUrlsTest {
         assertEquals("https://www.runninghub.ai/openapi/v2/query", RunningHubUrls.queryUrl(base));
         assertEquals("https://www.runninghub.ai/openapi/v2/media/upload/binary", RunningHubUrls.uploadUrl(base));
         assertTrue(RunningHubUrls.officialChannel("rhart-image-g-2-official/text-to-image"));
+        assertTrue(RunningHubUrls.officialChannel("rhart-image-g-2-official/image-to-image"));
         assertFalse(RunningHubUrls.officialChannel("rhart-image-g-2/text-to-image"));
+        assertFalse(RunningHubUrls.officialChannel("rhart-image-g-2/image-to-image"));
     }
 
     @Test
@@ -50,6 +52,31 @@ class RunningHubUrlsTest {
         Map<String, Object> official = RunningHubRequestMapper.toT2iBody(
                 request, "rhart-image-g-2-official/text-to-image", "1k", "low");
         assertEquals("low", official.get("quality"));
+    }
+
+    @Test
+    void mapperTranslatesCanonicalI2iWithImageUrls() {
+        GenerateRequest request = new GenerateRequest()
+                .setPrompt("改成温室风格")
+                .setRatio("16:9")
+                .setResolution("4K")
+                .setQuality("High")
+                .setAdapterConfig(Map.of("i2iPath", "rhart-image-g-2/image-to-image"));
+        Map<String, Object> economy = RunningHubRequestMapper.toI2iBody(
+                request, "rhart-image-g-2/image-to-image",
+                List.of("https://cdn.example/a.png"), "1k", "low");
+        assertEquals("改成温室风格", economy.get("prompt"));
+        assertEquals("1k", economy.get("resolution"));
+        assertEquals("16:9", economy.get("aspectRatio"));
+        assertEquals(List.of("https://cdn.example/a.png"), economy.get("imageUrls"));
+        assertFalse(economy.containsKey("quality"));
+
+        Map<String, Object> official = RunningHubRequestMapper.toI2iBody(
+                request, "rhart-image-g-2-official/image-to-image",
+                List.of("https://cdn.example/a.png"), "1k", "low");
+        assertEquals("low", official.get("quality"));
+        assertEquals("rhart-image-g-2/image-to-image",
+                RunningHubRequestMapper.i2iPath(request, "fallback"));
     }
 
     @Test

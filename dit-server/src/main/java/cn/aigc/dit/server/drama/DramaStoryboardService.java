@@ -1111,6 +1111,9 @@ public class DramaStoryboardService {
         if (req.getVideoGenerateMode() != null) {
             boolean inherit = DramaVideoGenerateModes.isInherit(req.getVideoGenerateMode());
             String stored = DramaVideoGenerateModes.stored(req.getVideoGenerateMode());
+            if (DramaVideoGenerateModes.isI2v(stored) && isFirstShotInChapter(shot)) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "场内第一镜不可用首尾帧，请用参考图");
+            }
             shot.setVideoGenerateMode(stored);
             if (inherit) {
                 shot.setVideoChainPrevTail(null);
@@ -2194,10 +2197,28 @@ public class DramaStoryboardService {
         return shot == null || shot.getSeriesId() == null ? null : seriesMapper.selectById(shot.getSeriesId());
     }
 
-    private static DramaStoryboardCompiler.CompileOptions compileOptionsOf(DramaSeries series, DramaShot shot) {
+    private DramaStoryboardCompiler.CompileOptions compileOptionsOf(DramaSeries series, DramaShot shot) {
+        boolean firstInChapter = isFirstShotInChapter(shot);
         String mode = DramaVideoGenerateModes.effectiveMode(series, shot);
-        boolean chain = DramaVideoGenerateModes.effectiveChainPrevTail(series, shot);
+        if (firstInChapter && DramaVideoGenerateModes.isI2v(mode)) {
+            mode = DramaVideoGenerateModes.R2V;
+        }
+        boolean chain = !firstInChapter
+                && DramaVideoGenerateModes.isR2v(mode)
+                && resolveChainPrevTail(series, shot);
         return DramaStoryboardCompiler.CompileOptions.of(mode, chain);
+    }
+
+    private static boolean resolveChainPrevTail(DramaSeries series, DramaShot shot) {
+        if (shot != null && shot.getVideoChainPrevTail() != null) {
+            return Boolean.TRUE.equals(shot.getVideoChainPrevTail());
+        }
+        return series != null && Boolean.TRUE.equals(series.getVideoChainPrevTail());
+    }
+
+    /** 同场无上一镜时不能接尾帧，首尾帧不可用。 */
+    private boolean isFirstShotInChapter(DramaShot shot) {
+        return previousSameChapterShot(shot) == null;
     }
 
     /** 项目级模式变更后，让所有镜头重新继承项目设置。 */
@@ -2393,13 +2414,17 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定角色/场景设定图，用于自动画开场静帧");
         }
         AiModel image = requireBoundImageModel(series);
-        String prevTailKey = resolveStillPrevTailKey(shot);
+        boolean useI2i = imageSupportsI2i(image);
+        String prevTailKey = useI2i ? resolveStillPrevTailKey(shot) : null;
         List<DramaStoryboardCompiler.ActiveReference> active = new ArrayList<>();
-        for (DramaAsset asset : refs) {
-            active.add(toActive(asset));
-        }
-        if (StringUtils.hasText(prevTailKey)) {
-            active.add(DramaStoryboardCompiler.prevTailStillReference());
+        // i2i：本镜全部锁定参考图都作为图生图输入；t2i 降级时不写 Picture，避免无图却点名参考。
+        if (useI2i) {
+            for (DramaAsset asset : refs) {
+                active.add(toActive(asset));
+            }
+            if (StringUtils.hasText(prevTailKey)) {
+                active.add(DramaStoryboardCompiler.prevTailStillReference());
+            }
         }
         String prompt = DramaStoryboardCompiler.compileStill(prefix, active, toShotContent(shot, assets, refs)).prompt();
         abandonPreviousTask(shot);
@@ -2410,7 +2435,7 @@ public class DramaStoryboardService {
         req.setRatio(series.getAspectRatio());
         req.setResolution("1K");
         req.setCopies(1);
-        if (imageSupportsI2i(image)) {
+        if (useI2i) {
             List<GenerateSubmitReq.ReferenceInput> inputs = new ArrayList<>();
             for (DramaAsset asset : refs) {
                 GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
@@ -2419,6 +2444,8 @@ public class DramaStoryboardService {
                     input.setStorageKey(asset.getImageStorageKey());
                 } else if (asset.getImageAssetId() != null) {
                     input.setAssetId(asset.getImageAssetId());
+                } else {
+                    throw new BizException(ErrorCode.BAD_REQUEST, asset.getName() + "缺少可用设定图，无法图生图");
                 }
                 inputs.add(input);
             }
@@ -2438,12 +2465,15 @@ public class DramaStoryboardService {
         extra.put("openingStill", true);
         extra.put("stillForI2v", continueToVideo);
         extra.put("stillChainPrevTail", StringUtils.hasText(prevTailKey));
+        extra.put("stillMode", useI2i ? GenerateMode.I2I : GenerateMode.T2I);
         GenerateTaskResp task = generateService.submit(req, extra);
         shot.setGenTaskId(task.getId());
         shotMapper.updateById(shot);
         touchSeries(series.getId());
-        log.info("drama opening still shot {} series={} continueToVideo={} stillChainPrevTail={} task={}",
-                shot.getId(), series.getId(), continueToVideo, StringUtils.hasText(prevTailKey), task.getId());
+        log.info("drama opening still shot {} series={} mode={} refs={} continueToVideo={} stillChainPrevTail={} task={}",
+                shot.getId(), series.getId(), useI2i ? GenerateMode.I2I : GenerateMode.T2I,
+                useI2i ? req.getReferences().size() : 0, continueToVideo,
+                StringUtils.hasText(prevTailKey), task.getId());
         return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, task);
     }
 
@@ -2513,12 +2543,17 @@ public class DramaStoryboardService {
         return model;
     }
 
+    /**
+     * 图像模型是否可用于开场静帧图生图。已识别适配协议时以协议能力为准（如 gpt-image-2），
+     * 与 {@link cn.aigc.dit.server.service.GenerateService#modeSupported} 一致。
+     */
     private static boolean imageSupportsI2i(AiModel model) {
-        String adapter = resolvedAdapter(model);
-        if (adapter != null) {
-            return AdapterCatalog.supportsMode(adapter, GenerateMode.I2I);
+        if (model == null) {
+            return false;
         }
-        return GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.IMAGE, GenerateMode.I2I);
+        String adapter = resolvedAdapter(model);
+        return GenerateService.modeSupported(
+                model.getCapabilities(), adapter, ModelCategory.IMAGE, GenerateMode.I2I);
     }
 
     private static boolean isPrevTailStale(DramaShot shot, DramaShot prev) {

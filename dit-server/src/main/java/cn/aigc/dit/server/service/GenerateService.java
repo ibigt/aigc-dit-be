@@ -277,7 +277,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
     /**
      * 已识别适配协议时以厂商协议为准（管理端 capabilities 漏写 i2v 时，官方 Seedance 仍可走首尾帧）。
      */
-    static boolean modeSupported(List<String> capabilities, String adapterKey, String category, String mode) {
+    public static boolean modeSupported(List<String> capabilities, String adapterKey, String category, String mode) {
         if (adapterKey != null) {
             return AdapterCatalog.supportsMode(adapterKey, mode);
         }

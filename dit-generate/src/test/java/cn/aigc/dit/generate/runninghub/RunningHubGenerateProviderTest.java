@@ -124,10 +124,56 @@ class RunningHubGenerateProviderTest {
     }
 
     @Test
-    void rejectsI2iAndDoesNotConsumeCallBudget() {
+    void submitMapsCanonicalToI2iUploadsRefsAndStoresPng() throws Exception {
+        http.submitBody = "{\"taskId\":\"rh-i2i\",\"status\":\"RUNNING\"}";
+        http.queryBody = """
+                {"taskId":"rh-i2i","status":"SUCCESS","results":[{"url":"https://cdn.example/out.png","outputType":"png"}]}
+                """;
+        http.download = TINY_PNG;
+        new LocalObjectStorage(tempDir).put("users/8/assets/a.png", TINY_PNG, "image/png");
+
         GenerateRequest request = t2i()
                 .setMode("i2i")
-                .setReferences(List.of(new ReferenceAsset("image", "users/1/a.png")));
+                .setResolution("2K")
+                .setQuality("High")
+                .setRatio("16:9")
+                .setReferences(List.of(new ReferenceAsset("image", "users/8/assets/a.png")))
+                .setAdapterConfig(Map.of("i2iPath", "rhart-image-g-2/image-to-image"));
+
+        SubmitResult submitted = provider.submit(request);
+        assertEquals("rh-i2i", submitted.getJobId());
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals("1k", body.get("resolution").asText());
+        assertEquals("16:9", body.get("aspectRatio").asText());
+        assertEquals("https://cdn.example/a.png", body.get("imageUrls").get(0).asText());
+        assertTrue(body.get("quality") == null, "economy 通道不传 quality");
+        assertTrue(http.lastUri.toString().endsWith("/openapi/v2/rhart-image-g-2/image-to-image"));
+        assertEquals(1, http.uploads.size());
+
+        PollResult result = provider.poll(submitted.getJobId());
+        assertEquals(PollResult.SUCCEEDED, result.getStatus());
+        assertTrue(result.getOutputKeys().get(0).endsWith(".png"));
+        assertEquals(1, provider.callCount());
+    }
+
+    @Test
+    void officialI2iPathSendsForcedLowQuality() throws Exception {
+        http.submitBody = "{\"taskId\":\"rh-i2i-off\",\"status\":\"RUNNING\"}";
+        new LocalObjectStorage(tempDir).put("users/8/assets/a.png", TINY_PNG, "image/png");
+        GenerateRequest request = t2i()
+                .setMode("i2i")
+                .setReferences(List.of(new ReferenceAsset("image", "users/8/assets/a.png")))
+                .setAdapterConfig(Map.of("i2iPath", "rhart-image-g-2-official/image-to-image"));
+        provider.submit(request);
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals("1k", body.get("resolution").asText());
+        assertEquals("low", body.get("quality").asText());
+        assertTrue(http.lastUri.toString().contains("rhart-image-g-2-official/image-to-image"));
+    }
+
+    @Test
+    void rejectsI2iWithoutReferences() {
+        GenerateRequest request = t2i().setMode("i2i");
         assertThrows(BizException.class, () -> provider.submit(request));
         assertEquals(0, provider.callCount());
         assertTrue(http.posts.isEmpty());

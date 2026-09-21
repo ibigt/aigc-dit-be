@@ -10,7 +10,7 @@ import java.util.Set;
 
 /**
  * Canonical {@link GenerateRequest} → RunningHub OpenAPI v2 字段。
- * 文生图验证期强制 resolution=1k、quality=low；官方通道才带 quality。
+ * 文生图/图生图验证期强制 resolution=1k、quality=low；官方通道才带 quality。
  * 文生视频按 seedance 2.0 合同翻译 duration/resolution/ratio，不改创作端字段。
  */
 public final class RunningHubRequestMapper {
@@ -18,6 +18,8 @@ public final class RunningHubRequestMapper {
     static final String DEFAULT_ASPECT = "16:9";
     static final String DEFAULT_VIDEO_RATIO = "adaptive";
     static final String DEFAULT_VIDEO_RESOLUTION = "720p";
+    /** 官方 i2i 合同：参考图 1–10 张。 */
+    static final int MAX_I2I_IMAGES = 10;
     static final Set<String> ASPECTS = Set.of(
             "1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3",
             "4:5", "5:4", "9:16", "16:9", "21:9", "9:21");
@@ -36,6 +38,21 @@ public final class RunningHubRequestMapper {
         body.put("aspectRatio", aspectRatio(request.getRatio()));
         body.put("resolution", forceResolution == null || forceResolution.isBlank() ? "1k" : forceResolution.toLowerCase(Locale.ROOT));
         if (RunningHubUrls.officialChannel(t2iPath)) {
+            body.put("quality", forceQuality == null || forceQuality.isBlank() ? "low" : forceQuality.toLowerCase(Locale.ROOT));
+        }
+        return body;
+    }
+
+    public static Map<String, Object> toI2iBody(GenerateRequest request, String i2iPath,
+                                                List<String> imageUrls,
+                                                String forceResolution, String forceQuality) {
+        List<String> images = imageUrls == null ? List.of() : List.copyOf(imageUrls);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("prompt", request.getPrompt() == null ? "" : request.getPrompt().trim());
+        body.put("imageUrls", images);
+        body.put("aspectRatio", aspectRatio(request.getRatio()));
+        body.put("resolution", forceResolution == null || forceResolution.isBlank() ? "1k" : forceResolution.toLowerCase(Locale.ROOT));
+        if (RunningHubUrls.officialChannel(i2iPath)) {
             body.put("quality", forceQuality == null || forceQuality.isBlank() ? "low" : forceQuality.toLowerCase(Locale.ROOT));
         }
         return body;
@@ -76,6 +93,10 @@ public final class RunningHubRequestMapper {
 
     public static String t2iPath(GenerateRequest request, String fallback) {
         return path(request, "t2iPath", fallback);
+    }
+
+    public static String i2iPath(GenerateRequest request, String fallback) {
+        return path(request, "i2iPath", fallback);
     }
 
     public static String t2vPath(GenerateRequest request, String fallback) {

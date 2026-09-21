@@ -3,7 +3,7 @@ package cn.aigc.dit.generate.runninghub;
 /**
  * RunningHub OpenAPI v2 地址拼装。
  * 提交：{@code POST {base}/openapi/v2/{path}}；查询：{@code POST {base}/openapi/v2/query}。
- * path 来自 adapter_config 的 t2iPath / t2vPath / r2vPath。
+ * path 来自 adapter_config 的 t2iPath / i2iPath / t2vPath / r2vPath。
  */
 public final class RunningHubUrls {
 
@@ -38,9 +38,9 @@ public final class RunningHubUrls {
         return stripTrailingSlash(openApiBase) + "/media/upload/binary";
     }
 
-    public static boolean officialChannel(String t2iPath) {
-        String path = t2iPath == null ? "" : t2iPath.toLowerCase();
-        return path.contains("official");
+    public static boolean officialChannel(String path) {
+        String value = path == null ? "" : path.toLowerCase();
+        return value.contains("official");
     }
 
     private static String blankTo(String value, String fallback) {

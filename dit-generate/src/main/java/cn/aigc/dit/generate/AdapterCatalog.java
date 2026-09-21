@@ -55,8 +55,10 @@ public final class AdapterCatalog {
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
-                    "https://www.runninghub.ai", List.of(GenerateMode.T2I),
-                    Map.of("t2iPath", "rhart-image-g-2/text-to-image"), true),
+                    "https://www.runninghub.ai", List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(
+                            "t2iPath", "rhart-image-g-2/text-to-image",
+                            "i2iPath", "rhart-image-g-2/image-to-image"), true),
             new Spec(SEEDANCE_2, "Seedance 2.x", ModelCategory.VIDEO, TRANSPORT_RUNNINGHUB, "RunningHub",
                     "https://www.runninghub.ai", List.of(GenerateMode.T2V, GenerateMode.R2V),
                     Map.of(

@@ -71,6 +71,10 @@ class AdapterCatalogTest {
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.MINIMAX_H3, GenerateMode.R2V));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_IMAGE_2_5, GenerateMode.T2I));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_IMAGE_2_5, GenerateMode.I2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2, GenerateMode.T2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2, GenerateMode.I2I));
+        assertEquals("rhart-image-g-2/image-to-image",
+                AdapterCatalog.require(AdapterCatalog.GPT_IMAGE_2).defaultPaths().get("i2iPath"));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_VIDEO_2_5, GenerateMode.I2V));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_5, GenerateMode.T2V));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDANCE_2_5, GenerateMode.R2V));

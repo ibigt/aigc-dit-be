@@ -4,6 +4,7 @@ import cn.aigc.dit.common.constant.TaskStatus;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
@@ -741,8 +742,17 @@ class DramaStoryboardServiceTest {
 
     @Test
     void getStoryboardKeepsI2vCompiledPromptAfterRefresh() {
-        storedChapters.add(pendingChapter());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        storedShots.add(first);
         DramaShot shot = asI2v(pendingShot());
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
         storedShots.add(shot);
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
         when(assetMapper.selectList(any())).thenReturn(List.of(
@@ -760,7 +770,7 @@ class DramaStoryboardServiceTest {
         assertFalse(prompt.contains("<Picture"));
 
         DramaStoryboardResp board = service.getStoryboard(31L);
-        DramaShotResp visible = board.getChapters().get(0).getShots().get(0);
+        DramaShotResp visible = board.getChapters().get(0).getShots().get(1);
         assertEquals(prompt, visible.getCompiledPrompt());
         assertFalse(Boolean.TRUE.equals(visible.getCompiledStale()));
     }
@@ -788,8 +798,17 @@ class DramaStoryboardServiceTest {
 
     @Test
     void switchingGenerateModeRecompilesPromptOnRefresh() {
-        storedChapters.add(pendingChapter());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        storedShots.add(first);
         DramaShot shot = pendingShot();
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
         storedShots.add(shot);
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
         when(assetMapper.selectList(any())).thenReturn(List.of(
@@ -806,7 +825,7 @@ class DramaStoryboardServiceTest {
 
         shot.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         DramaStoryboardResp board = service.getStoryboard(31L);
-        DramaShotResp visible = board.getChapters().get(0).getShots().get(0);
+        DramaShotResp visible = board.getChapters().get(0).getShots().get(1);
         assertFalse(visible.getCompiledPrompt().contains("<Picture"));
         assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
         assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
@@ -815,8 +834,17 @@ class DramaStoryboardServiceTest {
 
     @Test
     void compileShotHonorsShotOverrideWhenSeriesIsR2v() {
-        storedChapters.add(pendingChapter());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        storedShots.add(first);
         DramaShot shot = pendingShot();
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
         shot.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         storedShots.add(shot);
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
@@ -946,12 +974,44 @@ class DramaStoryboardServiceTest {
         assertEquals(keep, explicit.getCompiledPrompt());
         DramaShotResp inheritResp = board.getChapters().get(0).getShots().get(0);
         DramaShotResp explicitResp = board.getChapters().get(0).getShots().get(1);
-        assertEquals(DramaVideoGenerateModes.I2V, inheritResp.getEffectiveVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.R2V, inheritResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.TRUE, inheritResp.getVideoModeInherited());
         assertEquals(DramaVideoGenerateModes.R2V, explicitResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.FALSE, explicitResp.getVideoModeInherited());
         assertFalse(Boolean.TRUE.equals(explicitResp.getCompiledStale()));
         assertFalse(Boolean.TRUE.equals(inheritResp.getCompiledStale()));
+    }
+
+    @Test
+    void firstShotInChapterCannotSaveI2v() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        storedShots.add(shot);
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        BizException error = assertThrows(BizException.class, () -> service.updateShot(201L, req));
+        assertTrue(error.getMessage().contains("场内第一镜"));
+    }
+
+    @Test
+    void firstShotInChapterForcesR2vEvenWhenSeriesIsI2v() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertEquals(DramaVideoGenerateModes.R2V, resp.getEffectiveVideoGenerateMode());
+        assertTrue(shot.getCompiledPrompt().contains("<Picture"));
+        assertFalse(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
     }
 
     @Test
@@ -978,11 +1038,130 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void generateI2vWithoutFirstFrameStartsOpeningStill() {
-        storedChapters.add(pendingChapter());
-        storedShots.add(asI2v(pendingShot()));
+    void generateI2vOpeningStillWithGptUsesAllShotReferencesAsI2i() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        first.setCharacterNames(List.of("洛白"));
+        storedShots.add(first);
+        DramaShot shot = asI2v(pendingShot());
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("洛白", "局长"));
+        shot.setPropNames(List.of("怀表"));
+        shot.setLocationName("侦探社");
+        shot.setNarrativeGoal("中景。局长推门将档案摔桌，洛白起身。");
+        storedShots.add(shot);
         when(assetMapper.selectList(any())).thenReturn(List.of(
-                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(2L, "局长", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "怀表", DramaContract.ASSET_TYPE_PROP),
+                lockedAsset(4L, "侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setImageModelId(77L);
+        series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        when(aiModelMapper.selectById(77L)).thenReturn(gptImageModel());
+        GenerateTaskResp still = new GenerateTaskResp();
+        still.setId(610L);
+        still.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(still);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
+        assertEquals("image", reqCaptor.getValue().getCategory());
+        assertEquals(5, reqCaptor.getValue().getReferences().size());
+        var keys = reqCaptor.getValue().getReferences().stream()
+                .map(item -> item.getStorageKey())
+                .toList();
+        assertTrue(keys.containsAll(List.of(
+                "users/7/assets/1.png",
+                "users/7/assets/2.png",
+                "users/7/assets/3.png",
+                "users/7/assets/4.png",
+                "users/7/gen/shot1-tail.webp")));
+        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture 1>"));
+        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture 4>"));
+        assertEquals(GenerateMode.I2I, extraCaptor.getValue().get("stillMode"));
+    }
+
+    @Test
+    void generateI2vOpeningStillWithoutI2iFallsBackToT2iWithoutPictureRefs() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        first.setCharacterNames(List.of("洛白"));
+        storedShots.add(first);
+        DramaShot second = asI2v(pendingShot());
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setChapterId(chapter.getId());
+        second.setCharacterNames(List.of("局长", "洛白"));
+        second.setNarrativeGoal("中景。局长推门将档案摔桌，洛白起身。");
+        storedShots.add(second);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setImageModelId(77L);
+        series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        when(aiModelMapper.selectById(77L)).thenReturn(t2iOnlyImageModel());
+        GenerateTaskResp still = new GenerateTaskResp();
+        still.setId(611L);
+        still.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(still);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
+        assertEquals("image", reqCaptor.getValue().getCategory());
+        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
+        assertFalse(reqCaptor.getValue().getPrompt().contains("<Picture"));
+        assertEquals(GenerateMode.T2I, extraCaptor.getValue().get("stillMode"));
+    }
+
+    @Test
+    void generateI2vWithoutFirstFrameStartsOpeningStill() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        first.setCharacterNames(List.of("洛白"));
+        storedShots.add(first);
+        DramaShot second = asI2v(pendingShot());
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setChapterId(chapter.getId());
+        second.setCharacterNames(List.of("局长", "洛白"));
+        second.setNarrativeGoal("中景。局长推门将档案摔桌，洛白起身。");
+        storedShots.add(second);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER)));
         DramaSeries series = ownedSeries();
         series.setVideoModelId(88L);
         series.setImageModelId(77L);
@@ -1004,22 +1183,37 @@ class DramaStoryboardServiceTest {
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
         assertEquals("image", reqCaptor.getValue().getCategory());
         assertTrue(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_MUST));
-        assertFalse(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
-        assertEquals(1, reqCaptor.getValue().getReferences().size());
+        assertTrue(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
+        assertEquals(3, reqCaptor.getValue().getReferences().size());
         assertEquals(Boolean.TRUE, extraCaptor.getValue().get("openingStill"));
         assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillForI2v"));
-        assertEquals(Boolean.FALSE, extraCaptor.getValue().get("stillChainPrevTail"));
-        assertEquals(600L, storedShots.get(0).getGenTaskId());
+        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillChainPrevTail"));
+        assertEquals(600L, second.getGenTaskId());
         assertTrue(Boolean.TRUE.equals(resp.getShot().getGeneratingStill())
                 || Boolean.TRUE.equals(resp.getShot().getGenerating()));
     }
 
     @Test
     void generateI2vWithoutImageModelRejected() {
-        storedChapters.add(pendingChapter());
-        storedShots.add(asI2v(pendingShot()));
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        first.setCharacterNames(List.of("洛白"));
+        storedShots.add(first);
+        DramaShot second = asI2v(pendingShot());
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setChapterId(chapter.getId());
+        second.setCharacterNames(List.of("局长", "洛白"));
+        second.setNarrativeGoal("中景。局长推门将档案摔桌，洛白起身。");
+        storedShots.add(second);
         when(assetMapper.selectList(any())).thenReturn(List.of(
-                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER)));
         DramaSeries series = ownedSeries();
         series.setVideoModelId(88L);
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
@@ -1052,18 +1246,19 @@ class DramaStoryboardServiceTest {
         second.setChapterId(secondChapter.getId());
         storedShots.add(asI2v(second));
         when(assetMapper.selectList(any())).thenReturn(List.of(
-                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
         DramaSeries series = ownedSeries();
         series.setVideoModelId(88L);
         series.setImageModelId(77L);
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        series.setAspectRatio("16:9");
         when(seriesMapper.selectById(21L)).thenReturn(series);
-        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
-        GenerateTaskResp still = new GenerateTaskResp();
-        still.setId(601L);
-        still.setStatus("PENDING");
-        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(still);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(601L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
 
         service.generateShot(201L);
 
@@ -1071,11 +1266,11 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("image", reqCaptor.getValue().getCategory());
-        assertFalse(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
-        assertEquals(1, reqCaptor.getValue().getReferences().size());
-        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
-        assertEquals(Boolean.FALSE, extraCaptor.getValue().get("stillChainPrevTail"));
+        // 新场第一镜强制参考图，不跨场接上一场尾帧
+        assertEquals("video", reqCaptor.getValue().getCategory());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
+        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
     }
 
     @Test
@@ -1169,11 +1364,25 @@ class DramaStoryboardServiceTest {
 
     @Test
     void getGenerateTaskContinuesOpeningStillIntoI2v() {
-        storedChapters.add(pendingChapter());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        first.setCharacterNames(List.of("洛白"));
+        storedShots.add(first);
         DramaShot shot = asI2v(pendingShot());
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("局长", "洛白"));
+        shot.setNarrativeGoal("中景。局长推门将档案摔桌，洛白起身。");
         storedShots.add(shot);
         when(assetMapper.selectList(any())).thenReturn(List.of(
-                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER)));
         DramaSeries series = ownedSeries();
         series.setVideoModelId(88L);
         series.setImageModelId(77L);
@@ -1216,8 +1425,18 @@ class DramaStoryboardServiceTest {
 
     @Test
     void generateI2vUsesUploadedFirstFrame() {
-        storedChapters.add(pendingChapter());
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        storedShots.add(first);
         DramaShot shot = asI2v(pendingShot());
+        shot.setId(201L);
+        shot.setShotIndex(2);
+        shot.setChapterId(chapter.getId());
         shot.setFirstFrameKey("users/7/drama/21/frames/open.webp");
         storedShots.add(shot);
         when(assetMapper.selectList(any())).thenReturn(List.of(
@@ -1350,12 +1569,12 @@ class DramaStoryboardServiceTest {
         verify(generateService).submit(reqCaptor.capture(), any());
         GenerateSubmitReq req = reqCaptor.getValue();
         assertEquals(3, req.getReferences().size());
-        assertEquals("users/7/assets/5.png", req.getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/1.png", req.getReferences().get(0).getStorageKey());
         assertEquals("users/7/assets/8.png", req.getReferences().get(1).getStorageKey());
-        assertEquals("users/7/assets/1.png", req.getReferences().get(2).getStorageKey());
-        assertTrue(req.getPrompt().contains("<Picture 1> 幻梦侦探社"));
+        assertEquals("users/7/assets/5.png", req.getReferences().get(2).getStorageKey());
+        assertTrue(req.getPrompt().contains("<Picture 1> 洛白"));
         assertTrue(req.getPrompt().contains("<Picture 2> 古铜怀表"));
-        assertTrue(req.getPrompt().contains("<Picture 3> 洛白"));
+        assertTrue(req.getPrompt().contains("<Picture 3> 幻梦侦探社"));
         assertFalse(req.getPrompt().contains("真实人脸"));
         assertFalse(req.getPrompt().contains("真人照片"));
         assertFalse(req.getPrompt().contains("real people"));
@@ -1992,6 +2211,33 @@ class DramaStoryboardServiceTest {
         model.setProvider("官方API");
         model.setModelKey("agnes-image-2.5-flash");
         model.setCapabilities(List.of("image", "t2i", "i2i"));
+        return model;
+    }
+
+    private static AiModel gptImageModel() {
+        AiModel model = new AiModel();
+        model.setId(77L);
+        model.setName("GPT Image 2");
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setAdapterKey("gpt-image-2");
+        model.setProvider("RunningHub");
+        model.setModelKey("gpt-image-2");
+        model.setCapabilities(List.of("image", "t2i", "i2i"));
+        return model;
+    }
+
+    /** 无适配协议且 capabilities 仅 t2i：开场静帧应降级文生图。 */
+    private static AiModel t2iOnlyImageModel() {
+        AiModel model = new AiModel();
+        model.setId(77L);
+        model.setName("T2I Only");
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setAdapterKey(null);
+        model.setProvider("Custom");
+        model.setModelKey("custom-t2i");
+        model.setCapabilities(List.of("image", "t2i"));
         return model;
     }
 

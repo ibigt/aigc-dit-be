@@ -29,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * RunningHub 运输层：submit/query/download。文生图走 gpt-image-2，视频走 seedance-2。
- * 当前实现文生图（t2i）、文生视频（t2v）与参考生视频（r2v）；首尾帧（i2v）未接。
+ * RunningHub 运输层：submit/query/download。文生图/图生图走 gpt-image-2，视频走 seedance-2。
+ * 当前实现文生图（t2i）、图生图（i2i）、文生视频（t2v）与参考生视频（r2v）；首尾帧（i2v）未接。
  */
 @Slf4j
 @Component
@@ -154,16 +154,30 @@ public class RunningHubGenerateProvider implements GenerateProvider {
         if (adapterKey != null && !AdapterCatalog.supportsMode(adapterKey, request.getMode())) {
             throw new BizException(ErrorCode.BAD_REQUEST,
                     AdapterCatalog.GPT_IMAGE_2.equals(adapterKey)
-                            ? "GPT Image 2 仅支持文生图（t2i）"
+                            ? "GPT Image 2 仅支持文生图（t2i）与图生图（i2i）"
                             : "Seedance 2.x 仅支持文生视频（t2v）与参考生视频（r2v）");
         }
         String mode = GenerateMode.canonical(safe(request.getMode()));
         if (GenerateMode.T2I.equalsIgnoreCase(mode)) {
             if (request.getReferences() != null && !request.getReferences().isEmpty()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 验证通道不支持参考图（i2i）");
+                throw new BizException(ErrorCode.BAD_REQUEST, "文生图请移除参考图，或改用支持 i2i 的模型");
             }
             if (request.getFrames() != null && request.getFrames().hasAny()) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 验证通道不支持首尾帧（i2v）");
+                throw new BizException(ErrorCode.BAD_REQUEST, "gpt-image-2 不支持首尾帧（i2v）");
+            }
+            return;
+        }
+        if (GenerateMode.I2I.equalsIgnoreCase(mode)) {
+            if (request.getReferences() == null || request.getReferences().isEmpty()) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "图生图至少需要一张参考图");
+            }
+            if (request.getFrames() != null && request.getFrames().hasAny()) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "图生图请使用参考素材，不要同时提交首尾帧");
+            }
+            for (ReferenceAsset ref : request.getReferences()) {
+                if (ref != null && AssetKind.VIDEO.equalsIgnoreCase(ref.getType())) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "图生图仅支持图片参考，不支持视频");
+                }
             }
             return;
         }
@@ -185,7 +199,8 @@ public class RunningHubGenerateProvider implements GenerateProvider {
             }
             return;
         }
-        throw new BizException(ErrorCode.BAD_REQUEST, "本期 RunningHub Adapter 仅支持文生图（t2i）、文生视频（t2v）与参考生视频（r2v）");
+        throw new BizException(ErrorCode.BAD_REQUEST,
+                "本期 RunningHub Adapter 仅支持文生图（t2i）、图生图（i2i）、文生视频（t2v）与参考生视频（r2v）");
     }
 
     private String submitPath(GenerateRequest request) {
@@ -195,6 +210,9 @@ public class RunningHubGenerateProvider implements GenerateProvider {
         }
         if (GenerateMode.R2V.equalsIgnoreCase(mode)) {
             return RunningHubRequestMapper.r2vPath(request, properties.getR2vPath());
+        }
+        if (GenerateMode.I2I.equalsIgnoreCase(mode)) {
+            return RunningHubRequestMapper.i2iPath(request, properties.getI2iPath());
         }
         return RunningHubRequestMapper.t2iPath(request, properties.getT2iPath());
     }
@@ -209,8 +227,33 @@ public class RunningHubGenerateProvider implements GenerateProvider {
                     uploadReferences(request, apiKey, openApiBase, false),
                     uploadReferences(request, apiKey, openApiBase, true));
         }
+        if (GenerateMode.I2I.equalsIgnoreCase(mode)) {
+            return RunningHubRequestMapper.toI2iBody(
+                    request, path, uploadI2iImages(request, apiKey, openApiBase),
+                    properties.getForceResolution(), properties.getForceQuality());
+        }
         return RunningHubRequestMapper.toT2iBody(
                 request, path, properties.getForceResolution(), properties.getForceQuality());
+    }
+
+    private List<String> uploadI2iImages(GenerateRequest request, String apiKey, String openApiBase) {
+        List<String> urls = new ArrayList<>();
+        for (ReferenceAsset ref : request.getReferences()) {
+            if (ref == null || !StringUtils.hasText(ref.getStorageKey())) {
+                continue;
+            }
+            if (AssetKind.VIDEO.equalsIgnoreCase(ref.getType())) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "图生图仅支持图片参考，不支持视频");
+            }
+            if (urls.size() >= RunningHubRequestMapper.MAX_I2I_IMAGES) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "图生图参考图最多 " + RunningHubRequestMapper.MAX_I2I_IMAGES + " 张");
+            }
+            urls.add(uploadReference(ref, apiKey, openApiBase));
+        }
+        if (urls.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "图生图至少需要一张参考图");
+        }
+        return urls;
     }
 
     private List<String> uploadReferences(GenerateRequest request, String apiKey, String openApiBase, boolean videos) {

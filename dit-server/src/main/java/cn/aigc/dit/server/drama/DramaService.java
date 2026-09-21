@@ -129,7 +129,7 @@ public class DramaService {
         series.setDefaultDurationSec(normalizeDuration(req.getDefaultDurationSec()));
         series.setPlannedEpisodeCount(normalizePlanned(req.getPlannedEpisodeCount()));
         series.setTextModelId(resolveCreateTextModelId(req.getTextModelId()));
-        series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
+        series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
         series.setVideoChainPrevTail(false);
         seriesMapper.insert(series);
 

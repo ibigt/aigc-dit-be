@@ -42,7 +42,7 @@ public class AdminModelSaveReq {
     @Schema(description = "能力：t2i/i2i/t2v/r2v/i2v/t2a；t2a=文本生成语音")
     private List<String> capabilities;
 
-    @Schema(description = "协议附加配置（如 t2iPath / t2vPath / r2vPath / i2vPath），厂商字段翻译在 Adapter")
+    @Schema(description = "协议附加配置（如 t2iPath / i2iPath / t2vPath / r2vPath / i2vPath），厂商字段翻译在 Adapter")
     private Map<String, Object> adapterConfig;
 
     @Schema(description = "计价 JSON（unit / sale / cost，以及可选的 concurrentLimit、instanceType、proxy）")
