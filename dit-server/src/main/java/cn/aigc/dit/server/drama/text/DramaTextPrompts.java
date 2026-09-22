@@ -98,17 +98,32 @@ public final class DramaTextPrompts {
                 {
                   "chapter_index": 1,
                   "index": 1,
-                  "title": "侦探社开场",
-                  "duration_sec": 15,
-                  "narrative_goal": "全景。风扇转动，夏安往白板贴照片，洛白用书盖脸。",
+                  "title": "贴照片",
+                  "duration_sec": 8,
+                  "narrative_goal": "中景。风扇转动，夏安往白板贴照片。",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "局长：洛老弟，别睡了。\\n洛白：科学解决不了的，就轮到我们。",
+                  "dialogue": "局长：洛老弟，别睡了。",
                   "continuity_in": "风扇叶片入画",
-                  "continuity_out": "洛白用书盖脸",
-                  "character_names": ["局长", "洛白"],
+                  "continuity_out": "夏安手贴在白板上",
+                  "character_names": ["夏安", "局长"],
                   "prop_names": ["白板"],
                   "location_name": "幻梦侦探社",
                   "cast_count": 2
+                },
+                {
+                  "chapter_index": 1,
+                  "index": 2,
+                  "title": "洛白醒神",
+                  "duration_sec": 7,
+                  "narrative_goal": "近景。洛白用书盖脸后拿开。",
+                  "scene": "幻梦侦探社日戏，风扇与白板红线",
+                  "dialogue": "洛白：科学解决不了的，就轮到我们。",
+                  "continuity_in": "夏安手贴在白板上",
+                  "continuity_out": "洛白书拿开",
+                  "character_names": ["洛白"],
+                  "prop_names": [],
+                  "location_name": "幻梦侦探社",
+                  "cast_count": 1
                 }
               ]
             }
@@ -123,18 +138,20 @@ public final class DramaTextPrompts {
             - 谁做动作就写谁的名字，不要把 A 的动作写到 B 身上。
             - prop_names 只列本镜被使用或被拿在手上的道具，不要每镜都带全场道具。
             - cast_count 必须等于 character_names 元素个数。
-            - chapter_index 对应 scene_index；同一场允许只有 1 镜。地点、时间和可见状态连续时，
-              能在 15 秒内完整表达的动作与短台词应优先合并，不要仅因景别变化或运镜变化拆镜。
+            - chapter_index 对应 scene_index；同一场允许只有 1 镜，但有戏份的场通常 2～5 镜。
+              粒度取中间：不要把多个独立节拍/角色出入/关键道具揭示压进一镜，也不要仅因景别或运镜变化拆镜。
+              下列情况应拆开：主体人物切换、独立动作转折、对白轮次明显切换、同一镜演不完的内容。
+              仅当同一主体、同一连续动作链、且时长自然可演完时，才合并进一镜。
             - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
               （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
-            - narrative_goal 写一个景别或主运镜，接着 2～3 个连续可见动作；15 秒内优先合并自然连续内容。
+            - narrative_goal 写一个景别或主运镜，接着 1～2 个紧密相连的可见动作；不要堆三个以上无关节拍。
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
             - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中
              （格式「说话人：原文」；同镜多句用换行分隔）。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
               纯动作镜可留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
-            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字（1 个景别/运镜 + 2~3 个动作关键词），
+            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字（1 个景别/运镜 + 1~2 个动作关键词），
               scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字；dialogue 不受上述字数上限约束。
             """;
 
@@ -244,7 +261,7 @@ public final class DramaTextPrompts {
         text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
         text.append("\n硬性体积要求：只输出 ShotDraftList JSON，shots 必须是非空数组；");
         text.append("禁止输出思考过程、禁止在 JSON 外写解释；");
-        text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，单场通常 1～4 镜即可；");
+        text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，有戏份的单场通常 2～5 镜；");
         text.append("但 scenes 中的台词必须尽量原样保留到对应分镜 dialogue，禁止摘要或删句来省体积。");
         text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
         text.append("\n每条分镜的 duration_sec 按该镜对白长短和动作节拍自行估计，只能是 5 到 15 的整数秒。");
@@ -254,8 +271,9 @@ public final class DramaTextPrompts {
             text.append("\n本集故事体量大约 ").append(episodeBudgetSec)
                     .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
-        text.append("\n镜头数量以最少且完整为目标：同一场景、时间和可见状态连续的内容，应在 15 秒内优先合并成一镜。");
-        text.append("只有场景/时间跳转、状态无法连续、参考能力受限或完整表达超过 15 秒时才拆分；");
+        text.append("\n镜头粒度取中间：完整表达情节，但不要压成少数超长镜，也不要仅为景别或运镜拆碎。");
+        text.append("同一主体、同一连续动作链且能自然演完时可以同镜；");
+        text.append("主体切换、独立动作转折、对白轮次切换、或一镜演不完时必须拆开。");
         text.append("不得为减少镜头而跳过情节，也不得为压缩体积而丢掉或改写台词。");
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();

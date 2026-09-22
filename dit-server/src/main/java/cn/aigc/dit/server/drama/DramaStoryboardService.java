@@ -1136,6 +1136,7 @@ public class DramaStoryboardService {
 
     private void rebindAndCompile(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
                                  boolean requireLocked, boolean autoBindIfEmpty, DramaSeries series) {
+        alignMentionedCharacters(shot, assets);
         List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
         shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
         shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
@@ -1175,6 +1176,7 @@ public class DramaStoryboardService {
 
     private void rebindReferencesOnly(DramaShot shot, Map<Long, DramaAsset> assets,
                                       boolean requireLocked, boolean autoBindIfEmpty) {
+        alignMentionedCharacters(shot, assets);
         List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
         shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
         shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
@@ -1935,6 +1937,50 @@ public class DramaStoryboardService {
                 characterOrder,
                 characterOrder.size(),
                 unnamedAppearances(characterOrder, assets, pictured, isDreamContext(shot)));
+    }
+
+    /**
+     * 动作、台词、出入点里点到的本集角色并入名单，避免正文要人、Cast 却写恰好 1 人。
+     * 用户已绑定但正文没点名的角色保留。
+     */
+    private void alignMentionedCharacters(DramaShot shot, Map<Long, DramaAsset> assets) {
+        if (shot == null) {
+            return;
+        }
+        List<String> pool = characterAssetNames(assets);
+        List<String> mentioned = DramaNameMentions.mentionedExactInOrder(
+                pool,
+                shot.getNarrativeGoal(),
+                shot.getDialogue(),
+                shot.getContinuityIn(),
+                shot.getContinuityOut());
+        List<String> merged = new ArrayList<>(mentioned);
+        for (String name : cleanNames(shot.getCharacterNames())) {
+            if (!merged.contains(name)) {
+                merged.add(name);
+            }
+        }
+        shot.setCharacterNames(merged);
+        shot.setCastCount(merged.size());
+    }
+
+    private static List<String> characterAssetNames(Map<Long, DramaAsset> assets) {
+        if (assets == null || assets.isEmpty()) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        for (DramaAsset asset : assets.values()) {
+            if (asset == null
+                    || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
+                    || !StringUtils.hasText(asset.getName())) {
+                continue;
+            }
+            String name = asset.getName().trim();
+            if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
+        return names;
     }
 
     private static List<String> characterBindOrder(DramaShot shot) {

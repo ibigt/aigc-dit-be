@@ -18,6 +18,9 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class FfmpegPosterExtractor implements PosterExtractor {
 
+    /** 抽静帧时限宽，避免容器内 libwebp 对 720p+ 整帧编码 OOM。 */
+    private static final String STILL_SCALE = "scale='min(960,iw)':-2";
+
     private final ObjectStorage objectStorage;
 
     @Override
@@ -51,11 +54,7 @@ public class FfmpegPosterExtractor implements PosterExtractor {
             Files.write(input, objectStorage.getBytes(storageKey));
             posterOut = FfmpegSupport.tempFile("dit-poster-", ".webp");
             tailOut = FfmpegSupport.tempFile("dit-tail-", ".webp");
-            FfmpegSupport.run(List.of(
-                    "-ss", "0.3",
-                    "-i", input.toString(),
-                    "-frames:v", "1",
-                    posterOut.toString()));
+            extractNearStart(input, posterOut);
             String posterKey = toPosterKey(storageKey);
             objectStorage.put(posterKey, Files.readAllBytes(posterOut), "image/webp");
             String tailKey = null;
@@ -93,15 +92,11 @@ public class FfmpegPosterExtractor implements PosterExtractor {
             output = FfmpegSupport.tempFile(tail ? "dit-tail-" : "dit-poster-", ".webp");
             Files.write(input, objectStorage.getBytes(storageKey));
             if (isImage(storageKey)) {
-                FfmpegSupport.run(List.of("-i", input.toString(), output.toString()));
+                FfmpegSupport.run(stillFromImageArgs(input, output));
             } else if (tail) {
                 extractLastFrame(input, output);
             } else {
-                FfmpegSupport.run(List.of(
-                        "-ss", "0.3",
-                        "-i", input.toString(),
-                        "-frames:v", "1",
-                        output.toString()));
+                extractNearStart(input, output);
             }
             objectStorage.put(outKey, Files.readAllBytes(output), "image/webp");
             return outKey;
@@ -114,44 +109,27 @@ public class FfmpegPosterExtractor implements PosterExtractor {
         }
     }
 
+    private static void extractNearStart(Path input, Path output) throws Exception {
+        FfmpegSupport.run(stillFrameArgs(
+                List.of("-ss", "0.3", "-i", input.toString()),
+                output));
+    }
+
+    /**
+     * 优先按片长定位尾帧（低内存）；再退到 -sseof。不用 reverse / 全片编码。
+     */
     private static void extractLastFrame(Path input, Path output) throws Exception {
         List<List<String>> attempts = new ArrayList<>();
-        for (String seek : List.of("-0.05", "-0.5", "-1")) {
-            attempts.add(List.of(
-                    "-sseof", seek,
-                    "-i", input.toString(),
-                    "-an",
-                    "-frames:v", "1",
-                    output.toString()));
-        }
         Double duration = FfmpegSupport.durationSeconds(input);
         if (duration != null && duration > 0.05) {
-            String ss = String.format(java.util.Locale.US, "%.3f", Math.max(0, duration - 0.12));
-            attempts.add(List.of(
-                    "-ss", ss,
-                    "-i", input.toString(),
-                    "-an",
-                    "-frames:v", "1",
-                    output.toString()));
-            attempts.add(List.of(
-                    "-i", input.toString(),
-                    "-ss", ss,
-                    "-an",
-                    "-frames:v", "1",
-                    output.toString()));
+            String ss = String.format(Locale.US, "%.3f", Math.max(0, duration - 0.12));
+            // 先 seek 再 decode，只吃尾部几帧，内存最低。
+            attempts.add(stillFrameArgs(List.of("-ss", ss, "-i", input.toString()), output));
+            attempts.add(stillFrameArgs(List.of("-i", input.toString(), "-ss", ss), output));
         }
-        attempts.add(List.of(
-                "-i", input.toString(),
-                "-vf", "reverse",
-                "-an",
-                "-frames:v", "1",
-                output.toString()));
-        attempts.add(List.of(
-                "-i", input.toString(),
-                "-an",
-                "-vsync", "0",
-                "-update", "1",
-                output.toString()));
+        for (String seek : List.of("-0.05", "-0.5", "-1")) {
+            attempts.add(stillFrameArgs(List.of("-sseof", seek, "-i", input.toString()), output));
+        }
         Exception last = null;
         for (List<String> args : attempts) {
             try {
@@ -169,6 +147,34 @@ public class FfmpegPosterExtractor implements PosterExtractor {
             throw runtime;
         }
         throw new IllegalStateException("tail extract failed", last);
+    }
+
+    /**
+     * 强制静态 libwebp（不要默认 libwebp_anim），并限宽，避免容器 OOM。
+     */
+    private static List<String> stillFrameArgs(List<String> inputArgs, Path output) {
+        List<String> args = new ArrayList<>(inputArgs);
+        args.add("-an");
+        args.add("-vf");
+        args.add(STILL_SCALE);
+        args.add("-frames:v");
+        args.add("1");
+        args.add("-c:v");
+        args.add("libwebp");
+        args.add("-quality");
+        args.add("80");
+        args.add(output.toString());
+        return args;
+    }
+
+    private static List<String> stillFromImageArgs(Path input, Path output) {
+        return List.of(
+                "-i", input.toString(),
+                "-vf", STILL_SCALE,
+                "-frames:v", "1",
+                "-c:v", "libwebp",
+                "-quality", "80",
+                output.toString());
     }
 
     static String toPosterKey(String storageKey) {

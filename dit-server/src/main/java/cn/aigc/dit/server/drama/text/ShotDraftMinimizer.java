@@ -6,10 +6,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
- * 把模型过度拆分、但仍可由一次视频生成承载的同场相邻草稿合并。
- * 这里只消费模型已经给出的顺序、场次和时长，不推断或创作剧情。
+ * 把模型过度拆碎、但仍可由一次视频生成承载的同场相邻草稿合并。
+ * 只合并主体一致、且合计不超过单镜上限（通常 15 秒）的连续镜；
+ * 单镜本身需要 15 秒完全允许，此处不压缩单镜时长。
  */
 public final class ShotDraftMinimizer {
 
@@ -53,9 +55,33 @@ public final class ShotDraftMinimizer {
         if (continuityOut == null || continuityIn == null || !continuityOut.equals(continuityIn)) {
             return false;
         }
+        // 主体人物不一致时不并，避免多角色节拍被压进一镜。
+        if (!sameCharacterSet(left.getCharacterNames(), right.getCharacterNames())) {
+            return false;
+        }
+        // 两边都有对白时保留轮次边界，不并。
+        if (StringUtils.hasText(left.getDialogue()) && StringUtils.hasText(right.getDialogue())) {
+            return false;
+        }
         int leftDuration = left.getDurationSec() == null ? maxDurationSec : left.getDurationSec();
         int rightDuration = right.getDurationSec() == null ? maxDurationSec : right.getDurationSec();
         return leftDuration + rightDuration <= maxDurationSec;
+    }
+
+    private static boolean sameCharacterSet(List<String> left, List<String> right) {
+        return normalizeNames(left).equals(normalizeNames(right));
+    }
+
+    private static Set<String> normalizeNames(List<String> names) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (names != null) {
+            for (String name : names) {
+                if (StringUtils.hasText(name)) {
+                    values.add(name.strip());
+                }
+            }
+        }
+        return values;
     }
 
     private static void mergeInto(ShotDraftList.ShotDraft target, ShotDraftList.ShotDraft addition) {

@@ -28,6 +28,8 @@ public class DramaAsset {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String description;
 
+    /** 允许清空设定摘要，否则删掉后再打开仍是旧摘要。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String identityInvariants;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)

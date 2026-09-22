@@ -16,4 +16,13 @@ class DramaNameMentionsTest {
         assertEquals(List.of("洛白"),
                 DramaNameMentions.mentionedInOrder(pool, "特写。洛白在桌后用书盖脸装睡。"));
     }
+
+    @Test
+    void exactMentionDoesNotPullDreamVariantFromBaseName() {
+        List<String> pool = List.of("洛白", "洛白·入梦", "夏安");
+        assertEquals(List.of("洛白"),
+                DramaNameMentions.mentionedExactInOrder(pool, "洛白拿出怀表。"));
+        assertEquals(List.of("洛白·入梦"),
+                DramaNameMentions.mentionedExactInOrder(pool, "洛白·入梦漂浮。"));
+    }
 }

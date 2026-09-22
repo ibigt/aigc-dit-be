@@ -2086,6 +2086,35 @@ class DramaStoryboardServiceTest {
         assertEquals("夏安", resp.getReferences().get(1).getName());
     }
 
+    @Test
+    void compileAlignsCharactersNamedInActionAndContinuity() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("局长"));
+        shot.setNarrativeGoal("全景。风扇转动，夏安贴照片，局长摔档案。");
+        shot.setContinuityOut("洛白拿出怀表");
+        shot.setDialogue("局长：洛老弟，别睡了。");
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(2L, "夏安", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertEquals(List.of("夏安", "局长", "洛白"), resp.getCharacterNames());
+        assertEquals(3, resp.getCastCount());
+        assertEquals(List.of("夏安", "局长", "洛白", "幻梦侦探社"),
+                resp.getReferences().stream().map(ref -> ref.getName()).toList());
+        assertTrue(resp.getCompiledPrompt().contains("本镜恰好 3 人"));
+        assertTrue(resp.getCompiledPrompt().contains("夏安=<Picture 1>"));
+        assertTrue(resp.getCompiledPrompt().contains("洛白=<Picture 3>"));
+    }
+
     private void stubLlmDrafts() {
         DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
         when(textService.getIfAvailable()).thenReturn(llm);

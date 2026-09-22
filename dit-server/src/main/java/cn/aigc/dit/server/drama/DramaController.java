@@ -390,11 +390,12 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.getGenerateTask(id, taskId));
     }
 
-    @Operation(summary = "当前分镜中文字幕（按实际视频时长生成 WebVTT）")
-    @GetMapping(value = "/shots/{id}/captions.vtt", produces = "text/vtt;charset=UTF-8")
-    public ResponseEntity<String> getShotCaptions(@PathVariable Long id) {
-        return vtt(dramaCaptionService.shotVtt(id));
-    }
+    // 暂关分镜预览字幕，保证出片视频画面/播放器均无字幕；恢复时取消注释。
+    // @Operation(summary = "当前分镜中文字幕（按实际视频时长生成 WebVTT）")
+    // @GetMapping(value = "/shots/{id}/captions.vtt", produces = "text/vtt;charset=UTF-8")
+    // public ResponseEntity<String> getShotCaptions(@PathVariable Long id) {
+    //     return vtt(dramaCaptionService.shotVtt(id));
+    // }
 
     @Operation(summary = "本集成片状态（指纹过期、缺镜清单）")
     @GetMapping("/episodes/{id}/film")
@@ -410,6 +411,7 @@ public class DramaController {
         return CommonResult.success(dramaFilmService.assemble(id, req == null ? null : req.getShotIds()));
     }
 
+    // 成片字幕暂保留接口；若也要关掉，一并取消注释块即可。
     @Operation(summary = "本集成片中文字幕（按镜头实际时长累计 WebVTT）")
     @GetMapping(value = "/episodes/{id}/film/captions.vtt", produces = "text/vtt;charset=UTF-8")
     public ResponseEntity<String> getFilmCaptions(@PathVariable Long id) {

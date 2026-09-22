@@ -146,7 +146,7 @@ public class GenerateProperties {
     public static class Ffmpeg {
         private int concatCopyTimeoutSeconds = 180;
         private int concatEncodeTimeoutSeconds = 900;
-        private boolean captionBurnEnabled = true;
+        private boolean captionBurnEnabled = false;
         /** 可选。不配则按 Linux Noto / Windows 微软雅黑等常见路径探测。 */
         private String captionFont = "";
         private int captionTimeoutSeconds = 180;

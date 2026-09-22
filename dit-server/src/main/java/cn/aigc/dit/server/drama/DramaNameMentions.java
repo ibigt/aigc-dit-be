@@ -15,6 +15,15 @@ public final class DramaNameMentions {
     }
 
     public static List<String> mentionedInOrder(List<String> pool, String... texts) {
+        return mentioned(pool, texts, false);
+    }
+
+    /** 只认全名，避免「洛白」把「洛白·入梦」也算进本镜。 */
+    public static List<String> mentionedExactInOrder(List<String> pool, String... texts) {
+        return mentioned(pool, texts, true);
+    }
+
+    private static List<String> mentioned(List<String> pool, String[] texts, boolean exactOnly) {
         String blob = join(texts);
         if (!StringUtils.hasText(blob) || pool == null || pool.isEmpty()) {
             return List.of();
@@ -24,9 +33,10 @@ public final class DramaNameMentions {
             if (!StringUtils.hasText(name)) {
                 continue;
             }
-            int at = firstIndex(blob, name.trim());
-            if (at >= 0) {
-                hits.add(new Hit(name.trim(), at));
+            String trimmed = name.trim();
+            int at = exactOnly ? blob.indexOf(trimmed) : firstIndex(blob, trimmed);
+            if (at >= 0 && !isPrefixOfLongerHit(blob, trimmed, at, pool, exactOnly)) {
+                hits.add(new Hit(trimmed, at));
             }
         }
         hits.sort(Comparator.comparingInt(Hit::at).thenComparing(Hit::name));
@@ -37,6 +47,24 @@ public final class DramaNameMentions {
             }
         }
         return ordered;
+    }
+
+    /** 「洛白·入梦」里的「洛白」不算单独出场。 */
+    private static boolean isPrefixOfLongerHit(String blob, String name, int at, List<String> pool, boolean exactOnly) {
+        for (String other : pool) {
+            if (!StringUtils.hasText(other)) {
+                continue;
+            }
+            String longer = other.trim();
+            if (longer.length() <= name.length() || !longer.startsWith(name)) {
+                continue;
+            }
+            int longerAt = exactOnly ? blob.indexOf(longer) : firstIndex(blob, longer);
+            if (longerAt == at) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static int firstIndex(String blob, String name) {

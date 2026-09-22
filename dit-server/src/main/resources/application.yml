@@ -154,7 +154,7 @@ dit:
     ffmpeg:
       concat-copy-timeout-seconds: ${FFMPEG_CONCAT_COPY_TIMEOUT_SECONDS:180}
       concat-encode-timeout-seconds: ${FFMPEG_CONCAT_ENCODE_TIMEOUT_SECONDS:900}
-      caption-burn-enabled: ${FFMPEG_CAPTION_BURN_ENABLED:true}
+      caption-burn-enabled: ${FFMPEG_CAPTION_BURN_ENABLED:false}
       caption-font: ${FFMPEG_CAPTION_FONT:}
       caption-timeout-seconds: ${FFMPEG_CAPTION_TIMEOUT_SECONDS:180}
   s3:
