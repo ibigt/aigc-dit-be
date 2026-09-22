@@ -9,13 +9,16 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
+import cn.aigc.dit.server.drama.entity.DramaAssetGeneration;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaAssetGenerationMapper;
 import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.text.AssetDraftList;
 import cn.aigc.dit.server.drama.text.DramaTextService;
@@ -55,6 +58,7 @@ import java.util.Set;
 public class DramaAssetService {
 
     private final DramaAssetMapper assetMapper;
+    private final DramaAssetGenerationMapper assetGenerationMapper;
     private final DramaEpisodeMapper episodeMapper;
     private final DramaSeriesMapper seriesMapper;
     private final AiModelMapper aiModelMapper;
@@ -184,14 +188,12 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "资产参考图仅支持图片");
         }
         String key = assetService.putOwnedFile(file, "drama/" + asset.getSeriesId());
-        Long previousLibraryId = replaceableLibraryId(asset);
-        attachImage(asset, null, key);
+        insertAndSelectGeneration(asset, key, null, "upload", null, null);
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
-        deleteReplacedLibrary(previousLibraryId);
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
@@ -325,6 +327,70 @@ public class DramaAssetService {
         storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    @Transactional(readOnly = true)
+    public List<DramaAssetGenerationResp> listGenerations(Long assetId) {
+        DramaAsset asset = requireAsset(assetId);
+        return listGenerationEntities(asset.getId()).stream()
+                .map(item -> toGenerationResp(item, asset.getSelectedGenerationId()))
+                .toList();
+    }
+
+    @Transactional
+    public DramaAssetResp selectGeneration(Long assetId, Long generationId) {
+        DramaAsset asset = requireAsset(assetId);
+        if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产已锁定，无法切换最终资产");
+        }
+        DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
+        applySelectedGeneration(asset, generation);
+        assetMapper.updateById(asset);
+        touchSeries(asset.getSeriesId());
+        return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    @Transactional
+    public void deleteGeneration(Long assetId, Long generationId) {
+        DramaAsset asset = requireAsset(assetId);
+        DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
+        boolean selected = generation.getId().equals(asset.getSelectedGenerationId());
+        if (selected && DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产已锁定，不能删除当前选用记录");
+        }
+        assetGenerationMapper.deleteById(generation.getId());
+        if (!selected) {
+            touchSeries(asset.getSeriesId());
+            return;
+        }
+        DramaAssetGeneration next = listGenerationEntities(asset.getId()).stream().findFirst().orElse(null);
+        if (next != null) {
+            applySelectedGeneration(asset, next);
+        } else {
+            clearSelectedImage(asset);
+        }
+        assetMapper.updateById(asset);
+        touchSeries(asset.getSeriesId());
+    }
+
+    @Transactional
+    public DramaAssetGenerationResp importGenerationToLibrary(Long assetId, Long generationId) {
+        DramaAsset asset = requireAsset(assetId);
+        DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
+        if (generation.getLibraryAssetId() != null) {
+            return toGenerationResp(generation, asset.getSelectedGenerationId());
+        }
+        String name = asset.getName() + " · " + generation.getLabel();
+        AssetResp library = assetService.importFromStorage(
+                UserContext.requireUserId(), name, AssetKind.IMAGE, generation.getStorageKey(), generation.getStorageKey());
+        generation.setLibraryAssetId(library.getId());
+        assetGenerationMapper.updateById(generation);
+        if (generation.getId().equals(asset.getSelectedGenerationId())) {
+            asset.setImageAssetId(library.getId());
+            assetMapper.updateById(asset);
+        }
+        touchSeries(asset.getSeriesId());
+        return toGenerationResp(generation, asset.getSelectedGenerationId());
     }
 
     @Transactional
@@ -509,34 +575,116 @@ public class DramaAssetService {
         if (!StringUtils.hasText(key) || key.equals(asset.getImageStorageKey())) {
             return;
         }
-        Long previousLibraryId = replaceableLibraryId(asset);
-        attachImage(asset, null, key);
+        // 任务结果可能已入库；用户改选旧记录后 imageStorageKey 与最新任务不一致，
+        // 刷新/轮询时不得再插入并强行改选。
+        if (findRecordedAssetGeneration(asset.getId(), task.getId(), key) != null) {
+            return;
+        }
+        String resolution = resolutionFromTask(task);
+        insertAndSelectGeneration(asset, key, task.getId(), "generate", resolution, null);
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         assetMapper.updateById(asset);
-        deleteReplacedLibrary(previousLibraryId);
     }
 
-    /** 未锁定草稿被换图时，历史素材库记录可以删；已锁定图不跟着清。新图一律不入素材库。 */
-    private Long replaceableLibraryId(DramaAsset asset) {
-        if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())
-                || DramaContract.STATUS_EXPIRED.equals(asset.getStatus())) {
+    /** 同一任务或同一图片已有记录则视为已落库（避免改选后被任务回写重复插入）。 */
+    private DramaAssetGeneration findRecordedAssetGeneration(Long assetId, Long genTaskId, String storageKey) {
+        if (genTaskId != null) {
+            DramaAssetGeneration byTask = assetGenerationMapper.selectOne(new LambdaQueryWrapper<DramaAssetGeneration>()
+                    .eq(DramaAssetGeneration::getAssetId, assetId)
+                    .eq(DramaAssetGeneration::getGenTaskId, genTaskId)
+                    .last("LIMIT 1"));
+            if (byTask != null) {
+                return byTask;
+            }
+        }
+        if (!StringUtils.hasText(storageKey)) {
             return null;
         }
-        return asset.getImageAssetId();
+        return assetGenerationMapper.selectOne(new LambdaQueryWrapper<DramaAssetGeneration>()
+                .eq(DramaAssetGeneration::getAssetId, assetId)
+                .eq(DramaAssetGeneration::getStorageKey, storageKey)
+                .last("LIMIT 1"));
     }
 
-    private void deleteReplacedLibrary(Long previousId) {
-        if (previousId == null) {
-            return;
+    private void insertAndSelectGeneration(
+            DramaAsset asset,
+            String storageKey,
+            Long genTaskId,
+            String source,
+            String resolution,
+            Long libraryAssetId) {
+        DramaAssetGeneration generation = new DramaAssetGeneration();
+        generation.setAssetId(asset.getId());
+        generation.setUserId(asset.getUserId());
+        generation.setStorageKey(storageKey);
+        generation.setGenTaskId(genTaskId);
+        generation.setSource(source);
+        generation.setLabel(nextAssetLabel(asset.getId(), source));
+        generation.setResolution(blankToNull(resolution));
+        generation.setLibraryAssetId(libraryAssetId);
+        assetGenerationMapper.insert(generation);
+        applySelectedGeneration(asset, generation);
+    }
+
+    private void applySelectedGeneration(DramaAsset asset, DramaAssetGeneration generation) {
+        asset.setSelectedGenerationId(generation.getId());
+        attachImage(asset, generation.getLibraryAssetId(), generation.getStorageKey());
+    }
+
+    private void clearSelectedImage(DramaAsset asset) {
+        asset.setSelectedGenerationId(null);
+        attachImage(asset, null, null);
+    }
+
+    private DramaAssetGeneration requireOwnedGeneration(DramaAsset asset, Long generationId) {
+        DramaAssetGeneration generation = assetGenerationMapper.selectById(generationId);
+        if (generation == null
+                || !generation.getAssetId().equals(asset.getId())
+                || !generation.getUserId().equals(UserContext.requireUserId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "生成记录不存在");
         }
-        try {
-            assetService.deleteMine(previousId);
-        } catch (BizException ignored) {
-            // 用户可能已从素材库删掉旧图
+        return generation;
+    }
+
+    private List<DramaAssetGeneration> listGenerationEntities(Long assetId) {
+        return assetGenerationMapper.selectList(new LambdaQueryWrapper<DramaAssetGeneration>()
+                .eq(DramaAssetGeneration::getAssetId, assetId)
+                .orderByDesc(DramaAssetGeneration::getId));
+    }
+
+    private String nextAssetLabel(Long assetId, String source) {
+        long count = assetGenerationMapper.selectCount(new LambdaQueryWrapper<DramaAssetGeneration>()
+                .eq(DramaAssetGeneration::getAssetId, assetId)
+                .eq(DramaAssetGeneration::getSource, source));
+        long next = count + 1;
+        return "upload".equals(source) ? ("上传 " + next) : ("生成方案 " + next);
+    }
+
+    private DramaAssetGenerationResp toGenerationResp(DramaAssetGeneration generation, Long selectedId) {
+        DramaAssetGenerationResp resp = new DramaAssetGenerationResp();
+        resp.setId(generation.getId());
+        resp.setAssetId(generation.getAssetId());
+        resp.setStorageKey(generation.getStorageKey());
+        resp.setUrl(MediaUrls.of(generation.getStorageKey()));
+        resp.setGenTaskId(generation.getGenTaskId());
+        resp.setSource(generation.getSource());
+        resp.setLabel(generation.getLabel());
+        resp.setResolution(generation.getResolution());
+        resp.setLibraryAssetId(generation.getLibraryAssetId());
+        resp.setSelected(generation.getId().equals(selectedId));
+        resp.setImported(generation.getLibraryAssetId() != null);
+        resp.setCreatedAt(generation.getCreatedAt());
+        return resp;
+    }
+
+    private static String resolutionFromTask(GenerateTaskResp task) {
+        if (task.getParams() == null || task.getParams().get("resolution") == null) {
+            return null;
         }
+        return blankToNull(String.valueOf(task.getParams().get("resolution")));
     }
 
     private void reopenIfConfirmed(DramaAsset asset) {
@@ -659,6 +807,7 @@ public class DramaAssetService {
         resp.setImageStorageKey(asset.getImageStorageKey());
         resp.setImageAssetId(asset.getImageAssetId());
         resp.setImageUrl(MediaUrls.of(asset.getImageStorageKey()));
+        resp.setSelectedGenerationId(asset.getSelectedGenerationId());
         resp.setGenTaskId(asset.getGenTaskId());
         if (task != null) {
             resp.setGenTaskStatus(task.getStatus());

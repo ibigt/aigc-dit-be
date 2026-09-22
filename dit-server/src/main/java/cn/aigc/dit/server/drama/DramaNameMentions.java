@@ -35,7 +35,7 @@ public final class DramaNameMentions {
             }
             String trimmed = name.trim();
             int at = exactOnly ? blob.indexOf(trimmed) : firstIndex(blob, trimmed);
-            if (at >= 0 && !isPrefixOfLongerHit(blob, trimmed, at, pool, exactOnly)) {
+            if (at >= 0 && !isCoveredByLongerName(blob, trimmed, at, pool, exactOnly)) {
                 hits.add(new Hit(trimmed, at));
             }
         }
@@ -49,18 +49,27 @@ public final class DramaNameMentions {
         return ordered;
     }
 
-    /** 「洛白·入梦」里的「洛白」不算单独出场。 */
-    private static boolean isPrefixOfLongerHit(String blob, String name, int at, List<String> pool, boolean exactOnly) {
+    /**
+     * 「赵局长」命中时，跳过其子串「局长」；「洛白·入梦」命中时，跳过同起点的「洛白」。
+     */
+    private static boolean isCoveredByLongerName(
+            String blob, String name, int at, List<String> pool, boolean exactOnly) {
         for (String other : pool) {
             if (!StringUtils.hasText(other)) {
                 continue;
             }
             String longer = other.trim();
-            if (longer.length() <= name.length() || !longer.startsWith(name)) {
+            if (longer.length() <= name.length() || !longer.contains(name)) {
                 continue;
             }
             int longerAt = exactOnly ? blob.indexOf(longer) : firstIndex(blob, longer);
-            if (longerAt == at) {
+            if (longerAt < 0) {
+                continue;
+            }
+            if (longer.startsWith(name) && longerAt == at) {
+                return true;
+            }
+            if (at >= longerAt && at + name.length() <= longerAt + longer.length()) {
                 return true;
             }
         }

@@ -17,10 +17,12 @@ import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
 import cn.aigc.dit.server.drama.model.resp.DramaImageModelResp;
@@ -296,6 +298,37 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.lock(id));
     }
 
+    @Operation(summary = "资产生成记录列表（新→旧）")
+    @GetMapping("/assets/{id}/generations")
+    public CommonResult<List<DramaAssetGenerationResp>> listAssetGenerations(@PathVariable Long id) {
+        return CommonResult.success(dramaAssetService.listGenerations(id));
+    }
+
+    @Operation(summary = "选用一条资产生成记录为最终；已锁定拒绝")
+    @PostMapping("/assets/{id}/generations/{gid}/select")
+    public CommonResult<DramaAssetResp> selectAssetGeneration(
+            @PathVariable Long id,
+            @PathVariable Long gid) {
+        return CommonResult.success(dramaAssetService.selectGeneration(id, gid));
+    }
+
+    @Operation(summary = "删除资产生成记录；锁定时仅可删未选用")
+    @DeleteMapping("/assets/{id}/generations/{gid}")
+    public CommonResult<Void> deleteAssetGeneration(
+            @PathVariable Long id,
+            @PathVariable Long gid) {
+        dramaAssetService.deleteGeneration(id, gid);
+        return CommonResult.success();
+    }
+
+    @Operation(summary = "将资产生成记录导入素材库")
+    @PostMapping("/assets/{id}/generations/{gid}/import-library")
+    public CommonResult<DramaAssetGenerationResp> importAssetGeneration(
+            @PathVariable Long id,
+            @PathVariable Long gid) {
+        return CommonResult.success(dramaAssetService.importGenerationToLibrary(id, gid));
+    }
+
     @Operation(summary = "章节与分镜（含编译预览）")
     @GetMapping("/episodes/{id}/storyboard")
     public CommonResult<DramaStoryboardResp> getStoryboard(@PathVariable Long id) {
@@ -388,6 +421,29 @@ public class DramaController {
             @PathVariable Long id,
             @PathVariable Long taskId) {
         return CommonResult.success(dramaStoryboardService.getGenerateTask(id, taskId));
+    }
+
+    @Operation(summary = "分镜生成记录列表（新→旧）")
+    @GetMapping("/shots/{id}/generations")
+    public CommonResult<List<DramaShotGenerationResp>> listShotGenerations(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.listGenerations(id));
+    }
+
+    @Operation(summary = "选用一条分镜生成记录为最终；已锁定拒绝")
+    @PostMapping("/shots/{id}/generations/{gid}/select")
+    public CommonResult<DramaShotResp> selectShotGeneration(
+            @PathVariable Long id,
+            @PathVariable Long gid) {
+        return CommonResult.success(dramaStoryboardService.selectGeneration(id, gid));
+    }
+
+    @Operation(summary = "删除分镜生成记录；锁定时仅可删未选用")
+    @DeleteMapping("/shots/{id}/generations/{gid}")
+    public CommonResult<Void> deleteShotGeneration(
+            @PathVariable Long id,
+            @PathVariable Long gid) {
+        dramaStoryboardService.deleteGeneration(id, gid);
+        return CommonResult.success();
     }
 
     // 暂关分镜预览字幕，保证出片视频画面/播放器均无字幕；恢复时取消注释。

@@ -25,4 +25,13 @@ class DramaNameMentionsTest {
         assertEquals(List.of("洛白·入梦"),
                 DramaNameMentions.mentionedExactInOrder(pool, "洛白·入梦漂浮。"));
     }
+
+    @Test
+    void exactMentionPrefersLongerNameOverSubstring() {
+        List<String> pool = List.of("局长", "赵局长", "夏安");
+        assertEquals(List.of("赵局长"),
+                DramaNameMentions.mentionedExactInOrder(pool, "赵局长：洛老弟，别睡了。"));
+        assertEquals(List.of("局长"),
+                DramaNameMentions.mentionedExactInOrder(pool, "局长摔档案。"));
+    }
 }

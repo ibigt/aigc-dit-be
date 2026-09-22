@@ -4,8 +4,10 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
+import cn.aigc.dit.server.drama.entity.DramaAssetGeneration;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaAssetGenerationMapper;
 import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
@@ -32,9 +34,11 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -49,6 +53,8 @@ class DramaAssetServiceTest {
 
     @Mock
     private DramaAssetMapper assetMapper;
+    @Mock
+    private DramaAssetGenerationMapper assetGenerationMapper;
     @Mock
     private DramaEpisodeMapper episodeMapper;
     @Mock
@@ -67,14 +73,21 @@ class DramaAssetServiceTest {
     private DramaStoryboardService storyboardService;
 
     private DramaAssetService service;
+    private final AtomicLong generationIds = new AtomicLong(500);
 
     @BeforeEach
     void setUp() {
         service = new DramaAssetService(
-                assetMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
+                assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
+        org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
+            DramaAssetGeneration generation = invocation.getArgument(0);
+            generation.setId(generationIds.incrementAndGet());
+            return 1;
+        });
+        org.mockito.Mockito.lenient().when(assetGenerationMapper.selectCount(any())).thenReturn(0L);
     }
 
     @AfterEach
@@ -346,17 +359,19 @@ class DramaAssetServiceTest {
         service.getGenerateTask(9L, 100L);
 
         verify(libraryAssetService, never()).importFromStorage(any(), any(), any(), any(), any());
-        verify(libraryAssetService).deleteMine(41L);
+        verify(libraryAssetService, never()).deleteMine(any());
         assertNull(asset.getImageAssetId());
         assertEquals("users/7/gen/new.png", asset.getImageStorageKey());
+        assertNotNull(asset.getSelectedGenerationId());
     }
 
     @Test
-    void regeneratingLockedAssetDoesNotIndexLibrary() {
+    void regeneratingLockedAssetUnlocksAndSelectsNewGeneration() {
         DramaAsset asset = ownedAsset();
         asset.setStatus(DramaContract.STATUS_LOCKED);
         asset.setImageAssetId(41L);
         asset.setImageStorageKey("users/7/assets/old.png");
+        asset.setSelectedGenerationId(88L);
         asset.setGenTaskId(100L);
         when(assetMapper.selectById(9L)).thenReturn(asset);
         GenerateTaskResp task = new GenerateTaskResp();
@@ -372,6 +387,131 @@ class DramaAssetServiceTest {
         verify(libraryAssetService, never()).deleteMine(any());
         assertNull(asset.getImageAssetId());
         assertEquals("users/7/gen/new.png", asset.getImageStorageKey());
+        assertEquals(DramaContract.STATUS_PENDING_CONFIRM, asset.getStatus());
+        assertNotNull(asset.getSelectedGenerationId());
+        assertTrue(asset.getSelectedGenerationId() > 88L);
+        verify(storyboardService).invalidateByAsset(31L, 9L);
+    }
+
+    @Test
+    void selectGenerationRejectedWhenLocked() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_LOCKED);
+        asset.setSelectedGenerationId(1L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+
+        BizException error = assertThrows(BizException.class, () -> service.selectGeneration(9L, 2L));
+        assertEquals("资产已锁定，无法切换最终资产", error.getMessage());
+    }
+
+    @Test
+    void applyTaskResultDoesNotDuplicateAfterSelectingOlderAssetGeneration() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setSelectedGenerationId(1L);
+        asset.setImageStorageKey("users/7/gen/old.png");
+        asset.setGenTaskId(100L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaAssetGeneration newer = new DramaAssetGeneration();
+        newer.setId(2L);
+        newer.setAssetId(9L);
+        newer.setUserId(7L);
+        newer.setStorageKey("users/7/gen/new.png");
+        newer.setGenTaskId(100L);
+        when(assetGenerationMapper.selectOne(any())).thenReturn(newer);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(100L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/new.png");
+        task.setOutputKeys(List.of("users/7/gen/new.png"));
+        when(generateService.getMine(100L)).thenReturn(task);
+
+        service.getGenerateTask(9L, 100L);
+
+        verify(assetGenerationMapper, never()).insert(any(DramaAssetGeneration.class));
+        assertEquals(1L, asset.getSelectedGenerationId());
+        assertEquals("users/7/gen/old.png", asset.getImageStorageKey());
+    }
+
+    @Test
+    void lockedAssetCanDeleteUnselectedButNotSelectedGeneration() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_LOCKED);
+        asset.setSelectedGenerationId(1L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+
+        DramaAssetGeneration selected = new DramaAssetGeneration();
+        selected.setId(1L);
+        selected.setAssetId(9L);
+        selected.setUserId(7L);
+        selected.setStorageKey("users/7/gen/sel.png");
+        DramaAssetGeneration other = new DramaAssetGeneration();
+        other.setId(2L);
+        other.setAssetId(9L);
+        other.setUserId(7L);
+        other.setStorageKey("users/7/gen/other.png");
+        when(assetGenerationMapper.selectById(1L)).thenReturn(selected);
+        when(assetGenerationMapper.selectById(2L)).thenReturn(other);
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteGeneration(9L, 1L));
+        assertEquals("资产已锁定，不能删除当前选用记录", error.getMessage());
+
+        service.deleteGeneration(9L, 2L);
+        verify(assetGenerationMapper).deleteById(2L);
+        verify(assetMapper, never()).updateById(asset);
+    }
+
+    @Test
+    void unlockedDeleteSelectedReselectsLatestRemaining() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setSelectedGenerationId(2L);
+        asset.setImageStorageKey("users/7/gen/new.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+
+        DramaAssetGeneration older = new DramaAssetGeneration();
+        older.setId(1L);
+        older.setAssetId(9L);
+        older.setUserId(7L);
+        older.setStorageKey("users/7/gen/old.png");
+        older.setLibraryAssetId(55L);
+        DramaAssetGeneration selected = new DramaAssetGeneration();
+        selected.setId(2L);
+        selected.setAssetId(9L);
+        selected.setUserId(7L);
+        selected.setStorageKey("users/7/gen/new.png");
+        when(assetGenerationMapper.selectById(2L)).thenReturn(selected);
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of(older));
+
+        service.deleteGeneration(9L, 2L);
+
+        verify(assetGenerationMapper).deleteById(2L);
+        assertEquals(1L, asset.getSelectedGenerationId());
+        assertEquals("users/7/gen/old.png", asset.getImageStorageKey());
+        assertEquals(55L, asset.getImageAssetId());
+        verify(assetMapper).updateById(asset);
+    }
+
+    @Test
+    void unlockedDeleteSelectedClearsWhenNoRemaining() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setSelectedGenerationId(2L);
+        asset.setImageStorageKey("users/7/gen/only.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaAssetGeneration selected = new DramaAssetGeneration();
+        selected.setId(2L);
+        selected.setAssetId(9L);
+        selected.setUserId(7L);
+        selected.setStorageKey("users/7/gen/only.png");
+        when(assetGenerationMapper.selectById(2L)).thenReturn(selected);
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of());
+
+        service.deleteGeneration(9L, 2L);
+
+        assertNull(asset.getSelectedGenerationId());
+        assertNull(asset.getImageStorageKey());
+        assertNull(asset.getImageAssetId());
     }
 
     private static DramaEpisode ownedEpisode() {

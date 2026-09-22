@@ -16,15 +16,18 @@ import cn.aigc.dit.server.drama.entity.DramaChapter;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.entity.DramaShot;
+import cn.aigc.dit.server.drama.entity.DramaShotGeneration;
 import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
+import cn.aigc.dit.server.drama.mapper.DramaShotGenerationMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaChapterResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotReferenceResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
 import cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp;
@@ -80,6 +83,7 @@ public class DramaStoryboardService {
     private final DramaAssetMapper assetMapper;
     private final DramaChapterMapper chapterMapper;
     private final DramaShotMapper shotMapper;
+    private final DramaShotGenerationMapper shotGenerationMapper;
     private final AiModelMapper aiModelMapper;
     private final GenTaskMapper genTaskMapper;
     private final GenerateService generateService;
@@ -702,6 +706,52 @@ public class DramaStoryboardService {
         return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix, loadTask(shot.getGenTaskId()));
     }
 
+    @Transactional(readOnly = true)
+    public List<DramaShotGenerationResp> listGenerations(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        return listGenerationEntities(shot.getId()).stream()
+                .map(item -> toGenerationResp(item, shot.getSelectedGenerationId()))
+                .toList();
+    }
+
+    @Transactional
+    public DramaShotResp selectGeneration(Long shotId, Long generationId) {
+        DramaShot shot = requireShot(shotId);
+        if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "分镜已锁定，无法切换最终分镜");
+        }
+        DramaShotGeneration generation = requireOwnedGeneration(shot, generationId);
+        applySelectedGeneration(shot, generation);
+        shotMapper.updateById(shot);
+        touchSeries(shot.getSeriesId());
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        String prefix = stylePrefix(shot.getSeriesId());
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix, loadTask(shot.getGenTaskId()));
+    }
+
+    @Transactional
+    public void deleteGeneration(Long shotId, Long generationId) {
+        DramaShot shot = requireShot(shotId);
+        DramaShotGeneration generation = requireOwnedGeneration(shot, generationId);
+        boolean selected = generation.getId().equals(shot.getSelectedGenerationId());
+        if (selected && DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "分镜已锁定，不能删除当前选用记录");
+        }
+        shotGenerationMapper.deleteById(generation.getId());
+        if (!selected) {
+            touchSeries(shot.getSeriesId());
+            return;
+        }
+        DramaShotGeneration next = listGenerationEntities(shot.getId()).stream().findFirst().orElse(null);
+        if (next != null) {
+            applySelectedGeneration(shot, next);
+        } else {
+            clearSelectedVideo(shot);
+        }
+        shotMapper.updateById(shot);
+        touchSeries(shot.getSeriesId());
+    }
+
     @Transactional
     public DramaShotGenerateResp generateShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
@@ -1045,6 +1095,8 @@ public class DramaStoryboardService {
             shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
             shot.setReferenceAssetIds(new ArrayList<>());
             DramaVideoGenerateModes.applyProductDefault(shot);
+            // 仅草稿落库时补齐正文点名但 Cast 漏写的角色；之后用户侧栏增删不再被覆盖。
+            alignMentionedCharacters(shot, byId);
             rebindAndCompile(shot, byId, prefix, false, true);
             shotMapper.insert(shot);
         }
@@ -1136,7 +1188,7 @@ public class DramaStoryboardService {
 
     private void rebindAndCompile(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
                                  boolean requireLocked, boolean autoBindIfEmpty, DramaSeries series) {
-        alignMentionedCharacters(shot, assets);
+        // 不在此回填正文点名角色：侧栏增删名单以用户为准，保存/编译不得把已删角色加回来。
         List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
         shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
         shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
@@ -1176,7 +1228,6 @@ public class DramaStoryboardService {
 
     private void rebindReferencesOnly(DramaShot shot, Map<Long, DramaAsset> assets,
                                       boolean requireLocked, boolean autoBindIfEmpty) {
-        alignMentionedCharacters(shot, assets);
         List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
         shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
         shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
@@ -1597,6 +1648,7 @@ public class DramaStoryboardService {
         resp.setGenTaskId(shot.getGenTaskId());
         resp.setVideoKey(shot.getVideoKey());
         resp.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
+        resp.setSelectedGenerationId(shot.getSelectedGenerationId());
         resp.setVideoPosterKey(shot.getVideoPosterKey());
         resp.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
         resp.setVideoTailKey(shot.getVideoTailKey());
@@ -1720,13 +1772,13 @@ public class DramaStoryboardService {
             return;
         }
         if (videoChanged) {
-            shot.setVideoKey(key);
-            if (StringUtils.hasText(poster)) {
-                shot.setVideoPosterKey(poster);
+            // 任务结果可能已入库；用户改选旧记录后 videoKey 与最新任务不一致，
+            // 刷新/轮询时不得再插入并强行改选。
+            if (findRecordedShotGeneration(shot.getId(), task.getId(), key) != null) {
+                return;
             }
-            if (StringUtils.hasText(tail)) {
-                shot.setVideoTailKey(tail);
-            }
+            insertAndSelectGeneration(shot, key, poster, tail, task.getId(), "generate");
+            reopenIfConfirmed(shot);
         } else {
             if (posterChanged) {
                 shot.setVideoPosterKey(poster);
@@ -1734,6 +1786,7 @@ public class DramaStoryboardService {
             if (tailChanged) {
                 shot.setVideoTailKey(tail);
             }
+            syncSelectedGenerationMedia(shot);
         }
         if (generatedMode != null) {
             shot.setVideoGeneratedMode(generatedMode);
@@ -1741,7 +1794,124 @@ public class DramaStoryboardService {
         shot.setChainedFromShotId(chainedFromShotId);
         shot.setChainedFromTailKey(chainedFromTailKey);
         shotMapper.updateById(shot);
+        if (videoChanged) {
+            refreshChapterStatuses(listChapters(shot.getEpisodeId()), listShots(shot.getEpisodeId()));
+        }
         publishTailToNextShot(shot);
+    }
+
+    private void insertAndSelectGeneration(
+            DramaShot shot,
+            String videoKey,
+            String posterKey,
+            String tailKey,
+            Long genTaskId,
+            String source) {
+        DramaShotGeneration generation = new DramaShotGeneration();
+        generation.setShotId(shot.getId());
+        generation.setUserId(shot.getUserId());
+        generation.setVideoKey(videoKey);
+        generation.setVideoPosterKey(blankToNull(posterKey));
+        generation.setVideoTailKey(blankToNull(tailKey));
+        generation.setGenTaskId(genTaskId);
+        generation.setSource(source);
+        generation.setLabel(nextShotLabel(shot.getId()));
+        shotGenerationMapper.insert(generation);
+        applySelectedGeneration(shot, generation);
+    }
+
+    /** 同一任务或同一视频已有记录则视为已落库（避免改选后被任务回写重复插入）。 */
+    private DramaShotGeneration findRecordedShotGeneration(Long shotId, Long genTaskId, String videoKey) {
+        if (genTaskId != null) {
+            DramaShotGeneration byTask = shotGenerationMapper.selectOne(new LambdaQueryWrapper<DramaShotGeneration>()
+                    .eq(DramaShotGeneration::getShotId, shotId)
+                    .eq(DramaShotGeneration::getGenTaskId, genTaskId)
+                    .last("LIMIT 1"));
+            if (byTask != null) {
+                return byTask;
+            }
+        }
+        if (!StringUtils.hasText(videoKey)) {
+            return null;
+        }
+        return shotGenerationMapper.selectOne(new LambdaQueryWrapper<DramaShotGeneration>()
+                .eq(DramaShotGeneration::getShotId, shotId)
+                .eq(DramaShotGeneration::getVideoKey, videoKey)
+                .last("LIMIT 1"));
+    }
+
+    private void applySelectedGeneration(DramaShot shot, DramaShotGeneration generation) {
+        shot.setSelectedGenerationId(generation.getId());
+        shot.setVideoKey(generation.getVideoKey());
+        shot.setVideoPosterKey(generation.getVideoPosterKey());
+        shot.setVideoTailKey(generation.getVideoTailKey());
+    }
+
+    private void clearSelectedVideo(DramaShot shot) {
+        shot.setSelectedGenerationId(null);
+        shot.setVideoKey(null);
+        shot.setVideoPosterKey(null);
+        shot.setVideoTailKey(null);
+    }
+
+    private void syncSelectedGenerationMedia(DramaShot shot) {
+        if (shot.getSelectedGenerationId() == null) {
+            return;
+        }
+        DramaShotGeneration generation = shotGenerationMapper.selectById(shot.getSelectedGenerationId());
+        if (generation == null) {
+            return;
+        }
+        generation.setVideoPosterKey(shot.getVideoPosterKey());
+        generation.setVideoTailKey(shot.getVideoTailKey());
+        shotGenerationMapper.updateById(generation);
+    }
+
+    private void reopenIfConfirmed(DramaShot shot) {
+        if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())
+                || DramaContract.STATUS_EXPIRED.equals(shot.getStatus())) {
+            shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        }
+    }
+
+    private DramaShotGeneration requireOwnedGeneration(DramaShot shot, Long generationId) {
+        DramaShotGeneration generation = shotGenerationMapper.selectById(generationId);
+        if (generation == null
+                || !generation.getShotId().equals(shot.getId())
+                || !generation.getUserId().equals(UserContext.requireUserId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "生成记录不存在");
+        }
+        return generation;
+    }
+
+    private List<DramaShotGeneration> listGenerationEntities(Long shotId) {
+        return shotGenerationMapper.selectList(new LambdaQueryWrapper<DramaShotGeneration>()
+                .eq(DramaShotGeneration::getShotId, shotId)
+                .orderByDesc(DramaShotGeneration::getId));
+    }
+
+    private String nextShotLabel(Long shotId) {
+        long count = shotGenerationMapper.selectCount(new LambdaQueryWrapper<DramaShotGeneration>()
+                .eq(DramaShotGeneration::getShotId, shotId));
+        return "第 " + (count + 1) + " 次生成";
+    }
+
+    private DramaShotGenerationResp toGenerationResp(DramaShotGeneration generation, Long selectedId) {
+        DramaShotGenerationResp resp = new DramaShotGenerationResp();
+        resp.setId(generation.getId());
+        resp.setShotId(generation.getShotId());
+        resp.setVideoKey(generation.getVideoKey());
+        resp.setVideoUrl(MediaUrls.of(generation.getVideoKey()));
+        resp.setVideoPosterKey(generation.getVideoPosterKey());
+        resp.setVideoPosterUrl(MediaUrls.of(generation.getVideoPosterKey()));
+        resp.setVideoTailKey(generation.getVideoTailKey());
+        resp.setVideoTailUrl(MediaUrls.of(generation.getVideoTailKey()));
+        resp.setGenTaskId(generation.getGenTaskId());
+        resp.setSource(generation.getSource());
+        resp.setLabel(generation.getLabel());
+        resp.setSelected(generation.getId().equals(selectedId));
+        resp.setCreatedAt(generation.getCreatedAt());
+        return resp;
     }
 
     private void abandonPreviousTask(DramaShot shot) {
@@ -1940,8 +2110,8 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 动作、台词、出入点里点到的本集角色并入名单，避免正文要人、Cast 却写恰好 1 人。
-     * 用户已绑定但正文没点名的角色保留。
+     * 草稿落库：把动作/台词/出入点里点到的本集角色并入名单（保留用户已写、正文未点名的）。
+     * 仅用于首次生成分镜，不用于 update/compile，以免覆盖用户删除。
      */
     private void alignMentionedCharacters(DramaShot shot, Map<Long, DramaAsset> assets) {
         if (shot == null) {

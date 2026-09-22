@@ -59,6 +59,9 @@ public class DramaShot {
     private String videoKey;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private Long selectedGenerationId;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String videoPosterKey;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)

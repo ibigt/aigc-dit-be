@@ -42,6 +42,8 @@ public class DramaShotResp {
     private Long genTaskId;
     private String videoKey;
     private String videoUrl;
+    @Schema(description = "当前选用的生成记录 id")
+    private Long selectedGenerationId;
     @Schema(description = "成片首帧对象 key")
     private String videoPosterKey;
     @Schema(description = "成片首帧预览地址")

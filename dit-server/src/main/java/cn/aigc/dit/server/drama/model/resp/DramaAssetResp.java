@@ -29,6 +29,8 @@ public class DramaAssetResp {
     private String imageStorageKey;
     private Long imageAssetId;
     private String imageUrl;
+    @Schema(description = "当前选用的生成记录 id")
+    private Long selectedGenerationId;
     private Long genTaskId;
     private String genTaskStatus;
     private String genErrorMessage;

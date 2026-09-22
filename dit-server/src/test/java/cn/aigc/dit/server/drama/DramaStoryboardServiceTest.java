@@ -15,7 +15,9 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
+import cn.aigc.dit.server.drama.mapper.DramaShotGenerationMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
+import cn.aigc.dit.server.drama.entity.DramaShotGeneration;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
@@ -71,6 +73,8 @@ class DramaStoryboardServiceTest {
     @Mock
     private DramaShotMapper shotMapper;
     @Mock
+    private DramaShotGenerationMapper shotGenerationMapper;
+    @Mock
     private AiModelMapper aiModelMapper;
     @Mock
     private GenTaskMapper genTaskMapper;
@@ -93,7 +97,7 @@ class DramaStoryboardServiceTest {
     @BeforeEach
     void setUp() {
         service = new DramaStoryboardService(
-                seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper,
+                seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper, shotGenerationMapper,
                 aiModelMapper, genTaskMapper, generateService, assetService, posterExtractor, textService, filmService,
                 new DramaStoryboardDraftLock(episodeMapper),
                 new DramaPromptRecompileLock());
@@ -103,6 +107,12 @@ class DramaStoryboardServiceTest {
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(episodeMapper.updateById(any(DramaEpisode.class))).thenReturn(1);
         org.mockito.Mockito.lenient().when(episodeMapper.claimStoryboardDraft(any(), any(), any())).thenReturn(1);
+        org.mockito.Mockito.lenient().when(shotGenerationMapper.insert(any(DramaShotGeneration.class))).thenAnswer(invocation -> {
+            DramaShotGeneration generation = invocation.getArgument(0);
+            generation.setId(ids.incrementAndGet());
+            return 1;
+        });
+        org.mockito.Mockito.lenient().when(shotGenerationMapper.selectCount(any())).thenReturn(0L);
         org.mockito.Mockito.lenient().when(chapterMapper.insert(any(DramaChapter.class))).thenAnswer(invocation -> {
             DramaChapter chapter = invocation.getArgument(0);
             chapter.setId(ids.incrementAndGet());
@@ -1765,9 +1775,135 @@ class DramaStoryboardServiceTest {
         assertEquals("users/7/gen/shot.mp4", shot.getVideoKey());
         assertEquals("users/7/gen/shot-poster.webp", shot.getVideoPosterKey());
         assertEquals("users/7/gen/shot-tail.webp", shot.getVideoTailKey());
+        assertNotNull(shot.getSelectedGenerationId());
         assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot.mp4", resp.getShot().getVideoUrl());
         assertEquals("/api/media?key=users%2F7%2Fgen%2Fshot-poster.webp", resp.getShot().getVideoPosterUrl());
         assertFalse(Boolean.TRUE.equals(resp.getShot().getGenerating()));
+    }
+
+    @Test
+    void selectShotGenerationRejectedWhenLocked() {
+        DramaShot shot = pendingShot();
+        shot.setStatus(DramaContract.STATUS_LOCKED);
+        shot.setSelectedGenerationId(1L);
+        shot.setVideoKey("users/7/gen/a.mp4");
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+
+        BizException error = assertThrows(BizException.class, () -> service.selectGeneration(201L, 2L));
+        assertEquals("分镜已锁定，无法切换最终分镜", error.getMessage());
+    }
+
+    @Test
+    void applyTaskResultDoesNotDuplicateAfterSelectingOlderShotGeneration() {
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(1L);
+        shot.setVideoKey("users/7/gen/old.mp4");
+        shot.setVideoPosterKey("users/7/gen/old-poster.webp");
+        shot.setGenTaskId(500L);
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        DramaShotGeneration newer = new DramaShotGeneration();
+        newer.setId(2L);
+        newer.setShotId(201L);
+        newer.setUserId(7L);
+        newer.setVideoKey("users/7/gen/new.mp4");
+        newer.setGenTaskId(500L);
+        when(shotGenerationMapper.selectOne(any())).thenReturn(newer);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/new.mp4");
+        task.setOutputKeys(List.of("users/7/gen/new.mp4"));
+        task.setPosterKey("users/7/gen/new-poster.webp");
+        when(generateService.getMine(500L)).thenReturn(task);
+
+        service.getGenerateTask(201L, 500L);
+
+        verify(shotGenerationMapper, never()).insert(any(DramaShotGeneration.class));
+        assertEquals(1L, shot.getSelectedGenerationId());
+        assertEquals("users/7/gen/old.mp4", shot.getVideoKey());
+        assertEquals("users/7/gen/old-poster.webp", shot.getVideoPosterKey());
+    }
+
+    @Test
+    void lockedShotCanDeleteUnselectedButNotSelectedGeneration() {
+        DramaShot shot = pendingShot();
+        shot.setStatus(DramaContract.STATUS_LOCKED);
+        shot.setSelectedGenerationId(1L);
+        shot.setVideoKey("users/7/gen/sel.mp4");
+        storedShots.add(shot);
+        DramaShotGeneration selected = new DramaShotGeneration();
+        selected.setId(1L);
+        selected.setShotId(201L);
+        selected.setUserId(7L);
+        selected.setVideoKey("users/7/gen/sel.mp4");
+        DramaShotGeneration other = new DramaShotGeneration();
+        other.setId(2L);
+        other.setShotId(201L);
+        other.setUserId(7L);
+        other.setVideoKey("users/7/gen/other.mp4");
+        when(shotGenerationMapper.selectById(1L)).thenReturn(selected);
+        when(shotGenerationMapper.selectById(2L)).thenReturn(other);
+
+        BizException error = assertThrows(BizException.class, () -> service.deleteGeneration(201L, 1L));
+        assertEquals("分镜已锁定，不能删除当前选用记录", error.getMessage());
+
+        service.deleteGeneration(201L, 2L);
+        verify(shotGenerationMapper).deleteById(2L);
+    }
+
+    @Test
+    void unlockedDeleteSelectedShotGenerationReselectsLatest() {
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(2L);
+        shot.setVideoKey("users/7/gen/new.mp4");
+        storedShots.add(shot);
+        DramaShotGeneration older = new DramaShotGeneration();
+        older.setId(1L);
+        older.setShotId(201L);
+        older.setUserId(7L);
+        older.setVideoKey("users/7/gen/old.mp4");
+        older.setVideoPosterKey("users/7/gen/old-poster.webp");
+        DramaShotGeneration selected = new DramaShotGeneration();
+        selected.setId(2L);
+        selected.setShotId(201L);
+        selected.setUserId(7L);
+        selected.setVideoKey("users/7/gen/new.mp4");
+        when(shotGenerationMapper.selectById(2L)).thenReturn(selected);
+        when(shotGenerationMapper.selectList(any())).thenReturn(List.of(older));
+
+        service.deleteGeneration(201L, 2L);
+
+        assertEquals(1L, shot.getSelectedGenerationId());
+        assertEquals("users/7/gen/old.mp4", shot.getVideoKey());
+        assertEquals("users/7/gen/old-poster.webp", shot.getVideoPosterKey());
+    }
+
+    @Test
+    void regeneratingLockedShotUnlocksAndSelectsNewGeneration() {
+        DramaShot shot = pendingShot();
+        shot.setStatus(DramaContract.STATUS_LOCKED);
+        shot.setSelectedGenerationId(88L);
+        shot.setVideoKey("users/7/gen/old.mp4");
+        shot.setGenTaskId(500L);
+        storedShots.add(shot);
+        storedChapters.add(pendingChapter());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/new.mp4");
+        task.setOutputKeys(List.of("users/7/gen/new.mp4"));
+        when(generateService.getMine(500L)).thenReturn(task);
+
+        service.getGenerateTask(201L, 500L);
+
+        assertEquals("users/7/gen/new.mp4", shot.getVideoKey());
+        assertEquals(DramaContract.STATUS_PENDING_CONFIRM, shot.getStatus());
+        assertNotNull(shot.getSelectedGenerationId());
+        assertTrue(shot.getSelectedGenerationId() > 88L);
     }
 
     @Test
@@ -2087,7 +2223,7 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void compileAlignsCharactersNamedInActionAndContinuity() {
+    void compileKeepsUserCharacterListWithoutReinjectingMentions() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);
         DramaShot shot = pendingShot();
@@ -2106,13 +2242,39 @@ class DramaStoryboardServiceTest {
 
         DramaShotResp resp = service.compileShot(201L);
 
-        assertEquals(List.of("夏安", "局长", "洛白"), resp.getCharacterNames());
-        assertEquals(3, resp.getCastCount());
-        assertEquals(List.of("夏安", "局长", "洛白", "幻梦侦探社"),
+        assertEquals(List.of("局长"), resp.getCharacterNames());
+        assertEquals(1, resp.getCastCount());
+        assertEquals(List.of("局长", "幻梦侦探社"),
                 resp.getReferences().stream().map(ref -> ref.getName()).toList());
-        assertTrue(resp.getCompiledPrompt().contains("本镜恰好 3 人"));
-        assertTrue(resp.getCompiledPrompt().contains("夏安=<Picture 1>"));
-        assertTrue(resp.getCompiledPrompt().contains("洛白=<Picture 3>"));
+        assertTrue(resp.getCompiledPrompt().contains("本镜恰好 1 人"));
+    }
+
+    @Test
+    void updateShotPersistsRemovedCharacters() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("夏安", "赵局长", "局长", "洛白"));
+        shot.setDialogue("赵局长：洛老弟，别睡了。");
+        shot.setNarrativeGoal("中景。赵局长摔档案。");
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(2L, "夏安", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(3L, "局长", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(4L, "赵局长", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setCharacterNames(List.of("洛白"));
+        DramaShotResp resp = service.updateShot(201L, req);
+
+        assertEquals(List.of("洛白"), resp.getCharacterNames());
+        assertEquals(1, resp.getCastCount());
+        assertFalse(resp.getCharacterNames().contains("赵局长"));
+        assertFalse(resp.getCharacterNames().contains("局长"));
     }
 
     private void stubLlmDrafts() {

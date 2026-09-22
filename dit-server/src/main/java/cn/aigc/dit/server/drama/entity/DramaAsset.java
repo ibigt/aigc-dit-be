@@ -45,6 +45,9 @@ public class DramaAsset {
     private Long imageAssetId;
     private Long genTaskId;
 
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private Long selectedGenerationId;
+
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;
 
