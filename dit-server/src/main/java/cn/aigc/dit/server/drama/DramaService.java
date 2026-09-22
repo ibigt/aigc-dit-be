@@ -14,7 +14,6 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
-import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
@@ -692,45 +691,12 @@ public class DramaService {
         series.setVideoAdapterKey(AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
         String mode = DramaVideoGenerateModes.canonical(series.getVideoGenerateMode());
+        // 系列级模式产品侧不可再切换；仅保留「当前为 i2v 但模型不支持」时回退 r2v。
         if (DramaVideoGenerateModes.isI2v(mode) && !supportsVideoMode(model, GenerateMode.I2V)) {
             series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
-        } else if (DramaVideoGenerateModes.isR2v(mode) && !supportsVideoMode(model, GenerateMode.R2V)
-                && supportsVideoMode(model, GenerateMode.I2V)) {
-            series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         }
         seriesMapper.updateById(series);
         if (!mode.equals(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()))) {
-            storyboardService.enqueueSeriesRecompile(series.getId());
-        }
-        return getSeries(series.getId());
-    }
-
-    @Transactional
-    public DramaSeriesResp bindVideoGenerateMode(Long seriesId, DramaVideoGenerateModeBindReq req) {
-        if (req == null || (req.getVideoGenerateMode() == null && req.getVideoChainPrevTail() == null)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请选择生成方式");
-        }
-        DramaSeries series = requireSeries(seriesId);
-        String previousMode = DramaVideoGenerateModes.canonical(series.getVideoGenerateMode());
-        boolean previousChain = Boolean.TRUE.equals(series.getVideoChainPrevTail());
-        if (req.getVideoGenerateMode() != null) {
-            String next = DramaVideoGenerateModes.canonical(req.getVideoGenerateMode());
-            if (DramaVideoGenerateModes.isI2v(next)) {
-                AiModel model = series.getVideoModelId() == null ? null : aiModelMapper.selectById(series.getVideoModelId());
-                if (model == null || !supportsVideoMode(model, GenerateMode.I2V)) {
-                    throw new BizException(ErrorCode.BAD_REQUEST, "当前视频模型不支持首尾帧");
-                }
-            }
-            series.setVideoGenerateMode(next);
-        }
-        if (req.getVideoChainPrevTail() != null) {
-            series.setVideoChainPrevTail(req.getVideoChainPrevTail());
-        }
-        boolean modeChanged = !previousMode.equals(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()));
-        boolean chainChanged = previousChain != Boolean.TRUE.equals(series.getVideoChainPrevTail());
-        seriesMapper.updateById(series);
-        if (modeChanged || chainChanged) {
-            storyboardService.inheritSeriesVideoSettings(series.getId());
             storyboardService.enqueueSeriesRecompile(series.getId());
         }
         return getSeries(series.getId());

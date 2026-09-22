@@ -13,7 +13,6 @@ import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
-import cn.aigc.dit.server.drama.model.req.DramaVideoGenerateModeBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
@@ -198,14 +197,6 @@ public class DramaController {
             @PathVariable Long id,
             @Valid @RequestBody DramaVideoModelBindReq req) {
         return CommonResult.success(dramaService.bindVideoModel(id, req));
-    }
-
-    @Operation(summary = "分镜页全局生成方式：参考图 r2v / 首尾帧 i2v，以及参考图衔接落幅")
-    @PutMapping("/series/{id}/video-generate-mode")
-    public CommonResult<DramaSeriesResp> bindVideoGenerateMode(
-            @PathVariable Long id,
-            @RequestBody DramaVideoGenerateModeBindReq req) {
-        return CommonResult.success(dramaService.bindVideoGenerateMode(id, req));
     }
 
     @Operation(summary = "剧本页绑定文本模型；传 null 解绑，解析与拆镜将不可用")

@@ -2277,6 +2277,34 @@ class DramaStoryboardServiceTest {
         assertFalse(resp.getCharacterNames().contains("局长"));
     }
 
+    @Test
+    void updateShotClearsLocationNameAndSceneReference() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("洛白"));
+        shot.setLocationName("梦境");
+        shot.setReferenceAssetIds(List.of(1L, 5L));
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "梦境", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setLocationName("");
+        DramaShotResp resp = service.updateShot(201L, req);
+
+        assertNull(resp.getLocationName());
+        assertEquals(List.of("洛白"), resp.getCharacterNames());
+        assertEquals(List.of("洛白"),
+                resp.getReferences().stream().map(ref -> ref.getName()).toList());
+        ArgumentCaptor<DramaShot> captor = ArgumentCaptor.forClass(DramaShot.class);
+        verify(shotMapper, org.mockito.Mockito.atLeastOnce()).updateById(captor.capture());
+        assertNull(captor.getValue().getLocationName());
+    }
+
     private void stubLlmDrafts() {
         DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
         when(textService.getIfAvailable()).thenReturn(llm);

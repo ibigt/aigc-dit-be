@@ -43,6 +43,8 @@ public class DramaShot {
     @TableField(typeHandler = JsonStringListTypeHandler.class)
     private List<String> propNames = new ArrayList<>();
 
+    /** 允许清空场景名；默认 NOT_NULL 会跳过 null，删场景后仍会从库里读回旧值。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String locationName;
     private Integer castCount;
 
