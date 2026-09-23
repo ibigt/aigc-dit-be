@@ -325,6 +325,31 @@ class DramaAssetServiceTest {
     }
 
     @Test
+    void bindImageUsesOwnedImageFromLibrary() {
+        DramaAsset asset = ownedAsset();
+        cn.aigc.dit.server.entity.Asset libraryAsset = new cn.aigc.dit.server.entity.Asset();
+        libraryAsset.setId(66L);
+        libraryAsset.setName("库图");
+        libraryAsset.setKind("image");
+        libraryAsset.setMimeType("image/png");
+        libraryAsset.setStorageKey("users/7/assets/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(libraryAssetService.requireOwned(66L)).thenReturn(libraryAsset);
+        when(assetGenerationMapper.selectCount(any())).thenReturn(0L);
+
+        DramaAssetResp resp = service.bindImageFromLibrary(9L, 66L);
+
+        assertEquals("users/7/assets/ref.png", resp.getImageStorageKey());
+        assertEquals(66L, asset.getImageAssetId());
+        ArgumentCaptor<DramaAssetGeneration> captor = ArgumentCaptor.forClass(DramaAssetGeneration.class);
+        verify(assetGenerationMapper).insert(captor.capture());
+        assertEquals("upload", captor.getValue().getSource());
+        assertEquals(66L, captor.getValue().getLibraryAssetId());
+        assertTrue(captor.getValue().getLabel().startsWith("引用"));
+        verify(assetMapper).updateById(asset);
+    }
+
+    @Test
     void uploadVoiceIsAllowedBeforeVideoModelSelection() {
         DramaAsset asset = ownedAsset();
         when(assetMapper.selectById(9L)).thenReturn(asset);
