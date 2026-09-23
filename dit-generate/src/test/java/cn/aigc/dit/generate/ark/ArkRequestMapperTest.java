@@ -38,6 +38,19 @@ class ArkRequestMapperTest {
     }
 
     @Test
+    void respectsConfiguredAudioGenerationSwitch() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_5)
+                .setMode("t2v")
+                .setPrompt("安静的雪山")
+                .setAdapterConfig(Map.of("generateAudio", false));
+
+        Map<String, Object> body = ArkRequestMapper.toCreateBody(request, null, null, List.of());
+
+        assertEquals(false, body.get("generate_audio"));
+    }
+
+    @Test
     void mapsR2vReferenceImages() {
         GenerateRequest request = new GenerateRequest()
                 .setAdapterKey(AdapterCatalog.SEEDANCE_2_5)
