@@ -22,6 +22,9 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("下列硬边界才拆开"));
         assertTrue(system.contains("按动作/对白里出场先后排序"));
         assertTrue(system.contains("画面出入点"));
+        assertTrue(system.contains("相对站位要保持稳定"));
+        assertTrue(system.contains("禁止无理由地「忽左忽右」"));
+        assertTrue(system.contains("默认仍在左侧"));
         assertTrue(system.contains("不要写 compiled_prompt"));
         assertTrue(system.contains("dialogue（台词）优先完整保留"));
         assertTrue(system.contains("禁止摘要、改写、删半句"));
