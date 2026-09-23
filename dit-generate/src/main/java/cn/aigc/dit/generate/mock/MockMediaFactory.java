@@ -14,6 +14,8 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -38,6 +40,9 @@ final class MockMediaFactory {
     }
 
     static RenderedObject render(GenerateRequest request, int copyIndex) {
+        if (ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
+            return new RenderedObject(renderWav(copyIndex), "audio/wav", ".wav", null);
+        }
         boolean video = ModelCategory.VIDEO.equalsIgnoreCase(request.getCategory());
         Sample[] pool = video ? VIDEOS : IMAGES;
         Sample sample = pool[Math.floorMod(copyIndex - 1, pool.length)];
@@ -55,6 +60,26 @@ final class MockMediaFactory {
             }
         }
         return new RenderedObject(png, "image/png", ".png", null);
+    }
+
+    private static byte[] renderWav(int copyIndex) {
+        int sampleRate = 16_000;
+        int durationMs = 700;
+        int sampleCount = sampleRate * durationMs / 1000;
+        int dataSize = sampleCount * 2;
+        ByteBuffer wav = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN);
+        wav.put(new byte[]{'R', 'I', 'F', 'F'}).putInt(36 + dataSize);
+        wav.put(new byte[]{'W', 'A', 'V', 'E', 'f', 'm', 't', ' '}).putInt(16);
+        wav.putShort((short) 1).putShort((short) 1).putInt(sampleRate).putInt(sampleRate * 2);
+        wav.putShort((short) 2).putShort((short) 16);
+        wav.put(new byte[]{'d', 'a', 't', 'a'}).putInt(dataSize);
+        double frequency = 360 + Math.floorMod(copyIndex, 4) * 80;
+        for (int i = 0; i < sampleCount; i++) {
+            double fade = Math.min(1.0, Math.min(i / 800.0, (sampleCount - i) / 800.0));
+            short sample = (short) (Math.sin(2 * Math.PI * frequency * i / sampleRate) * 6000 * fade);
+            wav.putShort(sample);
+        }
+        return wav.array();
     }
 
     private static byte[] loadResource(String path) {

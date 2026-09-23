@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.common.constant.ModelCategory;
+import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
@@ -23,6 +24,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -85,6 +87,48 @@ class AdminModelServiceTest {
         assertEquals("gpt-image-2", resp.getAdapterKey());
         assertEquals("RunningHub", resp.getProvider());
 
+    }
+
+    @Test
+    void createKeepsExplicitZeroPricing() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(4L);
+            assertEquals("0", ((Map<?, ?>) model.getPricing().get("sale")).get("output"));
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Free Image");
+        req.setModelKey("free-image");
+        req.setAdapterKey("gpt-image-2");
+        req.setProvider("RunningHub");
+        req.setCategory(ModelCategory.IMAGE);
+        req.setPricing(Map.of(
+                "unit", "张",
+                "sale", Map.of("output", "0"),
+                "cost", Map.of("output", "¥0")));
+
+        var resp = service.create(req);
+
+        assertEquals("0", ((Map<?, ?>) resp.getPricing().get("sale")).get("output"));
+    }
+
+    @Test
+    void createRejectsNegativePricingBeforeInsert() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Invalid Image");
+        req.setModelKey("invalid-image");
+        req.setAdapterKey("gpt-image-2");
+        req.setProvider("RunningHub");
+        req.setCategory(ModelCategory.IMAGE);
+        req.setPricing(Map.of("unit", "张", "sale", Map.of("output", "-1 积分")));
+
+        assertThrows(BizException.class, () -> service.create(req));
+        org.mockito.Mockito.verify(modelMapper, org.mockito.Mockito.never()).insert(any(AiModel.class));
     }
 
     @Test
@@ -316,6 +360,8 @@ class AdminModelServiceTest {
         req.setName("Qwen 对话");
         req.setModelKey("Qwen/Qwen3.6-35B-A3B");
         req.setAdapterKey("openai-compat");
+        req.setProvider("自定义配置");
+        req.setEndpoint("https://example.com/v1");
         req.setCategory(ModelCategory.TEXT);
         req.setAdapterConfig(Map.of("enableThinking", true));
 

@@ -26,6 +26,7 @@ public final class GenerateRequests {
 
     public static final String SOURCE = "快速创作";
     public static final String SOURCE_DRAMA = "漫剧";
+    public static final int MAX_REFERENCES = 15;
 
     private GenerateRequests() {
     }
@@ -242,6 +243,9 @@ public final class GenerateRequests {
     private static List<ReferenceAsset> resolveReferences(GenerateSubmitReq req, AssetService assetService) {
         if (req.getReferences() == null || req.getReferences().isEmpty()) {
             return List.of();
+        }
+        if (req.getReferences().size() > MAX_REFERENCES) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考素材最多选择15个");
         }
         List<ReferenceAsset> result = new ArrayList<>();
         for (GenerateSubmitReq.ReferenceInput input : req.getReferences()) {

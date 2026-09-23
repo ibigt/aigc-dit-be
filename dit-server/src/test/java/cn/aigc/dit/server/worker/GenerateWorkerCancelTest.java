@@ -109,6 +109,19 @@ class GenerateWorkerCancelTest {
     }
 
     @Test
+    void providerFailureKeepsActualAttemptCharge() {
+        GenTask failed = cancelledTask();
+        failed.setStatus(TaskStatus.RUNNING);
+        failed.setProviderJobId("provider-job-1");
+        when(genTaskMapper.selectById(8L)).thenReturn(failed);
+
+        ReflectionTestUtils.invokeMethod(worker, "finishFailed", failed, "供应商生成失败");
+
+        verify(genTaskMapper).updateById(failed);
+        verify(creditService, never()).change(any(), anyLong(), any(), any(), any());
+    }
+
+    @Test
     void cancelProviderJobIsNoopWithoutProviderJobId() {
         worker.cancelProviderJob(cancelledTask());
         verify(aiModelMapper, never()).selectById(any());
