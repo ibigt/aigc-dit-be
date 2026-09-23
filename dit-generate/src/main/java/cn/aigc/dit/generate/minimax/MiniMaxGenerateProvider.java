@@ -109,6 +109,25 @@ public class MiniMaxGenerateProvider implements GenerateProvider {
         jobs.computeIfAbsent(jobId, id -> new Job(request, base, apiKey));
     }
 
+    /**
+     * 用一个不存在的任务号查询：HTTP 200/404 = 鉴权通过；401/403 = Key 无效；其他 HTTP 错误视为通过。
+     * MiniMax 查询不消耗生成额度。
+     */
+    @Override
+    public void ping(GenerateRequest request) {
+        String apiKey = resolveApiKey(request);
+        String origin = MiniMaxUrls.origin(request.getEndpoint(), properties.getBaseUrl());
+        String url = MiniMaxUrls.queryTask(origin, cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID);
+        try {
+            http.getJson(java.net.URI.create(url), apiKey);
+        } catch (cn.aigc.dit.common.exception.BizException e) {
+            Integer status = cn.aigc.dit.generate.PingSupport.httpStatusOf(e);
+            if (status == null || cn.aigc.dit.generate.PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
+        }
+    }
+
     @Override
     public PollResult poll(String jobId) {
         Job job = jobs.get(jobId);

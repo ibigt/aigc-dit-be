@@ -6,6 +6,8 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.GenerateProviderRegistry;
+import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
@@ -47,6 +49,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
 
     private final AesGcmEncryptor encryptor;
     private final OpenAiCompatChatClient chatClient;
+    private final GenerateProviderRegistry providerRegistry;
     private final DramaSeriesMapper seriesMapper;
     private final GenTaskMapper genTaskMapper;
     private final CreationMapper creationMapper;
@@ -137,10 +140,20 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         String endpoint = trimToNull(req == null ? null : req.getEndpoint());
         String modelKey = trimToNull(req == null ? null : req.getModelKey());
         String apiKey = trimToNull(req == null ? null : req.getApiKey());
+        String category = trimToNull(req == null ? null : req.getCategory());
+        String adapterKey = trimToNull(req == null ? null : req.getAdapterKey());
+        String provider = trimToNull(req == null ? null : req.getProvider());
+
         if (req != null && req.getId() != null) {
             AiModel stored = requireModel(req.getId());
-            if (!ModelCategory.TEXT.equalsIgnoreCase(stored.getCategory())) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "仅文本模型支持测试连接");
+            if (!StringUtils.hasText(category)) {
+                category = stored.getCategory();
+            }
+            if (!StringUtils.hasText(provider)) {
+                provider = stored.getProvider();
+            }
+            if (!StringUtils.hasText(adapterKey)) {
+                adapterKey = stored.getAdapterKey();
             }
             if (!StringUtils.hasText(apiKey)) {
                 apiKey = encryptor.decrypt(stored.getApiKeyEnc());
@@ -149,10 +162,32 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
                 endpoint = stored.getEndpoint();
             }
             if (!StringUtils.hasText(modelKey)) {
-                modelKey = TextChatGatewayImpl.chatModelOf(stored);
+                modelKey = ModelCategory.TEXT.equalsIgnoreCase(category)
+                        ? TextChatGatewayImpl.chatModelOf(stored)
+                        : stored.getModelKey();
             }
         }
-        chatClient.ping(endpoint, apiKey, modelKey);
+
+        if (!StringUtils.hasText(category)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "缺少模型类型，请选择图像/视频/语音/文本后再测试");
+        }
+
+        if (ModelCategory.TEXT.equalsIgnoreCase(category)) {
+            chatClient.ping(endpoint, apiKey, modelKey);
+            return AdminModelTestConnectionResp.success();
+        }
+
+        if (!StringUtils.hasText(adapterKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先选择适配协议");
+        }
+        GenerateRequest probe = new GenerateRequest()
+                .setAdapterKey(adapterKey)
+                .setCategory(category)
+                .setProvider(provider)
+                .setEndpoint(endpoint)
+                .setApiKey(apiKey)
+                .setModelKey(modelKey);
+        providerRegistry.resolveByAdapter(adapterKey, provider, category, modelKey).ping(probe);
         return AdminModelTestConnectionResp.success();
     }
 

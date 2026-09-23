@@ -18,6 +18,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MiniMaxSpeechProviderTest {
 
@@ -64,8 +65,43 @@ class MiniMaxSpeechProviderTest {
         assertEquals(true, exception.getMessage().contains("invalid api key"));
     }
 
+    @Test
+    void pingSendsEmptyTextAndIgnoresBusinessError() throws Exception {
+        RecordingHttp http = new RecordingHttp(
+                "{\"base_resp\":{\"status_code\":1004,\"status_msg\":\"text is empty\"}}");
+        GenerateProperties properties = new GenerateProperties();
+        properties.getMinimax().setApiKey("test-key");
+        MiniMaxSpeechProvider provider = new MiniMaxSpeechProvider(
+                new LocalObjectStorage(tempDir), properties, http, new ObjectMapper());
+        provider.ping(new GenerateRequest()
+                .setCategory("audio")
+                .setProvider("官方API")
+                .setEndpoint("https://api.minimax.cn")
+                .setModelKey("speech-2.8-hd")
+                .setApiKey("sk-mm"));
+        assertEquals("\"\"", new ObjectMapper().readTree(http.json).path("text").toString());
+        assertTrue(http.uri.toString().endsWith("/v1/t2a_v2"));
+    }
+
+    @Test
+    void pingFailsWhenAuthRejected() {
+        RecordingHttp http = new RecordingHttp(
+                "{\"base_resp\":{\"status_code\":1002,\"status_msg\":\"invalid api key\"}}");
+        GenerateProperties properties = new GenerateProperties();
+        properties.getMinimax().setApiKey("test-key");
+        MiniMaxSpeechProvider provider = new MiniMaxSpeechProvider(
+                new LocalObjectStorage(tempDir), properties, http, new ObjectMapper());
+        BizException error = assertThrows(BizException.class, () -> provider.ping(new GenerateRequest()
+                .setCategory("audio")
+                .setProvider("官方API")
+                .setEndpoint("https://api.minimax.cn")
+                .setModelKey("speech-2.8-hd")
+                .setApiKey("sk-bad")));
+        assertTrue(error.getMessage().contains("鉴权失败"));
+    }
+
     private static final class RecordingHttp implements MiniMaxHttp {
-        private final String response;
+        private String response;
         private URI uri;
         private String token;
         private String json;

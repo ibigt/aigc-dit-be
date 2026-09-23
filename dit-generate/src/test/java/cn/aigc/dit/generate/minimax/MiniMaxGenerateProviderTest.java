@@ -149,6 +149,31 @@ class MiniMaxGenerateProviderTest {
                 .setApiKey("sk-minimax");
     }
 
+    @Test
+    void pingUsesQueryEndpointAndSucceedsOnAnyResponse() {
+        http.getBody = "{\"task\":{\"status\":\"failed\"}}";
+        provider.ping(new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.MINIMAX_H3)
+                .setCategory("video")
+                .setProvider("官方API")
+                .setEndpoint("https://api.minimax.cn")
+                .setApiKey("sk-mm"));
+        assertTrue(http.lastPollUri.toString().endsWith("/v2/query/video_generation/" + cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID));
+    }
+
+    @Test
+    void pingFailsWhenUnauthorized() {
+        http.pollError = new BizException(cn.aigc.dit.common.exception.ErrorCode.INTERNAL,
+                "MiniMax 查询 HTTP 401: invalid api key");
+        BizException error = assertThrows(BizException.class, () -> provider.ping(new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.MINIMAX_H3)
+                .setCategory("video")
+                .setProvider("官方API")
+                .setEndpoint("https://api.minimax.cn")
+                .setApiKey("sk-bad")));
+        assertTrue(error.getMessage().contains("invalid api key"));
+    }
+
     private static final class FakeHttp implements MiniMaxHttp {
         private String postBody = "{}";
         private String getBody = "{\"task\":{\"status\":\"running\"}}";

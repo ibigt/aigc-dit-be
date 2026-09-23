@@ -17,6 +17,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiSpeechProviderTest {
@@ -83,10 +84,13 @@ class OpenAiSpeechProviderTest {
     }
 
     private static final class RecordingHttp implements SpeechHttp {
-        private final byte[] response;
+        private byte[] response;
+        private String getResponse;
+        private cn.aigc.dit.common.exception.BizException getError;
         private URI uri;
         private String apiKey;
         private String json;
+        private boolean lastWasGet;
 
         private RecordingHttp(byte[] response) {
             this.response = response;
@@ -99,5 +103,74 @@ class OpenAiSpeechProviderTest {
             this.json = json;
             return response;
         }
+
+        @Override
+        public String getString(URI uri, String apiKey) {
+            this.uri = uri;
+            this.apiKey = apiKey;
+            this.lastWasGet = true;
+            if (getError != null) {
+                throw getError;
+            }
+            return getResponse == null ? "{\"data\":[{\"id\":\"tts-pro\"}]}" : getResponse;
+        }
+    }
+
+    @Test
+    void pingUsesModelsEndpointAndAcceptsListedModel() {
+        RecordingHttp http = new RecordingHttp(new byte[]{1});
+        http.getResponse = "{\"data\":[{\"id\":\"tts-pro\"}]}";
+        GenerateProperties properties = new GenerateProperties();
+        properties.getSpeech().setApiKey("test-key");
+        OpenAiSpeechProvider provider = new OpenAiSpeechProvider(
+                new LocalObjectStorage(tempDir), properties, http, new ObjectMapper());
+        provider.ping(new GenerateRequest()
+                .setCategory("audio")
+                .setProvider("自定义配置")
+                .setEndpoint("https://speech.example/v1")
+                .setApiKey("sk-ok")
+                .setModelKey("tts-pro"));
+        assertTrue(http.lastWasGet);
+        assertEquals(URI.create("https://speech.example/v1/models"), http.uri);
+    }
+
+    @Test
+    void pingRejectsModelNotInList() {
+        RecordingHttp http = new RecordingHttp(new byte[]{1});
+        http.getResponse = "{\"data\":[{\"id\":\"other-model\"}]}";
+        GenerateProperties properties = new GenerateProperties();
+        properties.getSpeech().setApiKey("test-key");
+        OpenAiSpeechProvider provider = new OpenAiSpeechProvider(
+                new LocalObjectStorage(tempDir), properties, http, new ObjectMapper());
+        cn.aigc.dit.common.exception.BizException error = assertThrows(
+                cn.aigc.dit.common.exception.BizException.class,
+                () -> provider.ping(new GenerateRequest()
+                        .setCategory("audio")
+                        .setProvider("自定义配置")
+                        .setEndpoint("https://speech.example/v1")
+                        .setApiKey("sk-ok")
+                        .setModelKey("tts-pro")));
+        assertTrue(error.getMessage().contains("不在服务端模型列表中"));
+    }
+
+    @Test
+    void pingFailsWhenUnauthorized() {
+        RecordingHttp http = new RecordingHttp(new byte[]{1});
+        http.getError = new cn.aigc.dit.common.exception.BizException(
+                cn.aigc.dit.common.exception.ErrorCode.INTERNAL,
+                "语音模型 HTTP 401: invalid api key");
+        GenerateProperties properties = new GenerateProperties();
+        properties.getSpeech().setApiKey("test-key");
+        OpenAiSpeechProvider provider = new OpenAiSpeechProvider(
+                new LocalObjectStorage(tempDir), properties, http, new ObjectMapper());
+        cn.aigc.dit.common.exception.BizException error = assertThrows(
+                cn.aigc.dit.common.exception.BizException.class,
+                () -> provider.ping(new GenerateRequest()
+                        .setCategory("audio")
+                        .setProvider("自定义配置")
+                        .setEndpoint("https://speech.example/v1")
+                        .setApiKey("sk-bad")
+                        .setModelKey("tts-pro")));
+        assertTrue(error.getMessage().contains("HTTP 401"));
     }
 }

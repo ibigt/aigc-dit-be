@@ -8,6 +8,7 @@ import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.GenerateProvider;
 import cn.aigc.dit.generate.GenerateRequest;
+import cn.aigc.dit.generate.PingSupport;
 import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.storage.ObjectStorage;
@@ -95,6 +96,55 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     public void remember(String jobId, GenerateRequest request) {
         if (StringUtils.hasText(jobId) && request != null) {
             completed.putIfAbsent(jobId, outputKey(request, formatOf(request)));
+        }
+    }
+
+    /**
+     * 用最小请求打 {@code t2a_v2}：空文本由服务端在参数校验阶段拒绝（业务错误，鉴权已通过），
+     * 不会进入真实合成也不消耗字符额度；无效 Key 会在鉴权阶段返回 401/403。
+     */
+    @Override
+    public void ping(GenerateRequest request) {
+        String apiKey = firstNonBlank(request.getApiKey(), properties.getApiKey());
+        if (apiKey == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax 语音测试连接需要 API Key");
+        }
+        URI uri = endpoint(request.getEndpoint(), properties.getBaseUrl());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", firstNonBlank(request.getModelKey(), DEFAULT_MODEL));
+        body.put("text", "");
+        body.put("stream", false);
+        Map<String, Object> voice = new LinkedHashMap<>();
+        voice.put("voice_id", firstNonBlank(request.getVoiceId(),
+                configString(request, "defaultVoice"), DEFAULT_VOICE));
+        body.put("voice_setting", voice);
+        Map<String, Object> audio = new LinkedHashMap<>();
+        audio.put("sample_rate", 32000);
+        audio.put("bitrate", 128000);
+        audio.put("format", firstNonBlank(request.getAudioFormat(),
+                configString(request, "defaultFormat"), DEFAULT_FORMAT));
+        audio.put("channel", 1);
+        body.put("audio_setting", audio);
+        body.put("language_boost", "auto");
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (JsonProcessingException e) {
+            throw new BizException(ErrorCode.INTERNAL, "组装 MiniMax 语音测试连接请求失败");
+        }
+        try {
+            String raw = http.postJson(uri, apiKey, json);
+            JsonNode root = readJson(raw);
+            int code = root.path("base_resp").path("status_code").asInt(0);
+            if (code != 0 && PingSupport.looksLikeAuthFailure(root.path("base_resp").path("status_msg").asText(""))) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "MiniMax 语音鉴权失败：" + root.path("base_resp").path("status_msg").asText(""));
+            }
+        } catch (BizException e) {
+            Integer status = PingSupport.httpStatusOf(e);
+            if (status == null || PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
         }
     }
 

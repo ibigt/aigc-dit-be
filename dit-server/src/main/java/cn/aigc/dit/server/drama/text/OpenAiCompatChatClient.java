@@ -48,14 +48,38 @@ public class OpenAiCompatChatClient {
     }
 
     public void ping(String endpoint, String apiKey, String model) {
-        ObjectNode body = objectMapper.createObjectNode();
-        body.put("model", model);
-        body.put("max_tokens", 1);
-        ArrayNode messages = body.putArray("messages");
-        ObjectNode user = messages.addObject();
-        user.put("role", "user");
-        user.put("content", "ping");
-        post(endpoint, apiKey, body, PING_TIMEOUT, true);
+        String body = getModels(endpoint, apiKey, PING_TIMEOUT);
+        java.util.List<String> ids = cn.aigc.dit.generate.PingSupport.parseModelIds(body);
+        if (ids != null) {
+            cn.aigc.dit.generate.PingSupport.assertModelListed(ids, model);
+        }
+    }
+
+    private String getModels(String endpoint, String apiKey, Duration timeout) {
+        URI uri = URI.create(normalizeEndpoint(endpoint) + "/models");
+        Transport.Response response;
+        try {
+            response = transport.get(uri, apiKey == null ? "" : apiKey.trim(), timeout);
+        } catch (BizException e) {
+            throw e;
+        } catch (HttpTimeoutException e) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "连接超时");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BizException(ErrorCode.INTERNAL, "测试连接被中断");
+        } catch (Exception e) {
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new BizException(ErrorCode.BAD_REQUEST, "连接失败: " + truncate(detail, 240));
+        }
+        int status = response.status();
+        String raw = response.body() == null ? "" : response.body();
+        if (status == 405 || status == 403) {
+            return "";
+        }
+        if (status < 200 || status >= 300) {
+            throw new BizException(ErrorCode.BAD_REQUEST, formatError(status, raw));
+        }
+        return raw;
     }
 
     public TextChatResult chat(String endpoint, String apiKey, String model, TextChatRequest req) {
@@ -278,6 +302,13 @@ public class OpenAiCompatChatClient {
     interface Transport {
         Response post(URI uri, String apiKey, String jsonBody, Duration timeout) throws Exception;
 
+        /**
+         * 默认转给 {@link #post}，便于老测试桩继续编译；{@link JdkTransport} 重写为真 GET。
+         */
+        default Response get(URI uri, String apiKey, Duration timeout) throws Exception {
+            return post(uri, apiKey, "{}", timeout);
+        }
+
         record Response(int status, String body) {
         }
     }
@@ -296,6 +327,21 @@ public class OpenAiCompatChatClient {
                     .header("Content-Type", "application/json")
                     .header("User-Agent", USER_AGENT)
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8));
+            if (StringUtils.hasText(apiKey)) {
+                builder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpResponse<String> response = httpClient.send(builder.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return new Response(response.statusCode(), response.body());
+        }
+
+        @Override
+        public Response get(URI uri, String apiKey, Duration timeout) throws Exception {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                    .timeout(timeout)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .GET();
             if (StringUtils.hasText(apiKey)) {
                 builder.header("Authorization", "Bearer " + apiKey);
             }

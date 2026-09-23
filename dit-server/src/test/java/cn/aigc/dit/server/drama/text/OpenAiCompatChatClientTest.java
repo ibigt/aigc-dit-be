@@ -28,22 +28,19 @@ class OpenAiCompatChatClientTest {
 
     @Test
     void pingPostsMinimalChatBody() {
-        AtomicReference<String> body = new AtomicReference<>();
         AtomicReference<URI> uri = new AtomicReference<>();
         AtomicReference<Duration> timeout = new AtomicReference<>();
         OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
                 (target, apiKey, json, wait) -> {
                     uri.set(target);
-                    body.set(json);
                     timeout.set(wait);
                     assertEquals("sk-test", apiKey);
-                    return new OpenAiCompatChatClient.Transport.Response(200, "{\"id\":\"ok\"}");
+                    return new OpenAiCompatChatClient.Transport.Response(200,
+                            "{\"data\":[{\"id\":\"agnes-2.5-flash\"}]}");
                 });
         client.ping("https://api.agnes-ai.cn/v1", "sk-test", "agnes-2.5-flash");
-        assertEquals("https://api.agnes-ai.cn/v1/chat/completions", uri.get().toString());
+        assertEquals("https://api.agnes-ai.cn/v1/models", uri.get().toString());
         assertEquals(OpenAiCompatChatClient.PING_TIMEOUT, timeout.get());
-        assertTrue(body.get().contains("\"content\":\"ping\""));
-        assertTrue(body.get().contains("\"max_tokens\":1"));
     }
 
     @Test

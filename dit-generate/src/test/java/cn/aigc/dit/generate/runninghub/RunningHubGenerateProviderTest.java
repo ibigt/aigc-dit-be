@@ -265,6 +265,34 @@ class RunningHubGenerateProviderTest {
         assertEquals(0, provider.callCount());
     }
 
+    @Test
+    void pingUsesQueryEndpointAndSucceedsWhenTaskNotFound() {
+        http.queryBody = "{\"code\":803,\"msg\":\"task not found\"}";
+        provider.ping(new GenerateRequest()
+                .setAdapterKey("gpt-image-2")
+                .setCategory("image")
+                .setProvider("RunningHub")
+                .setEndpoint("https://www.runninghub.ai")
+                .setApiKey("sk-rh"));
+        assertEquals(1, http.queries.get());
+        assertTrue(http.lastUri.toString().endsWith("/openapi/v2/query"));
+        assertTrue(http.lastJson.contains(cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID));
+    }
+
+    @Test
+    void pingFailsWhenUnauthorized() {
+        http.queryError = new BizException(cn.aigc.dit.common.exception.ErrorCode.INTERNAL,
+                "RunningHub HTTP 401: apikey invalid");
+        BizException error = assertThrows(BizException.class,
+                () -> provider.ping(new GenerateRequest()
+                        .setAdapterKey("gpt-image-2")
+                        .setCategory("image")
+                        .setProvider("RunningHub")
+                        .setEndpoint("https://www.runninghub.ai")
+                        .setApiKey("sk-bad")));
+        assertTrue(error.getMessage().contains("apikey"));
+    }
+
     private static GenerateRequest t2i() {
         return new GenerateRequest()
                 .setUserId(8L)
@@ -296,6 +324,7 @@ class RunningHubGenerateProviderTest {
         private final List<URI> posts = new ArrayList<>();
         private final List<String> uploads = new ArrayList<>();
         private final AtomicInteger queries = new AtomicInteger();
+        private BizException queryError;
 
         @Override
         public String postJson(URI uri, String bearerToken, String jsonBody) {
@@ -304,6 +333,11 @@ class RunningHubGenerateProviderTest {
             posts.add(uri);
             if (uri.toString().endsWith("/query")) {
                 queries.incrementAndGet();
+                if (queryError != null) {
+                    BizException err = queryError;
+                    queryError = null;
+                    throw err;
+                }
                 return queryBody;
             }
             return submitBody;

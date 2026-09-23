@@ -50,7 +50,7 @@ public class AdminModelController {
         return CommonResult.success(adminModelService.listAdmin(keyword, category, provider));
     }
 
-    @Operation(summary = "测试文本模型连接（OpenAI 兼容最小 chat，不写库）")
+    @Operation(summary = "测试模型连接（按模型类型与适配协议探活，不写库、不消耗 token/字符额度）")
     @PostMapping("/test-connection")
     public CommonResult<AdminModelTestConnectionResp> testConnection(
             @RequestBody AdminModelTestConnectionReq req) {
