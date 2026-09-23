@@ -16,6 +16,7 @@ import cn.aigc.dit.server.drama.entity.DramaChapter;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.entity.DramaShot;
+import cn.aigc.dit.server.drama.entity.DramaShotCaption;
 import cn.aigc.dit.server.drama.entity.DramaShotGeneration;
 import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaChapterMapper;
@@ -101,6 +102,8 @@ public class DramaStoryboardService {
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private DramaShotBatchGenerateService batchGenerateService;
+    @Autowired(required = false)
+    private DramaShotCaptionPostProcessService captionPostProcessService;
 
     @Transactional
     public DramaStoryboardResp getStoryboard(Long episodeId) {
@@ -1677,6 +1680,16 @@ public class DramaStoryboardService {
         resp.setGenTaskId(shot.getGenTaskId());
         resp.setVideoKey(shot.getVideoKey());
         resp.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
+        if (captionPostProcessService != null) {
+            DramaShotCaption caption = captionPostProcessService.findForSource(shot.getId(), shot.getVideoKey());
+            if (caption != null) {
+                resp.setCaptionStatus(caption.getStatus());
+                resp.setCaptionVideoKey(caption.getCaptionVideoKey());
+                resp.setCaptionVideoUrl(MediaUrls.of(caption.getCaptionVideoKey()));
+                resp.setSubtitleJsonKey(caption.getSubtitleJsonKey());
+                resp.setSubtitleJsonUrl(MediaUrls.of(caption.getSubtitleJsonKey()));
+            }
+        }
         resp.setSelectedGenerationId(shot.getSelectedGenerationId());
         resp.setVideoPosterKey(shot.getVideoPosterKey());
         resp.setVideoPosterUrl(MediaUrls.of(shot.getVideoPosterKey()));
@@ -1823,6 +1836,9 @@ public class DramaStoryboardService {
         shot.setChainedFromShotId(chainedFromShotId);
         shot.setChainedFromTailKey(chainedFromTailKey);
         shotMapper.updateById(shot);
+        if (videoChanged && captionPostProcessService != null) {
+            captionPostProcessService.enqueue(shot.getId(), task.getId(), shot.getUserId(), key);
+        }
         if (videoChanged) {
             refreshChapterStatuses(listChapters(shot.getEpisodeId()), listShots(shot.getEpisodeId()));
         }

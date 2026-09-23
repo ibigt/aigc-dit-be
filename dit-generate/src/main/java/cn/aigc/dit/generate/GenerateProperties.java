@@ -17,6 +17,8 @@ public class GenerateProperties {
     private Speech speech = new Speech();
     private OpenAiImage openAiImage = new OpenAiImage();
     private Ffmpeg ffmpeg = new Ffmpeg();
+    private Vad vad = new Vad();
+    private ForcedAlignment forcedAlignment = new ForcedAlignment();
 
     /**
      * ComfyUI Adapter 始终注册；实际地址以模型 {@code endpoint} 为准。
@@ -164,5 +166,33 @@ public class GenerateProperties {
         /** 可选。不配则按 Linux Noto / Windows 微软雅黑等常见路径探测。 */
         private String captionFont = "";
         private int captionTimeoutSeconds = 180;
+    }
+
+    @Data
+    public static class Vad {
+        private boolean enabled = false;
+        /** Silero VAD ONNX model path. The model is intentionally supplied by deployment. */
+        private String modelPath = "";
+        private float threshold = 0.5F;
+        private int sampleRate = 16000;
+        private int frameSamples = 512;
+        private int minSpeechMs = 180;
+        private int mergeGapMs = 240;
+        private int paddingMs = 80;
+    }
+
+    /** In-process Chinese Charsiu forced-alignment settings. */
+    @Data
+    public static class ForcedAlignment {
+        private boolean enabled = false;
+        private String modelPath = "";
+        /** Directory containing vocab_zh.json and the g2pm assets. */
+        private String assetsPath = "";
+        private int sampleRate = 16000;
+        private int frameMs = 10;
+        private int silenceThresholdFrames = 3;
+        private double minConfidence = 0.0D;
+        private double minCoverage = 0.90D;
+        private String processorVersion = "forced-alignment-1";
     }
 }

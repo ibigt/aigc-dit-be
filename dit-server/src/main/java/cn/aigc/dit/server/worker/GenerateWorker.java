@@ -31,6 +31,7 @@ import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaShotCaptionService;
+import cn.aigc.dit.server.drama.DramaShotCaptionPostProcessService;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.generate.GenerateTaskViews;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
@@ -42,6 +43,7 @@ import cn.aigc.dit.server.service.CreditService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -89,6 +91,9 @@ public class GenerateWorker {
     /** 分镜出片烧字幕已暂停，成片阶段再接回 {@code burnIfNeeded}。 */
     @SuppressWarnings("unused")
     private final DramaShotCaptionService dramaShotCaptionService;
+    /** Caption processing is optional so the raw video generation path stays independent. */
+    @Autowired(required = false)
+    private DramaShotCaptionPostProcessService captionPostProcessService;
     private final CreditService creditService;
     private final AesGcmEncryptor encryptor;
 
@@ -574,6 +579,17 @@ public class GenerateWorker {
             latest.setFinishedAt(OffsetDateTime.now());
             latest.setErrorMessage(null);
             genTaskMapper.updateById(latest);
+            if (dramaShot && captionPostProcessService != null) {
+                try {
+                    captionPostProcessService.enqueue(
+                            GenerateRequests.shotIdFromParams(latest.getParams()),
+                            latest.getId(), latest.getUserId(), keys.get(0));
+                } catch (RuntimeException e) {
+                    // Captioning is a derived artifact and must not turn a
+                    // successfully generated raw video into a failed task.
+                    log.warn("enqueue shot caption task failed for generate task {}", latest.getId(), e);
+                }
+            }
             releaseDramaSlot = GenerateRequests.isDramaShot(latest.getParams());
         }
         if (releaseDramaSlot) {

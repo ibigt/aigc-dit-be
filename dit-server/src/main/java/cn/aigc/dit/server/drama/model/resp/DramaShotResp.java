@@ -42,6 +42,16 @@ public class DramaShotResp {
     private Long genTaskId;
     private String videoKey;
     private String videoUrl;
+    @Schema(description = "VAD 字幕后处理状态")
+    private String captionStatus;
+    @Schema(description = "烧录字幕后的派生视频 key")
+    private String captionVideoKey;
+    @Schema(description = "烧录字幕后的派生视频地址")
+    private String captionVideoUrl;
+    @Schema(description = "字幕 JSON key")
+    private String subtitleJsonKey;
+    @Schema(description = "字幕 JSON 地址")
+    private String subtitleJsonUrl;
     @Schema(description = "当前选用的生成记录 id")
     private Long selectedGenerationId;
     @Schema(description = "成片首帧对象 key")

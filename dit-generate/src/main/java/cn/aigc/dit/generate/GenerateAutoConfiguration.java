@@ -1,6 +1,7 @@
 package cn.aigc.dit.generate;
 
 import cn.aigc.dit.generate.caption.FfmpegVideoCaptionBurner;
+import cn.aigc.dit.generate.caption.AssVideoCaptionBurner;
 import cn.aigc.dit.generate.caption.VideoCaptionBurner;
 import cn.aigc.dit.generate.poster.FfmpegPosterExtractor;
 import cn.aigc.dit.generate.poster.PosterExtractor;
@@ -24,5 +25,11 @@ public class GenerateAutoConfiguration {
     @ConditionalOnMissingBean(VideoCaptionBurner.class)
     public VideoCaptionBurner videoCaptionBurner(ObjectStorage objectStorage, GenerateProperties properties) {
         return new FfmpegVideoCaptionBurner(objectStorage, properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(AssVideoCaptionBurner.class)
+    public AssVideoCaptionBurner assVideoCaptionBurner(ObjectStorage objectStorage, GenerateProperties properties) {
+        return new AssVideoCaptionBurner(objectStorage, properties);
     }
 }

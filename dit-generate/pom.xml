@@ -16,6 +16,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.18.0</version>
+        </dependency>
+        <dependency>
             <groupId>cn.aigc.dit</groupId>
             <artifactId>dit-common</artifactId>
         </dependency>

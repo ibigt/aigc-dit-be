@@ -157,6 +157,25 @@ dit:
       caption-burn-enabled: ${FFMPEG_CAPTION_BURN_ENABLED:false}
       caption-font: ${FFMPEG_CAPTION_FONT:}
       caption-timeout-seconds: ${FFMPEG_CAPTION_TIMEOUT_SECONDS:180}
+    vad:
+      enabled: ${SILERO_VAD_ENABLED:false}
+      model-path: ${SILERO_VAD_MODEL_PATH:}
+      threshold: ${SILERO_VAD_THRESHOLD:0.5}
+      sample-rate: ${SILERO_VAD_SAMPLE_RATE:16000}
+      frame-samples: ${SILERO_VAD_FRAME_SAMPLES:512}
+      min-speech-ms: ${SILERO_VAD_MIN_SPEECH_MS:180}
+      merge-gap-ms: ${SILERO_VAD_MERGE_GAP_MS:240}
+      padding-ms: ${SILERO_VAD_PADDING_MS:80}
+    forced-alignment:
+      enabled: ${FORCED_ALIGNMENT_ENABLED:false}
+      model-path: ${FORCED_ALIGNMENT_MODEL_PATH:/mnt/ai-gc/models/forced-alignment/zh_w2v2_tiny_fc_10ms/model_quantized.onnx}
+      assets-path: ${FORCED_ALIGNMENT_ASSETS_PATH:/mnt/ai-gc/models/forced-alignment/assets}
+      sample-rate: ${FORCED_ALIGNMENT_SAMPLE_RATE:16000}
+      frame-ms: ${FORCED_ALIGNMENT_FRAME_MS:10}
+      silence-threshold-frames: ${FORCED_ALIGNMENT_SILENCE_THRESHOLD_FRAMES:3}
+      min-confidence: ${FORCED_ALIGNMENT_MIN_CONFIDENCE:0.0}
+      min-coverage: ${FORCED_ALIGNMENT_MIN_COVERAGE:0.90}
+      processor-version: ${FORCED_ALIGNMENT_PROCESSOR_VERSION:forced-alignment-1}
   s3:
     endpoint: ${S3_ENDPOINT:http://172.171.113.250:9000}
     bucket: ${S3_BUCKET:dit}
