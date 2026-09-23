@@ -21,6 +21,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -118,6 +119,22 @@ class GenerateRequestsTest {
         assertEquals("users/1/gen/char.png", request.getReferences().get(0).getStorageKey());
         verify(assetService).assertOwnedStorageKey("users/1/gen/char.png");
         verify(assetService, never()).requireOwnedKey(any());
+        verify(assetService, never()).requireOwned(any());
+    }
+
+    @Test
+    void rejectsMoreThanFifteenReferencesBeforeResolvingAssets() {
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setCategory("video");
+        GenerateSubmitReq.ReferenceInput ref = new GenerateSubmitReq.ReferenceInput();
+        ref.setAssetId(9L);
+        req.setReferences(java.util.Collections.nCopies(16, ref));
+
+        cn.aigc.dit.common.exception.BizException error = assertThrows(
+                cn.aigc.dit.common.exception.BizException.class,
+                () -> GenerateRequests.fromSubmit(1L, "mock-video", req, assetService));
+
+        assertEquals("参考素材最多选择15个", error.getMessage());
         verify(assetService, never()).requireOwned(any());
     }
 
