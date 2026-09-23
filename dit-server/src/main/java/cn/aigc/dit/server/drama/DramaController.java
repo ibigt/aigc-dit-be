@@ -10,6 +10,7 @@ import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptAnalyzeReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaShotBatchGenerateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
@@ -20,6 +21,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
+import cn.aigc.dit.server.drama.model.resp.DramaShotBatchGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotResp;
@@ -59,6 +61,7 @@ public class DramaController {
     private final DramaService dramaService;
     private final DramaAssetService dramaAssetService;
     private final DramaStoryboardService dramaStoryboardService;
+    private final DramaShotBatchGenerateService dramaShotBatchGenerateService;
     private final DramaFilmService dramaFilmService;
     private final DramaCaptionService dramaCaptionService;
 
@@ -378,6 +381,26 @@ public class DramaController {
     @PostMapping("/shots/{id}/generate")
     public CommonResult<DramaShotGenerateResp> generateShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.generateShot(id));
+    }
+
+    @Operation(summary = "批量出片：同场选中镜，服务端编排并发或串行")
+    @PostMapping("/episodes/{id}/shots/batch-generate")
+    public CommonResult<DramaShotBatchGenerateResp> batchGenerateShots(
+            @PathVariable Long id, @Valid @RequestBody DramaShotBatchGenerateReq req) {
+        return CommonResult.success(dramaShotBatchGenerateService.create(id, req));
+    }
+
+    @Operation(summary = "本集当前 RUNNING 的批量出片任务（供刷新恢复）")
+    @GetMapping("/episodes/{id}/shots/batch-generate/active")
+    public CommonResult<DramaShotBatchGenerateResp> getActiveBatchGenerate(@PathVariable Long id) {
+        return CommonResult.success(dramaShotBatchGenerateService.findActive(id));
+    }
+
+    @Operation(summary = "查询批量出片任务进度（RUNNING 时顺带推进）")
+    @GetMapping("/episodes/{id}/shots/batch-generate/{jobId}")
+    public CommonResult<DramaShotBatchGenerateResp> getBatchGenerateJob(
+            @PathVariable Long id, @PathVariable Long jobId) {
+        return CommonResult.success(dramaShotBatchGenerateService.getJob(id, jobId));
     }
 
     @Operation(summary = "自动 i2i 重画本镜开场静帧（不开始出视频）")

@@ -34,6 +34,8 @@ public class DramaStoryboardResp {
     private Boolean videoChainPrevTail;
     @Schema(description = "正在按当前生成方式后台重编译分镜提示词")
     private Boolean promptRecompiling;
+    @Schema(description = "本集当前 RUNNING 的批量出片任务 id；无则 null")
+    private Long activeBatchJobId;
     private List<DramaChapterResp> chapters = new ArrayList<>();
     private List<DramaAssetResp> lockedAssets = new ArrayList<>();
 }

@@ -98,6 +98,9 @@ public class DramaStoryboardService {
     @Autowired(required = false)
     @Qualifier("storyboardDraftExecutor")
     private Executor storyboardDraftExecutor;
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private DramaShotBatchGenerateService batchGenerateService;
 
     @Transactional
     public DramaStoryboardResp getStoryboard(Long episodeId) {
@@ -335,6 +338,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp updateShot(Long shotId, DramaShotSaveReq req) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
@@ -439,6 +443,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp uploadFirstFrame(Long shotId, MultipartFile file) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         if (file == null || file.isEmpty()) {
@@ -460,6 +465,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp clearFirstFrame(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         shot.setFirstFrameKey(null);
@@ -473,6 +479,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotResp usePrevTail(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         DramaShot prev = previousSameChapterShot(shot);
@@ -504,6 +511,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotGenerateResp generateOpeningStill(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         DramaSeries series = requireOwnedSeries(shot.getSeriesId());
@@ -602,6 +610,7 @@ public class DramaStoryboardService {
     @Transactional
     public DramaStoryboardResp deleteShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         GenTask task = loadTask(shot.getGenTaskId());
@@ -709,9 +718,17 @@ public class DramaStoryboardService {
     @Transactional(readOnly = true)
     public List<DramaShotGenerationResp> listGenerations(Long shotId) {
         DramaShot shot = requireShot(shotId);
-        return listGenerationEntities(shot.getId()).stream()
-                .map(item -> toGenerationResp(item, shot.getSelectedGenerationId()))
-                .toList();
+        List<DramaShotGeneration> newestFirst = listGenerationEntities(shot.getId());
+        int total = newestFirst.size();
+        List<DramaShotGenerationResp> out = new ArrayList<>(total);
+        for (int i = 0; i < total; i++) {
+            DramaShotGeneration item = newestFirst.get(i);
+            DramaShotGenerationResp resp = toGenerationResp(item, shot.getSelectedGenerationId());
+            // 按创建时间编号：最旧=第 1 次，最新=第 N 次（忽略入库时的竞态标签）
+            resp.setLabel("第 " + (total - i) + " 次生成");
+            out.add(resp);
+        }
+        return out;
     }
 
     @Transactional
@@ -754,6 +771,17 @@ public class DramaStoryboardService {
 
     @Transactional
     public DramaShotGenerateResp generateShot(Long shotId) {
+        assertNotBatchLocked(shotId);
+        return doGenerateShot(shotId);
+    }
+
+    /** 批次编排内部出片；静帧续跑也走此路径，避免批次锁误拦。 */
+    @Transactional
+    public DramaShotGenerateResp generateShotForBatch(Long shotId) {
+        return doGenerateShot(shotId);
+    }
+
+    private DramaShotGenerateResp doGenerateShot(Long shotId) {
         DramaShot shot = requireShot(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
@@ -1557,6 +1585,7 @@ public class DramaStoryboardService {
         board.setVideoGenerateMode(DramaVideoGenerateModes.canonical(series == null ? null : series.getVideoGenerateMode()));
         board.setVideoChainPrevTail(series != null && Boolean.TRUE.equals(series.getVideoChainPrevTail()));
         board.setPromptRecompiling(series != null && recompileLock.isActive(series.getId()));
+        board.setActiveBatchJobId(batchGenerateService == null ? null : batchGenerateService.findActiveJobId(episode.getId()));
         return board;
     }
 
@@ -1807,6 +1836,12 @@ public class DramaStoryboardService {
             String tailKey,
             Long genTaskId,
             String source) {
+        // 批次轮询与看板刷新可能并发落库同一成功任务；先查再插，配合唯一索引兜底
+        DramaShotGeneration existing = findRecordedShotGeneration(shot.getId(), genTaskId, videoKey);
+        if (existing != null) {
+            applySelectedGeneration(shot, existing);
+            return;
+        }
         DramaShotGeneration generation = new DramaShotGeneration();
         generation.setShotId(shot.getId());
         generation.setUserId(shot.getUserId());
@@ -1816,7 +1851,16 @@ public class DramaStoryboardService {
         generation.setGenTaskId(genTaskId);
         generation.setSource(source);
         generation.setLabel(nextShotLabel(shot.getId()));
-        shotGenerationMapper.insert(generation);
+        try {
+            shotGenerationMapper.insert(generation);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            DramaShotGeneration raced = findRecordedShotGeneration(shot.getId(), genTaskId, videoKey);
+            if (raced == null) {
+                throw e;
+            }
+            applySelectedGeneration(shot, raced);
+            return;
+        }
         applySelectedGeneration(shot, generation);
     }
 
@@ -2409,6 +2453,12 @@ public class DramaStoryboardService {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
+    private void assertNotBatchLocked(Long shotId) {
+        if (batchGenerateService != null) {
+            batchGenerateService.assertNotBatchLocked(shotId);
+        }
+    }
+
     private DramaSeries seriesOf(DramaShot shot) {
         return shot == null || shot.getSeriesId() == null ? null : seriesMapper.selectById(shot.getSeriesId());
     }
@@ -2416,9 +2466,6 @@ public class DramaStoryboardService {
     private DramaStoryboardCompiler.CompileOptions compileOptionsOf(DramaSeries series, DramaShot shot) {
         boolean firstInChapter = isFirstShotInChapter(shot);
         String mode = DramaVideoGenerateModes.effectiveMode(series, shot);
-        if (firstInChapter && DramaVideoGenerateModes.isI2v(mode)) {
-            mode = DramaVideoGenerateModes.R2V;
-        }
         boolean chain = !firstInChapter
                 && DramaVideoGenerateModes.isR2v(mode)
                 && resolveChainPrevTail(series, shot);
@@ -2712,7 +2759,7 @@ public class DramaStoryboardService {
         applyOpeningStillResult(shot, task);
         if (GenerateRequests.continueStillToI2v(task.getParams())) {
             if (shot.getGenTaskId() == null || shot.getGenTaskId().equals(task.getId())) {
-                return generateShot(shot.getId());
+                return doGenerateShot(shot.getId());
             }
             GenerateTaskResp video = generateService.getMine(shot.getGenTaskId());
             applyTaskResult(shot, video);

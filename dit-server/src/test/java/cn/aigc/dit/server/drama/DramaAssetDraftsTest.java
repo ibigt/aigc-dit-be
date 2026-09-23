@@ -49,6 +49,11 @@ class DramaAssetDraftsTest {
         assertTrue(office.getImagePrompt().contains("不要出现人物"));
         assertTrue(office.getImagePrompt().contains("主光源"));
         assertTrue(office.getImagePrompt().contains("幻梦侦探社 日 内"));
+        assertTrue(office.getImagePrompt().contains("只描述可固定复用的空间环境"));
+        assertTrue(!office.getImagePrompt().contains("整体氛围："));
+        assertTrue(!office.getImagePrompt().contains("风扇"));
+        assertTrue(!office.getImagePrompt().contains("夏安"));
+        assertTrue(!office.getImagePrompt().contains("服务剧情情绪"));
 
         AssetDraftList.AssetDraft watch = list.getAssets().stream()
                 .filter(item -> "古铜怀表".equals(item.getName()))
@@ -59,6 +64,26 @@ class DramaAssetDraftsTest {
         assertTrue(!watch.getImagePrompt().contains("剧情用途"));
         assertTrue(!watch.getImagePrompt().contains("风扇"));
         assertTrue(!watch.getImagePrompt().contains("夏安"));
+    }
+
+    @Test
+    void shouldReplaceObsoleteScenePromptThatEmbedsPlotAction() {
+        String obsolete = "市中心医院ICU场景概念图。场景名称：市中心医院ICU。"
+                + "时间与地点：日 内，市中心医院ICU。整体氛围：苍白脸庞人躺在病床，怀表开启后，进入代码梦境，与梦魇怪物战斗。"
+                + "建筑结构、空间布局、环境陈设和关键道具交代清楚。墙面、地面、家具、金属、玻璃、木材等材质细节可见。"
+                + "主光源、辅光、环境光、明暗关系、色温和阴影方向明确；可用冷暖光、高对比或丁达尔光服务剧情情绪。"
+                + "电影分镜视角，如广角全景、低机位、俯拍或对称构图。二次元漫画风。场景概念图，画面中不要出现人物。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                obsolete, DramaContract.ASSET_TYPE_SCENE, DramaStyles.ANIME_COMIC));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                obsolete, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.ANIME_COMIC));
+
+        String rebuilt = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_SCENE, "市中心医院ICU", DramaStyles.require(DramaStyles.ANIME_COMIC));
+        assertTrue(rebuilt.contains("只描述可固定复用的空间环境"));
+        assertTrue(!rebuilt.contains("整体氛围："));
+        assertTrue(!rebuilt.contains("怀表"));
+        assertTrue(!rebuilt.contains("梦魇"));
     }
 
     @Test

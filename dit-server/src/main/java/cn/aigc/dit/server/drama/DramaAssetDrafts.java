@@ -210,13 +210,12 @@ public final class DramaAssetDrafts {
                 }
                 text.append("。");
             }
-            if (StringUtils.hasText(context.action())) {
-                text.append("整体氛围：").append(clip(context.action(), 80)).append("。");
-            }
+            // 故意不用剧本 action：那是人物动作与剧情事件，会污染场景设定图。
         }
+        text.append("只描述可固定复用的空间环境，不要写人物动作、对白或剧情事件。");
         text.append("建筑结构、空间布局、环境陈设和关键道具交代清楚。");
         text.append("墙面、地面、家具、金属、玻璃、木材等材质细节可见。");
-        text.append("主光源、辅光、环境光、明暗关系、色温和阴影方向明确；可用冷暖光、高对比或丁达尔光服务剧情情绪。");
+        text.append("主光源、辅光、环境光、明暗关系、色温和阴影方向明确；可用冷暖光、高对比或丁达尔光营造空间情绪。");
         text.append("电影分镜视角，如广角全景、低机位、俯拍或对称构图。");
         text.append(styleLine).append("。");
         text.append("场景概念图，画面中不要出现人物。");
@@ -297,8 +296,24 @@ public final class DramaAssetDrafts {
                 || prompt.contains("剧情用途：")) {
             return true;
         }
+        // 旧场景模板把剧本 action 塞进「整体氛围」，会带入人物动作与剧情。
+        if (isObsoleteScenePromptWithPlotAction(prompt, type)) {
+            return true;
+        }
         // 写实风旧角色设定表（白底三视图含面部特写）在打开资产页 / 生图时自动换成新骨架，无需手改库。
         return isObsoleteLiveRealismCharacterSheet(prompt, type, styleKey);
+    }
+
+    static boolean isObsoleteScenePromptWithPlotAction(String prompt, String type) {
+        if (!StringUtils.hasText(prompt)) {
+            return false;
+        }
+        if (StringUtils.hasText(type) && !DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return false;
+        }
+        return prompt.contains("场景概念图")
+                && prompt.contains("整体氛围：")
+                && prompt.contains("建筑结构、空间布局");
     }
 
     static boolean isObsoleteLiveRealismCharacterSheet(String prompt, String type, String styleKey) {

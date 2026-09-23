@@ -984,7 +984,7 @@ class DramaStoryboardServiceTest {
         assertEquals(keep, explicit.getCompiledPrompt());
         DramaShotResp inheritResp = board.getChapters().get(0).getShots().get(0);
         DramaShotResp explicitResp = board.getChapters().get(0).getShots().get(1);
-        assertEquals(DramaVideoGenerateModes.R2V, inheritResp.getEffectiveVideoGenerateMode());
+        assertEquals(DramaVideoGenerateModes.I2V, inheritResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.TRUE, inheritResp.getVideoModeInherited());
         assertEquals(DramaVideoGenerateModes.R2V, explicitResp.getEffectiveVideoGenerateMode());
         assertEquals(Boolean.FALSE, explicitResp.getVideoModeInherited());
@@ -1005,7 +1005,24 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void firstShotInChapterForcesR2vEvenWhenSeriesIsI2v() {
+    void batchLockBlocksUpdateShot() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        storedShots.add(shot);
+        DramaShotBatchGenerateService batch = org.mockito.Mockito.mock(DramaShotBatchGenerateService.class);
+        org.mockito.Mockito.doThrow(new BizException(
+                        cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "该镜正在批量生成中"))
+                .when(batch).assertNotBatchLocked(201L);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "batchGenerateService", batch);
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setTitle("改名");
+        BizException error = assertThrows(BizException.class, () -> service.updateShot(201L, req));
+        assertTrue(error.getMessage().contains("批量生成"));
+    }
+
+    @Test
+    void firstShotInChapterKeepsI2vWhenSeriesIsI2v() {
         storedChapters.add(pendingChapter());
         DramaShot shot = pendingShot();
         storedShots.add(shot);
@@ -1019,9 +1036,9 @@ class DramaStoryboardServiceTest {
 
         DramaShotResp resp = service.compileShot(201L);
 
-        assertEquals(DramaVideoGenerateModes.R2V, resp.getEffectiveVideoGenerateMode());
-        assertTrue(shot.getCompiledPrompt().contains("<Picture"));
-        assertFalse(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertEquals(DramaVideoGenerateModes.I2V, resp.getEffectiveVideoGenerateMode());
+        assertFalse(shot.getCompiledPrompt().contains("<Picture"));
+        assertTrue(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
     }
 
     @Test
@@ -1265,6 +1282,7 @@ class DramaStoryboardServiceTest {
         series.setAspectRatio("16:9");
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp task = new GenerateTaskResp();
         task.setId(601L);
         task.setStatus("PENDING");
@@ -1276,11 +1294,10 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        // 新场第一镜强制参考图，不跨场接上一场尾帧
-        assertEquals("video", reqCaptor.getValue().getCategory());
-        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
-        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
-        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
+        // 新场第一镜可走 i2v 开场静帧，但不跨场接上一场尾帧
+        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("openingStill"));
+        assertNull(reqCaptor.getValue().getFrames());
+        assertFalse(String.valueOf(extraCaptor.getValue()).contains("shot1-tail"));
     }
 
     @Test
@@ -1879,6 +1896,41 @@ class DramaStoryboardServiceTest {
         assertEquals(1L, shot.getSelectedGenerationId());
         assertEquals("users/7/gen/old.mp4", shot.getVideoKey());
         assertEquals("users/7/gen/old-poster.webp", shot.getVideoPosterKey());
+    }
+
+    @Test
+    void listGenerationsRenumbersLabelsByChronologicalOrder() {
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(3L);
+        storedShots.add(shot);
+        DramaShotGeneration first = new DramaShotGeneration();
+        first.setId(1L);
+        first.setShotId(201L);
+        first.setUserId(7L);
+        first.setVideoKey("users/7/gen/a.mp4");
+        first.setLabel("第 1 次生成");
+        DramaShotGeneration second = new DramaShotGeneration();
+        second.setId(2L);
+        second.setShotId(201L);
+        second.setUserId(7L);
+        second.setVideoKey("users/7/gen/b.mp4");
+        second.setLabel("第 2 次生成");
+        DramaShotGeneration third = new DramaShotGeneration();
+        third.setId(3L);
+        third.setShotId(201L);
+        third.setUserId(7L);
+        third.setVideoKey("users/7/gen/c.mp4");
+        // 模拟并发落库时写入了重复的「第 2 次生成」
+        third.setLabel("第 2 次生成");
+        when(shotGenerationMapper.selectList(any())).thenReturn(List.of(third, second, first));
+
+        var list = service.listGenerations(201L);
+
+        assertEquals(3, list.size());
+        assertEquals("第 3 次生成", list.get(0).getLabel());
+        assertEquals("第 2 次生成", list.get(1).getLabel());
+        assertEquals("第 1 次生成", list.get(2).getLabel());
+        assertTrue(list.get(0).getSelected());
     }
 
     @Test
