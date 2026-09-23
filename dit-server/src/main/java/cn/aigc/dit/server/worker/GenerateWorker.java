@@ -606,7 +606,10 @@ public class GenerateWorker {
             latest.setFinishedAt(OffsetDateTime.now());
             genTaskMapper.updateById(latest);
             releaseDramaSlot = GenerateRequests.isDramaShot(latest.getParams());
-            if (!alreadyFailed && latest.getCreditCost() != null && latest.getCreditCost() > 0) {
+            // 供应商已接受任务后即可能产生真实成本，失败也不能由平台退款兜底。
+            // 仅在尚未取得供应商任务号时退还预扣积分。
+            if (!alreadyFailed && !StringUtils.hasText(latest.getProviderJobId())
+                    && latest.getCreditCost() != null && latest.getCreditCost() > 0) {
                 try {
                     creditService.change(latest.getUserId(), latest.getCreditCost(), CreditReason.REFUND,
                             String.valueOf(latest.getId()), "生成失败退还积分");

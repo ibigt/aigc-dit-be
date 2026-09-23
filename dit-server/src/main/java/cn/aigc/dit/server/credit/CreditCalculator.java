@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  */
 public final class CreditCalculator {
 
-    private static final Pattern NUMBER = Pattern.compile("(\\d+(?:\\.\\d+)?)");
+    private static final Pattern NUMBER = Pattern.compile("(-?\\d+(?:\\.\\d+)?)");
 
     private CreditCalculator() {
     }
@@ -20,11 +20,11 @@ public final class CreditCalculator {
     public static long calculate(Map<String, Object> pricing, String category,
                                  String resolution, String quality,
                                  Integer durationSec, int copies) {
-        double unitPrice = saleOutput(pricing);
-        if (unitPrice <= 0) {
-            unitPrice = ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
-                    : ModelCategory.AUDIO.equalsIgnoreCase(category) ? 3D : 2D;
-        }
+        Double configuredPrice = saleOutput(pricing);
+        double unitPrice = configuredPrice == null
+                ? (ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
+                    : ModelCategory.AUDIO.equalsIgnoreCase(category) ? 3D : 2D)
+                : Math.max(0D, configuredPrice);
         double multiplier = parameterMultiplier(category, resolution, quality);
         double quantity = unitPrice;
         if (ModelCategory.VIDEO.equalsIgnoreCase(category) && isPerSecond(pricing)) {
@@ -36,6 +36,38 @@ public final class CreditCalculator {
         }
         int safeCopies = Math.min(4, Math.max(1, copies));
         return (long) Math.ceil(quantity * multiplier * safeCopies);
+    }
+
+    /**
+     * 文本模型按供应商实际 usage 结算。缓存 Token 是输入 Token 的子集，需先从普通输入中扣除，
+     * 避免同时按输入价和缓存价重复计费。
+     */
+    public static long calculateText(Map<String, Object> pricing,
+                                     long promptTokens, long completionTokens, long cachedPromptTokens) {
+        if (pricing == null) return 0L;
+        Object sale = pricing.get("sale");
+        if (!(sale instanceof Map<?, ?> prices)) {
+            Double flat = parseAmount(sale);
+            return flat == null ? 0L : (long) Math.ceil(Math.max(0D, flat));
+        }
+        String unit = pricing.get("unit") == null ? "" : String.valueOf(pricing.get("unit")).trim();
+        if ("次".equals(unit)) {
+            return (long) Math.ceil(nonNegativeAmount(prices.get("output")));
+        }
+        double divisor = "百万Token".equals(unit) ? 1_000_000D : 1_000D;
+        long safePrompt = Math.max(0L, promptTokens);
+        long safeCompletion = Math.max(0L, completionTokens);
+        long safeCached = Math.min(safePrompt, Math.max(0L, cachedPromptTokens));
+        long billableInput = safePrompt - safeCached;
+        double credits = billableInput / divisor * nonNegativeAmount(prices.get("input"))
+                + safeCompletion / divisor * nonNegativeAmount(prices.get("output"))
+                + safeCached / divisor * nonNegativeAmount(prices.get("cache"));
+        return (long) Math.ceil(credits);
+    }
+
+    private static double nonNegativeAmount(Object value) {
+        Double amount = parseAmount(value);
+        return amount == null ? 0D : Math.max(0D, amount);
     }
 
     static double parameterMultiplier(String category, String resolution, String quality) {
@@ -64,9 +96,9 @@ public final class CreditCalculator {
         return resMul * qualityMul;
     }
 
-    static double saleOutput(Map<String, Object> pricing) {
+    static Double saleOutput(Map<String, Object> pricing) {
         if (pricing == null) {
-            return 0;
+            return null;
         }
         Object sale = pricing.get("sale");
         if (sale instanceof Map<?, ?> saleMap) {
@@ -98,9 +130,9 @@ public final class CreditCalculator {
         return 1D;
     }
 
-    static double parseAmount(Object value) {
+    static Double parseAmount(Object value) {
         if (value == null) {
-            return 0;
+            return null;
         }
         if (value instanceof Number number) {
             return number.doubleValue();
@@ -109,6 +141,6 @@ public final class CreditCalculator {
         if (matcher.find()) {
             return Double.parseDouble(matcher.group(1));
         }
-        return 0;
+        return null;
     }
 }

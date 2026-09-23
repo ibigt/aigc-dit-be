@@ -9,6 +9,7 @@ import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
+import cn.aigc.dit.server.credit.PricingPolicy;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.text.OpenAiCompatChatClient;
@@ -185,6 +186,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         } else if (creating) {
             model.setAdapterConfig(null);
         }
+        PricingPolicy.validate(category, req.getPricing());
         model.setPricing(mergePricing(req));
         model.setEnabled(req.getEnabled() == null || req.getEnabled());
         model.setDescription(trimToNull(req.getDescription()));
@@ -219,6 +221,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         adapterConfig.putIfAbsent("enableThinking", false);
         adapterConfig.put("chatModel", modelKey);
         model.setAdapterConfig(adapterConfig.isEmpty() ? null : adapterConfig);
+        PricingPolicy.validate(ModelCategory.TEXT, req.getPricing());
         model.setPricing(mergePricing(req));
         model.setEnabled(req.getEnabled() == null || req.getEnabled());
         model.setDescription(trimToNull(req.getDescription()));
