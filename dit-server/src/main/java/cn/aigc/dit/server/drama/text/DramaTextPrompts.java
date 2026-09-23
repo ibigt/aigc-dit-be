@@ -98,60 +98,48 @@ public final class DramaTextPrompts {
                 {
                   "chapter_index": 1,
                   "index": 1,
-                  "title": "贴照片",
-                  "duration_sec": 8,
-                  "narrative_goal": "中景。风扇转动，夏安往白板贴照片。",
+                  "title": "侦探社对谈",
+                  "duration_sec": 12,
+                  "narrative_goal": "中景。夏安贴照片，局长叫醒洛白，洛白拿开盖脸的书。",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "局长：洛老弟，别睡了。",
+                  "dialogue": "局长：洛老弟，别睡了。\\n洛白：科学解决不了的，就轮到我们。",
                   "continuity_in": "风扇叶片入画",
-                  "continuity_out": "夏安手贴在白板上",
-                  "character_names": ["夏安", "局长"],
+                  "continuity_out": "洛白书拿开",
+                  "character_names": ["夏安", "局长", "洛白"],
                   "prop_names": ["白板"],
                   "location_name": "幻梦侦探社",
-                  "cast_count": 2
-                },
-                {
-                  "chapter_index": 1,
-                  "index": 2,
-                  "title": "洛白醒神",
-                  "duration_sec": 7,
-                  "narrative_goal": "近景。洛白用书盖脸后拿开。",
-                  "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "洛白：科学解决不了的，就轮到我们。",
-                  "continuity_in": "夏安手贴在白板上",
-                  "continuity_out": "洛白书拿开",
-                  "character_names": ["洛白"],
-                  "prop_names": [],
-                  "location_name": "幻梦侦探社",
-                  "cast_count": 1
+                  "cast_count": 3
                 }
               ]
             }
             规则：
-            - duration_sec 只许 5–15 的整数秒；按本镜对白长短、动作节拍各自估计，不要所有镜头填同一个秒数。
+            - duration_sec 只许 5–15 的整数秒；优先估在 10–15 秒。内容本身很短才用 5–9 秒。
+              按本镜对白长短、动作节拍估计，不要所有镜头填同一个秒数。
               时长只服务单镜，禁止为了凑总秒数而删戏或打乱时间线；不同场景不得并进一镜。
             - 必须按 scenes 的先后、场内 action 与 dialogue 的出现顺序拆镜；后一场的事件不得出现在前面的镜头里。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
             - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
-            - 动作只写一个人时，character_names 只放这一个人。
+            - 同场连续对谈里出现的说话人都应列入 character_names，不要只留当前开口的那一个人。
             - 谁做动作就写谁的名字，不要把 A 的动作写到 B 身上。
             - prop_names 只列本镜被使用或被拿在手上的道具，不要每镜都带全场道具。
             - cast_count 必须等于 character_names 元素个数。
-            - chapter_index 对应 scene_index；同一场允许只有 1 镜，但有戏份的场通常 2～5 镜。
-              粒度取中间：不要把多个独立节拍/角色出入/关键道具揭示压进一镜，也不要仅因景别或运镜变化拆镜。
-              下列情况应拆开：主体人物切换、独立动作转折、对白轮次明显切换、同一镜演不完的内容。
-              仅当同一主体、同一连续动作链、且时长自然可演完时，才合并进一镜。
+            - chapter_index 对应 scene_index。粒度优先少拆：同一场、同一空间里能在约 10–15 秒演完的连续内容尽量一镜；
+              有戏份的场常见 1～3 镜，能一镜完成就不要拆成多镜。
+              不要仅因景别、运镜、正反打偏好而拆镜。
+              同场连续对谈（多人轮流说话）应落在同一镜，dialogue 用换行分隔多句；不要一句一镜。
+              下列硬边界才拆开：地点或时间跳转；服装/身份状态突变；切到另一组无关人物或另一条动作线；
+              或完整内容超过 15 秒演不完（在对白句或动作句边界切开，不要为凑时长删戏）。
             - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
               （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
-            - narrative_goal 写一个景别或主运镜，接着 1～2 个紧密相连的可见动作；不要堆三个以上无关节拍。
+            - narrative_goal 写一个景别或主运镜，接着本镜主要可见动作；对谈镜可概括交谈双方动作，不要写成一句一镜。
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
             - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中
              （格式「说话人：原文」；同镜多句用换行分隔）。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
               纯动作镜可留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
-            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字（1 个景别/运镜 + 1~2 个动作关键词），
+            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字，
               scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字；dialogue 不受上述字数上限约束。
             """;
 
@@ -261,21 +249,31 @@ public final class DramaTextPrompts {
         text.append("只允许引用下列资产名，其它名字一律不得出现：\n").append(assetNames);
         text.append("\n硬性体积要求：只输出 ShotDraftList JSON，shots 必须是非空数组；");
         text.append("禁止输出思考过程、禁止在 JSON 外写解释；");
-        text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，有戏份的单场通常 2～5 镜；");
+        text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，有戏份的单场常见 1～3 镜，能一镜演完就不要多拆；");
         text.append("但 scenes 中的台词必须尽量原样保留到对应分镜 dialogue，禁止摘要或删句来省体积。");
         text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
-        text.append("\n每条分镜的 duration_sec 按该镜对白长短和动作节拍自行估计，只能是 5 到 15 的整数秒。");
-        text.append("不要所有镜头填同一个秒数。无法判断时再用 ").append(fallbackSec).append(" 秒。");
+        text.append("\n每条分镜的 duration_sec 优先估在 10 到 15 秒；内容本身很短才用 5 到 9 秒。只能是 5 到 15 的整数秒。");
+        text.append("不要所有镜头填同一个秒数。无法判断时再用 ").append(preferredFallback(fallbackSec)).append(" 秒。");
         text.append("单镜时长不要影响镜头顺序，也不要为了凑总时长删戏或把两场戏并进一镜。");
         if (episodeBudgetSec != null && episodeBudgetSec > 0) {
             text.append("\n本集故事体量大约 ").append(episodeBudgetSec)
                     .append(" 秒，仅供感受戏有多长；不要把各镜秒数之和强行凑成这个数。");
         }
-        text.append("\n镜头粒度取中间：完整表达情节，但不要压成少数超长镜，也不要仅为景别或运镜拆碎。");
-        text.append("同一主体、同一连续动作链且能自然演完时可以同镜；");
-        text.append("主体切换、独立动作转折、对白轮次切换、或一镜演不完时必须拆开。");
+        text.append("\n镜头粒度优先少拆：同场同空间、约 10–15 秒能演完的连续内容尽量一镜。");
+        text.append("同场连续对谈（多人轮流说话）放同一镜，不要一句一镜或一轮一对白一镜。");
+        text.append("不要仅因景别、运镜、正反打而拆镜。");
+        text.append("只有地点/时间跳转、状态突变、切到无关人物或另一条动作线、或超过 15 秒演不完时才拆开。");
         text.append("不得为减少镜头而跳过情节，也不得为压缩体积而丢掉或改写台词。");
         text.append("\n\n剧本：\n").append(scriptJson);
         return text.toString();
+    }
+
+    /** 无法估时长时的兜底，偏向 10–15 偏好区间。 */
+    static int preferredFallback(int fallbackSec) {
+        int value = fallbackSec < 5 ? DramaContract.DEFAULT_DURATION_SEC : fallbackSec;
+        if (value < 10) {
+            return 10;
+        }
+        return Math.min(15, value);
     }
 }

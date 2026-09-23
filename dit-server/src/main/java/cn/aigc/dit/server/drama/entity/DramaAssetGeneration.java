@@ -20,7 +20,7 @@ public class DramaAssetGeneration {
     private Long userId;
     private String storageKey;
     private Long genTaskId;
-    /** generate | upload */
+    /** generate | upload | library */
     private String source;
     private String label;
     private String resolution;

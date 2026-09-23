@@ -55,6 +55,7 @@ public class GenerateSubmitReq {
     private Integer copies = 1;
 
     @Valid
+    @Size(max = 15, message = "参考素材最多选择15个")
     private List<ReferenceInput> references;
 
     @Valid

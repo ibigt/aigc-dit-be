@@ -199,6 +199,39 @@ public class DramaAssetService {
     }
 
     @Transactional
+    public DramaAssetResp bindImageFromLibrary(Long assetId, Long libraryAssetId) {
+        DramaAsset asset = requireAsset(assetId);
+        Asset libraryAsset = assetService.requireOwned(libraryAssetId);
+        if (!AssetKind.IMAGE.equals(libraryAsset.getKind())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择图片素材");
+        }
+        if (!StringUtils.hasText(libraryAsset.getStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "素材文件无效");
+        }
+        // source 使用 upload 以兼容尚未放开 library 的旧库；展示标签仍为「引用 N」
+        DramaAssetGeneration generation = new DramaAssetGeneration();
+        generation.setAssetId(asset.getId());
+        generation.setUserId(asset.getUserId());
+        generation.setStorageKey(libraryAsset.getStorageKey());
+        generation.setGenTaskId(null);
+        generation.setSource("upload");
+        generation.setLabel(nextAssetLabel(asset.getId(), "library"));
+        generation.setResolution(null);
+        generation.setLibraryAssetId(libraryAsset.getId());
+        assetGenerationMapper.insert(generation);
+        applySelectedGeneration(asset, generation);
+        reopenIfConfirmed(asset);
+        if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
+            asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        }
+        assetMapper.updateById(asset);
+        touchSeries(asset.getSeriesId());
+        log.info("bind drama asset image assetId={} name={} libraryAssetId={} libraryAsset={}",
+                asset.getId(), asset.getName(), libraryAsset.getId(), libraryAsset.getName());
+        return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    @Transactional
     public DramaAssetResp uploadVoiceReference(Long assetId, MultipartFile file) {
         DramaAsset asset = requireAsset(assetId);
         if (file == null || file.isEmpty()) {
@@ -660,7 +693,13 @@ public class DramaAssetService {
                 .eq(DramaAssetGeneration::getAssetId, assetId)
                 .eq(DramaAssetGeneration::getSource, source));
         long next = count + 1;
-        return "upload".equals(source) ? ("上传 " + next) : ("生成方案 " + next);
+        if ("upload".equals(source)) {
+            return "上传 " + next;
+        }
+        if ("library".equals(source)) {
+            return "引用 " + next;
+        }
+        return "生成方案 " + next;
     }
 
     private DramaAssetGenerationResp toGenerationResp(DramaAssetGeneration generation, Long selectedId) {

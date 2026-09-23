@@ -22,9 +22,11 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final ActiveUserGuard activeUserGuard;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, ActiveUserGuard activeUserGuard) {
         this.jwtService = jwtService;
+        this.activeUserGuard = activeUserGuard;
     }
 
     @Override
@@ -37,6 +39,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
             if (StringUtils.hasText(token)) {
                 LoginUser user = jwtService.parse(token);
+                activeUserGuard.requireEnabled(user.getUserId());
                 UserContext.set(user);
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         user,

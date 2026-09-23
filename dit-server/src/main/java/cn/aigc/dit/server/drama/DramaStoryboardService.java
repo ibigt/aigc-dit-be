@@ -53,8 +53,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
@@ -1771,6 +1773,10 @@ public class DramaStoryboardService {
                     applyTaskResult(shot, task);
                 } catch (BizException ignored) {
                     // 任务不属于当前用户或已删：列表仍返回分镜本身
+                } catch (DataIntegrityViolationException e) {
+                    // 与批次轮询并发落库偶发撞唯一键；savepoint 已兜底，这里再吞掉以免看板 500
+                    log.debug("skip concurrent shot generation apply shot={} task={}: {}",
+                            shot.getId(), shot.getGenTaskId(), e.getMessage());
                 }
             }
         }
@@ -1867,9 +1873,23 @@ public class DramaStoryboardService {
         generation.setGenTaskId(genTaskId);
         generation.setSource(source);
         generation.setLabel(nextShotLabel(shot.getId()));
+        // PG：唯一键冲突会中止整段事务；必须用 savepoint 回滚冲突后再查已有行
+        Object savepoint = null;
+        boolean inTx = TransactionSynchronizationManager.isActualTransactionActive();
         try {
+            if (inTx) {
+                savepoint = TransactionAspectSupport.currentTransactionStatus().createSavepoint();
+            }
             shotGenerationMapper.insert(generation);
-        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            if (savepoint != null) {
+                TransactionAspectSupport.currentTransactionStatus().releaseSavepoint(savepoint);
+            }
+        } catch (DataIntegrityViolationException e) {
+            if (savepoint != null) {
+                TransactionAspectSupport.currentTransactionStatus().rollbackToSavepoint(savepoint);
+            } else {
+                throw e;
+            }
             DramaShotGeneration raced = findRecordedShotGeneration(shot.getId(), genTaskId, videoKey);
             if (raced == null) {
                 throw e;

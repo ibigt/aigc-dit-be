@@ -84,13 +84,43 @@ class ShotDraftMinimizerTest {
     }
 
     @Test
-    void keepsDraftsSeparateWhenBothHaveDialogue() {
+    void mergesAdjacentDialogueTurnsEvenWhenContinuityLabelsDiffer() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft first = shot(
+                1, 1, 5, "叫人", "局长走近。", "局长：洛老弟，别睡了。", List.of("局长"), List.of());
+        ShotDraftList.ShotDraft second = shot(
+                1, 2, 5, "回应", "洛白抬头。", "洛白：来了。", List.of("洛白"), List.of());
+        first.setContinuityOut("局长站定");
+        second.setContinuityIn("洛白抬头");
+        list.setShots(List.of(first, second));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(1, minimized.getShots().size());
+        assertEquals("局长：洛老弟，别睡了。\n洛白：来了。", minimized.getShots().get(0).getDialogue());
+    }
+
+    @Test
+    void keepsDialogueInDifferentLocationsSeparate() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft first = shot(
+                1, 1, 5, "室内", "局长说话。", "局长：跟我来。", List.of("局长"), List.of());
+        ShotDraftList.ShotDraft second = shot(
+                1, 2, 5, "室外", "洛白回应。", "洛白：好。", List.of("洛白"), List.of());
+        second.setLocationName("街巷");
+        list.setShots(List.of(first, second));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(2, minimized.getShots().size());
+    }
+
+    @Test
+    void keepsDialogueTurnsSeparateWhenMergedDurationWouldExceedFifteen() {
         ShotDraftList list = new ShotDraftList();
         list.setShots(List.of(
-                shot(1, 1, 5, "叫人", "局长走近。", "局长：洛老弟，别睡了。", List.of("局长"), List.of()),
-                shot(1, 2, 5, "回应", "洛白抬头。", "洛白：来了。", List.of("洛白"), List.of())));
-        list.getShots().get(0).setCharacterNames(List.of("局长", "洛白"));
-        list.getShots().get(1).setCharacterNames(List.of("局长", "洛白"));
+                shot(1, 1, 8, "叫人", "局长走近。", "局长：洛老弟，别睡了。", List.of("局长"), List.of()),
+                shot(1, 2, 8, "回应", "洛白抬头。", "洛白：来了。", List.of("洛白"), List.of())));
         list.getShots().get(1).setContinuityIn(list.getShots().get(0).getContinuityOut());
 
         ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);

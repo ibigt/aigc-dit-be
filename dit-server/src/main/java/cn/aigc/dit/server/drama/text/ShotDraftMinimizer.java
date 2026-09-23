@@ -10,8 +10,8 @@ import java.util.Set;
 
 /**
  * 把模型过度拆碎、但仍可由一次视频生成承载的同场相邻草稿合并。
- * 只合并主体一致、且合计不超过单镜上限（通常 15 秒）的连续镜；
- * 单镜本身需要 15 秒完全允许，此处不压缩单镜时长。
+ * 只合并同场连续、且合计不超过单镜上限（通常 15 秒）的内容；
+ * 同场连续对谈（两边都有对白）允许合并；单镜本身需要 15 秒完全允许，此处不压缩单镜时长。
  */
 public final class ShotDraftMinimizer {
 
@@ -50,18 +50,18 @@ public final class ShotDraftMinimizer {
         if (!Objects.equals(clean(left.getLocationName()), clean(right.getLocationName()))) {
             return false;
         }
-        String continuityOut = clean(left.getContinuityOut());
-        String continuityIn = clean(right.getContinuityIn());
-        if (continuityOut == null || continuityIn == null || !continuityOut.equals(continuityIn)) {
-            return false;
-        }
-        // 主体人物不一致时不并，避免多角色节拍被压进一镜。
-        if (!sameCharacterSet(left.getCharacterNames(), right.getCharacterNames())) {
-            return false;
-        }
-        // 两边都有对白时保留轮次边界，不并。
-        if (StringUtils.hasText(left.getDialogue()) && StringUtils.hasText(right.getDialogue())) {
-            return false;
+        boolean bothDialogue = StringUtils.hasText(left.getDialogue()) && StringUtils.hasText(right.getDialogue());
+        // 同场连续对谈：不要求 continuity 字面相等（一句一镜时常写成不同出入点）。
+        // 纯动作链仍要求衔接点对齐，避免门开/门关一类矛盾戏并在一起。
+        if (!bothDialogue) {
+            String continuityOut = clean(left.getContinuityOut());
+            String continuityIn = clean(right.getContinuityIn());
+            if (continuityOut == null || continuityIn == null || !continuityOut.equals(continuityIn)) {
+                return false;
+            }
+            if (!sameCharacterSet(left.getCharacterNames(), right.getCharacterNames())) {
+                return false;
+            }
         }
         int leftDuration = left.getDurationSec() == null ? maxDurationSec : left.getDurationSec();
         int rightDuration = right.getDurationSec() == null ? maxDurationSec : right.getDurationSec();
