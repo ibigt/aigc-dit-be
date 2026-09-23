@@ -32,6 +32,24 @@ class AdapterCatalogTest {
         assertEquals(null, AdapterCatalog.infer("官方API", "video", ""));
         assertEquals(null, AdapterCatalog.infer("官方API", "video", "unknown-official-video"));
         assertEquals(AdapterCatalog.GPT_IMAGE_2, AdapterCatalog.infer("RunningHub", "image", "gpt-image-2"));
+        assertEquals(AdapterCatalog.GPT_IMAGE_2_0, AdapterCatalog.infer("官方API", "image", "gpt-image-2"));
+        assertEquals(AdapterCatalog.GPT_IMAGE_2_5, AdapterCatalog.infer("官方API", "image", "gpt-image-2.5-sunburst"));
+        assertEquals(AdapterCatalog.TRANSPORT_OPENAI_IMAGE, AdapterCatalog.transport("gpt-image-2.0", "官方API"));
+        assertEquals(AdapterCatalog.GPT_IMAGE_2_0_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.GPT_IMAGE_2_0));
+        assertEquals(AdapterCatalog.GPT_IMAGE_2_5_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.GPT_IMAGE_2_5));
+        assertEquals(AdapterCatalog.SEEDREAM_4_0, AdapterCatalog.infer("官方API", "image", "doubao-seedream-4-0-250828"));
+        assertEquals(AdapterCatalog.SEEDREAM_4_5, AdapterCatalog.infer("官方API", "image", "doubao-seedream-4-5-251128"));
+        assertEquals(AdapterCatalog.SEEDREAM_5_0,
+                AdapterCatalog.infer("官方API（token plan）", "image", "doubao-seedream-5.0-lite"));
+        assertEquals(AdapterCatalog.SEEDREAM_5_0,
+                AdapterCatalog.infer("官方API（token plan）", "image", "doubao-seedream-5.0-pro"));
+        assertEquals(AdapterCatalog.TRANSPORT_SEEDREAM, AdapterCatalog.transport("seedream-4.0", "官方API"));
+        assertEquals(AdapterCatalog.SEEDREAM_5_0_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.SEEDREAM_5_0));
+        assertTrue(AdapterCatalog.isSeedream(AdapterCatalog.SEEDREAM_4_5));
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
+                AdapterCatalog.require(AdapterCatalog.SEEDREAM_5_0).providerLabel());
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
+                AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.SEEDREAM_5_0));
         assertEquals(AdapterCatalog.MOCK, AdapterCatalog.infer("mock", "video", "mock-video"));
         assertEquals(AdapterCatalog.OPENAI_SPEECH, AdapterCatalog.infer("自定义配置", "audio", "gpt-4o-mini-tts"));
         assertEquals(AdapterCatalog.MINIMAX_SPEECH, AdapterCatalog.infer("官方API", "audio", "speech-2.8-hd"));
@@ -73,6 +91,11 @@ class AdapterCatalogTest {
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_IMAGE_2_5, GenerateMode.I2I));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2, GenerateMode.T2I));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2, GenerateMode.I2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2_0, GenerateMode.T2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.GPT_IMAGE_2_5, GenerateMode.I2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDREAM_4_0, GenerateMode.T2I));
+        assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.SEEDREAM_5_0, GenerateMode.I2I));
+        assertEquals(AdapterCatalog.SEEDREAM_4_0_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.SEEDREAM_4_0));
         assertEquals("rhart-image-g-2/image-to-image",
                 AdapterCatalog.require(AdapterCatalog.GPT_IMAGE_2).defaultPaths().get("i2iPath"));
         assertTrue(AdapterCatalog.supportsMode(AdapterCatalog.AGNES_VIDEO_2_5, GenerateMode.I2V));

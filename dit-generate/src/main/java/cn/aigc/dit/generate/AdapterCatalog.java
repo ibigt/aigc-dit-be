@@ -16,6 +16,11 @@ import java.util.Map;
 public final class AdapterCatalog {
 
     public static final String GPT_IMAGE_2 = "gpt-image-2";
+    public static final String GPT_IMAGE_2_0 = "gpt-image-2.0";
+    public static final String GPT_IMAGE_2_5 = "gpt-image-2.5";
+    public static final String SEEDREAM_4_0 = "seedream-4.0";
+    public static final String SEEDREAM_4_5 = "seedream-4.5";
+    public static final String SEEDREAM_5_0 = "seedream-5.0";
     public static final String SEEDANCE_2 = "seedance-2";
     public static final String SEEDANCE_2_0 = "seedance-2.0";
     public static final String SEEDANCE_2_5 = "seedance-2.5";
@@ -30,9 +35,11 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_COMFYUI = "comfyui";
     public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_ARK = "ark";
+    public static final String TRANSPORT_SEEDREAM = "seedream";
     public static final String TRANSPORT_MINIMAX = "minimax";
     public static final String TRANSPORT_MINIMAX_SPEECH = "minimax-speech";
     public static final String TRANSPORT_OPENAI_SPEECH = "openai-speech";
+    public static final String TRANSPORT_OPENAI_IMAGE = "openai-image";
     public static final String TRANSPORT_MOCK = "mock";
 
     public static final String PROVIDER_OFFICIAL = "官方API";
@@ -52,6 +59,13 @@ public final class AdapterCatalog {
     public static final String MINIMAX_SPEECH_DEFAULT_MODEL = "speech-2.8-hd";
     public static final String OPENAI_SPEECH_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
     public static final String OPENAI_SPEECH_DEFAULT_MODEL = "gpt-4o-mini-tts";
+    public static final String OPENAI_IMAGE_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
+    public static final String GPT_IMAGE_2_0_MODEL = "gpt-image-2";
+    public static final String GPT_IMAGE_2_5_MODEL = "gpt-image-2.5-sunburst";
+    public static final String SEEDREAM_4_0_MODEL = "doubao-seedream-4-0-250828";
+    public static final String SEEDREAM_4_5_MODEL = "doubao-seedream-4-5-251128";
+    /** Token Plan 默认 Lite；管理端可改成 {@code doubao-seedream-5.0-pro} 等控制台标识。 */
+    public static final String SEEDREAM_5_0_MODEL = "doubao-seedream-5.0-lite";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
@@ -59,6 +73,21 @@ public final class AdapterCatalog {
                     Map.of(
                             "t2iPath", "rhart-image-g-2/text-to-image",
                             "i2iPath", "rhart-image-g-2/image-to-image"), true),
+            new Spec(GPT_IMAGE_2_0, "GPT Image 2.0", ModelCategory.IMAGE, TRANSPORT_OPENAI_IMAGE, PROVIDER_OFFICIAL,
+                    OPENAI_IMAGE_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
+            new Spec(GPT_IMAGE_2_5, "GPT Image 2.5", ModelCategory.IMAGE, TRANSPORT_OPENAI_IMAGE, PROVIDER_OFFICIAL,
+                    OPENAI_IMAGE_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
+            new Spec(SEEDREAM_4_0, "Seedream 4.0", ModelCategory.IMAGE, TRANSPORT_SEEDREAM, PROVIDER_OFFICIAL,
+                    ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
+            new Spec(SEEDREAM_4_5, "Seedream 4.5", ModelCategory.IMAGE, TRANSPORT_SEEDREAM, PROVIDER_OFFICIAL,
+                    ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
+            new Spec(SEEDREAM_5_0, "Seedream 5.0", ModelCategory.IMAGE, TRANSPORT_SEEDREAM, PROVIDER_OFFICIAL_TOKEN_PLAN,
+                    ARK_DEFAULT_ENDPOINT, List.of(GenerateMode.T2I, GenerateMode.I2I),
+                    Map.of(), true),
             new Spec(SEEDANCE_2, "Seedance 2.x", ModelCategory.VIDEO, TRANSPORT_RUNNINGHUB, "RunningHub",
                     "https://www.runninghub.ai", List.of(GenerateMode.T2V, GenerateMode.R2V),
                     Map.of(
@@ -177,6 +206,26 @@ public final class AdapterCatalog {
         if (key.contains("seedance") || (prov.contains("running") && ModelCategory.VIDEO.equals(cat))) {
             return SEEDANCE_2;
         }
+        if (ModelCategory.IMAGE.equals(cat) && !prov.contains("running") && isSeedream50Model(key)) {
+            return SEEDREAM_5_0;
+        }
+        if (ModelCategory.IMAGE.equals(cat) && !prov.contains("running") && isSeedream45Model(key)) {
+            return SEEDREAM_4_5;
+        }
+        if (ModelCategory.IMAGE.equals(cat) && !prov.contains("running") && isSeedream40Model(key)) {
+            return SEEDREAM_4_0;
+        }
+        if (ModelCategory.IMAGE.equals(cat)
+                && (key.contains("gpt-image-2.5") || key.contains("gpt-image-2-5")
+                || key.contains("2.5-sunburst") || key.contains("2.5-flare"))) {
+            return GPT_IMAGE_2_5;
+        }
+        if (ModelCategory.IMAGE.equals(cat)
+                && (key.contains("gpt-image-2.0") || key.contains("gpt-image-2-0")
+                || ((prov.contains("官方") || prov.contains("openai") || prov.contains("open ai"))
+                && (key.equals("gpt-image-2") || key.startsWith("gpt-image-2"))))) {
+            return GPT_IMAGE_2_0;
+        }
         if (key.contains("gpt-image") || (prov.contains("running") && ModelCategory.IMAGE.equals(cat))) {
             return GPT_IMAGE_2;
         }
@@ -241,6 +290,16 @@ public final class AdapterCatalog {
         return spec != null && OPENAI_SPEECH.equals(spec.key());
     }
 
+    public static boolean isOpenAiImage(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && TRANSPORT_OPENAI_IMAGE.equals(spec.transport());
+    }
+
+    public static boolean isSeedream(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && TRANSPORT_SEEDREAM.equals(spec.transport());
+    }
+
     public static boolean isMiniMaxSpeech(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && MINIMAX_SPEECH.equals(spec.key());
@@ -286,7 +345,7 @@ public final class AdapterCatalog {
         if (MINIMAX_H3.equals(adapterKey) || MINIMAX_SPEECH.equals(adapterKey)) {
             return isComfyUiProvider(requested) ? PROVIDER_COMFYUI : PROVIDER_OFFICIAL;
         }
-        if (isArk(adapterKey) && isOfficialTokenPlan(requested)) {
+        if ((isArk(adapterKey) || isSeedream(adapterKey)) && isOfficialTokenPlan(requested)) {
             return PROVIDER_OFFICIAL_TOKEN_PLAN;
         }
         Spec spec = find(adapterKey);
@@ -373,6 +432,21 @@ public final class AdapterCatalog {
         if (OPENAI_SPEECH.equals(adapterKey)) {
             return OPENAI_SPEECH_DEFAULT_MODEL;
         }
+        if (GPT_IMAGE_2_0.equals(adapterKey)) {
+            return GPT_IMAGE_2_0_MODEL;
+        }
+        if (GPT_IMAGE_2_5.equals(adapterKey)) {
+            return GPT_IMAGE_2_5_MODEL;
+        }
+        if (SEEDREAM_4_0.equals(adapterKey)) {
+            return SEEDREAM_4_0_MODEL;
+        }
+        if (SEEDREAM_4_5.equals(adapterKey)) {
+            return SEEDREAM_4_5_MODEL;
+        }
+        if (SEEDREAM_5_0.equals(adapterKey)) {
+            return SEEDREAM_5_0_MODEL;
+        }
         return "";
     }
 
@@ -396,6 +470,26 @@ public final class AdapterCatalog {
                 || modelKey.contains("doubao-seedance-2.0")
                 || modelKey.contains("seedance-2-0-fast")
                 || modelKey.contains("seedance-2.0-fast");
+    }
+
+    private static boolean isSeedream50Model(String modelKey) {
+        return modelKey.contains("seedream-5")
+                || modelKey.contains("seedream_5")
+                || modelKey.contains("doubao-seedream-5");
+    }
+
+    private static boolean isSeedream45Model(String modelKey) {
+        return modelKey.contains("seedream-4.5")
+                || modelKey.contains("seedream-4-5")
+                || modelKey.contains("doubao-seedream-4-5")
+                || modelKey.contains("doubao-seedream-4.5");
+    }
+
+    private static boolean isSeedream40Model(String modelKey) {
+        return modelKey.contains("seedream-4.0")
+                || modelKey.contains("seedream-4-0")
+                || modelKey.contains("doubao-seedream-4-0")
+                || modelKey.contains("doubao-seedream-4.0");
     }
 
     private static boolean containsIgnoreCase(List<String> values, String wanted) {

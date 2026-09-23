@@ -22,6 +22,8 @@ import cn.aigc.dit.generate.minimax.MiniMaxUrls;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.generate.runninghub.RunningHubUrls;
 import cn.aigc.dit.generate.speech.OpenAiSpeechProvider;
+import cn.aigc.dit.generate.openaiimage.OpenAiImageGenerateProvider;
+import cn.aigc.dit.generate.seedream.SeedreamGenerateProvider;
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
@@ -700,6 +702,14 @@ public class GenerateWorker {
         }
         if (provider instanceof OpenAiSpeechProvider speech) {
             speech.remember(task.getProviderJobId(), request);
+            return;
+        }
+        if (provider instanceof OpenAiImageGenerateProvider openAiImage) {
+            openAiImage.remember(task.getProviderJobId(), request);
+            return;
+        }
+        if (provider instanceof SeedreamGenerateProvider seedream) {
+            seedream.remember(task.getProviderJobId(), request);
         }
     }
 
@@ -966,7 +976,7 @@ public class GenerateWorker {
         }
         request.setAdapterKey(adapterKey);
         if (model != null) {
-            if (AdapterCatalog.isArk(adapterKey)) {
+            if (AdapterCatalog.isArk(adapterKey) || AdapterCatalog.isSeedream(adapterKey)) {
                 request.setEndpoint(ArkUrls.v3Base(
                         model.getEndpoint(), generateProperties.getArk().getBaseUrl(), model.getProvider()));
             } else {
@@ -1008,7 +1018,7 @@ public class GenerateWorker {
         if (AdapterCatalog.isAgnes(resolved)) {
             return generateProperties.getAgnes().getApiKey();
         }
-        if (AdapterCatalog.isArk(resolved)) {
+        if (AdapterCatalog.isArk(resolved) || AdapterCatalog.isSeedream(resolved)) {
             return generateProperties.getArk().getApiKey();
         }
         if (AdapterCatalog.isMiniMaxOfficial(resolved, model == null ? null : model.getProvider())) {
@@ -1019,6 +1029,9 @@ public class GenerateWorker {
         }
         if (AdapterCatalog.isOpenAiSpeech(resolved)) {
             return generateProperties.getSpeech().getApiKey();
+        }
+        if (AdapterCatalog.isOpenAiImage(resolved)) {
+            return generateProperties.getOpenAiImage().getApiKey();
         }
         if (AdapterCatalog.isRunningHub(resolved)
                 || (model != null && model.getProvider() != null

@@ -174,7 +174,8 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
             model.setEndpoint(defaultEndpoint(spec, model.getProvider()));
         }
-        if (AdapterCatalog.isOfficialTokenPlan(model.getProvider()) && AdapterCatalog.isArk(spec.key())) {
+        if (AdapterCatalog.isOfficialTokenPlan(model.getProvider())
+                && (AdapterCatalog.isArk(spec.key()) || AdapterCatalog.isSeedream(spec.key()))) {
             model.setEndpoint(ArkUrls.v3Base(model.getEndpoint(), spec.defaultEndpoint(), model.getProvider()));
         }
         model.setCategory(category);

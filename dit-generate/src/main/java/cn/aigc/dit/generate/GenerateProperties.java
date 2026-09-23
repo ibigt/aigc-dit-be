@@ -15,6 +15,7 @@ public class GenerateProperties {
     private Ark ark = new Ark();
     private Minimax minimax = new Minimax();
     private Speech speech = new Speech();
+    private OpenAiImage openAiImage = new OpenAiImage();
     private Ffmpeg ffmpeg = new Ffmpeg();
 
     /**
@@ -136,6 +137,19 @@ public class GenerateProperties {
         private String apiKey = "";
         private int connectTimeoutSeconds = 15;
         private int requestTimeoutSeconds = 180;
+    }
+
+    /**
+     * OpenAI 官方 Images：{@code POST /v1/images/generations}、{@code POST /v1/images/edits}。
+     * 适配协议 {@code gpt-image-2.0}/{@code gpt-image-2.5} 共用本运输层，仅模型标识不同。
+     */
+    @Data
+    public static class OpenAiImage {
+        private String baseUrl = "https://api.openai.com/v1";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        /** 文生图/改图为同步接口，可能需要数分钟。 */
+        private int requestTimeoutSeconds = 300;
     }
 
     /**
