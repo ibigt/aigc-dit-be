@@ -14,4 +14,12 @@ public interface CreditLedgerMapper extends BaseMapper<CreditLedger> {
             WHERE ref_id = #{refId}
             """)
     long sumByRefId(@Param("refId") String refId);
+
+    @Select("""
+            SELECT COALESCE(SUM(change_amt), 0) FROM credit_ledger
+            WHERE user_id = #{userId}
+              AND ref_id = #{refId}
+              AND reason = 'RECHARGE'
+            """)
+    long sumRechargeByUserAndRef(@Param("userId") Long userId, @Param("refId") String refId);
 }

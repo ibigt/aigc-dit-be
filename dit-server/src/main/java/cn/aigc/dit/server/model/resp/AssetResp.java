@@ -21,5 +21,8 @@ public class AssetResp {
     private String src;
     private String poster;
     private Long sizeBytes;
+    private Integer width;
+    private Integer height;
+    private Long durationMs;
     private OffsetDateTime createdAt;
 }

@@ -4,6 +4,7 @@ import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.mapper.stat.AdminGenTaskRow;
 import cn.aigc.dit.server.mapper.stat.HourCount;
 import cn.aigc.dit.server.mapper.stat.NamedCount;
+import cn.aigc.dit.server.mapper.stat.ModelObservabilityRow;
 import cn.aigc.dit.server.mapper.stat.UserTaskStat;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Mapper;
@@ -101,6 +102,71 @@ public interface GenTaskMapper extends BaseMapper<GenTask> {
             ORDER BY cnt DESC
             """)
     List<NamedCount> countBySourceBetween(@Param("start") OffsetDateTime start, @Param("end") OffsetDateTime end);
+
+    @Select("""
+            <script>
+            SELECT t.model_id AS modelId,
+                   COALESCE(m.name, '未知模型') AS modelName,
+                   COALESCE(m.provider, '') AS provider,
+                   t.category AS category,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE t.status = 'SUCCEEDED') AS succeeded,
+                   COUNT(*) FILTER (WHERE t.status = 'FAILED') AS failed,
+                   COUNT(*) FILTER (WHERE t.status = 'CANCELLED') AS cancelled,
+                   COUNT(*) FILTER (WHERE t.status = 'RUNNING') AS running,
+                   COUNT(*) FILTER (WHERE t.status IN ('PENDING', 'QUEUED')) AS pending,
+                   COALESCE(SUM(t.credit_cost), 0) AS creditCost,
+                   AVG(EXTRACT(EPOCH FROM (t.finished_at - COALESCE(t.started_at, t.created_at))))
+                     FILTER (WHERE t.status = 'SUCCEEDED' AND t.finished_at IS NOT NULL) AS avgDurationSeconds,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (t.finished_at - COALESCE(t.started_at, t.created_at))))
+                     FILTER (WHERE t.status = 'SUCCEEDED' AND t.finished_at IS NOT NULL) AS p95DurationSeconds,
+                   AVG(EXTRACT(EPOCH FROM (t.started_at - t.created_at)))
+                     FILTER (WHERE t.started_at IS NOT NULL) AS avgWaitSeconds,
+                   MAX(t.created_at) AS lastCalledAt
+            FROM gen_task t
+            LEFT JOIN ai_model m ON m.id = t.model_id
+            WHERE t.created_at &gt;= #{start} AND t.created_at &lt; #{end}
+              <if test="category != null and category != ''">AND t.category = #{category}</if>
+              <if test="modelId != null">AND t.model_id = #{modelId}</if>
+            GROUP BY t.model_id, m.name, m.provider, t.category
+            ORDER BY total DESC
+            </script>
+            """)
+    List<ModelObservabilityRow> selectModelObservability(
+            @Param("start") OffsetDateTime start,
+            @Param("end") OffsetDateTime end,
+            @Param("category") String category,
+            @Param("modelId") Long modelId);
+
+    @Select("""
+            <script>
+            SELECT u.model_id AS modelId,
+                   COALESCE(m.name, '未知文本模型') AS modelName,
+                   COALESCE(m.provider, '') AS provider,
+                   'text' AS category,
+                   COUNT(*) AS total,
+                   COUNT(*) AS succeeded,
+                   0 AS failed,
+                   0 AS cancelled,
+                   0 AS running,
+                   0 AS pending,
+                   COALESCE(SUM(u.credit_cost), 0) AS creditCost,
+                   0 AS avgDurationSeconds,
+                   0 AS p95DurationSeconds,
+                   0 AS avgWaitSeconds,
+                   MAX(u.created_at) AS lastCalledAt
+            FROM text_usage_billing u
+            LEFT JOIN ai_model m ON m.id = u.model_id
+            WHERE u.created_at &gt;= #{start} AND u.created_at &lt; #{end}
+              <if test="modelId != null">AND u.model_id = #{modelId}</if>
+            GROUP BY u.model_id, m.name, m.provider
+            ORDER BY total DESC
+            </script>
+            """)
+    List<ModelObservabilityRow> selectTextModelObservability(
+            @Param("start") OffsetDateTime start,
+            @Param("end") OffsetDateTime end,
+            @Param("modelId") Long modelId);
 
     @Select("""
             <script>

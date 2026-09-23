@@ -6,9 +6,12 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.model.resp.PageQueryResp;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.entity.CreditLedger;
+import cn.aigc.dit.server.entity.RechargeOrder;
 import cn.aigc.dit.server.entity.SysUser;
 import cn.aigc.dit.server.mapper.CreditLedgerMapper;
+import cn.aigc.dit.server.mapper.RechargeOrderMapper;
 import cn.aigc.dit.server.mapper.SysUserMapper;
+import cn.aigc.dit.server.credit.CreditRechargePolicy;
 import cn.aigc.dit.server.model.resp.CreditLedgerResp;
 import cn.aigc.dit.server.model.resp.CreditSummaryResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -20,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +33,7 @@ public class CreditService {
 
     private final SysUserMapper sysUserMapper;
     private final CreditLedgerMapper creditLedgerMapper;
+    private final RechargeOrderMapper rechargeOrderMapper;
 
     public long balance(Long userId) {
         SysUser user = sysUserMapper.selectById(userId);
@@ -60,14 +65,33 @@ public class CreditService {
     }
 
     @Transactional
-    public long recharge(int amountYuan, String payment) {
-        if (amountYuan <= 0) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "充值金额无效");
-        }
+    public long recharge(int amountYuan, String payment, String requestId) {
+        CreditRechargePolicy.validate(amountYuan, payment, requestId);
         long credits = (long) amountYuan * YUAN_TO_CREDITS;
         Long userId = UserContext.requireUserId();
+        RechargeOrder existing = rechargeOrderMapper.selectOne(new LambdaQueryWrapper<RechargeOrder>()
+                .eq(RechargeOrder::getUserId, userId)
+                .eq(RechargeOrder::getRequestId, requestId)
+                .last("LIMIT 1"));
+        if (existing != null || creditLedgerMapper.sumRechargeByUserAndRef(userId, requestId) > 0) {
+            return balance(userId);
+        }
         String channel = "alipay".equalsIgnoreCase(payment) ? "支付宝" : "微信支付";
-        return change(userId, credits, CreditReason.RECHARGE, null,
+        OffsetDateTime now = OffsetDateTime.now(ZoneId.of("Asia/Shanghai"));
+        RechargeOrder order = new RechargeOrder();
+        order.setOrderNo("RC" + now.toInstant().toEpochMilli() + UUID.randomUUID().toString().substring(0, 8));
+        order.setRequestId(requestId);
+        order.setUserId(userId);
+        order.setAmountYuan(amountYuan);
+        order.setCreditAmount(credits);
+        order.setPaymentChannel(payment.toLowerCase());
+        order.setStatus("PAID");
+        order.setProviderTradeNo("mock-" + UUID.randomUUID());
+        order.setPaidAt(now);
+        if (rechargeOrderMapper.insertIfAbsent(order) == 0) {
+            return balance(userId);
+        }
+        return change(userId, credits, CreditReason.RECHARGE, requestId,
                 "Mock 充值 ¥" + amountYuan + " · " + channel);
     }
 

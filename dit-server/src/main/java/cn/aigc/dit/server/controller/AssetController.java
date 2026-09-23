@@ -29,8 +29,9 @@ public class AssetController {
     @GetMapping
     public CommonResult<List<AssetResp>> list(
             @RequestParam(required = false) String kind,
-            @RequestParam(required = false) String q) {
-        return CommonResult.success(assetService.listMine(kind, q));
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String orderBy) {
+        return CommonResult.success(assetService.listMine(kind, q, orderBy));
     }
 
     @Operation(summary = "上传图片、视频或音频（文件存入 MinIO）")
