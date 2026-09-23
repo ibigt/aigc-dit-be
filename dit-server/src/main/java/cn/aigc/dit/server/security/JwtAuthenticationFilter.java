@@ -1,8 +1,12 @@
 package cn.aigc.dit.server.security;
 
 import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.common.constant.UserStatus;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.entity.SysUser;
+import cn.aigc.dit.server.mapper.SysUserMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,11 +26,11 @@ import java.util.List;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
-    private final ActiveUserGuard activeUserGuard;
+    private final SysUserMapper sysUserMapper;
 
-    public JwtAuthenticationFilter(JwtService jwtService, ActiveUserGuard activeUserGuard) {
+    public JwtAuthenticationFilter(JwtService jwtService, SysUserMapper sysUserMapper) {
         this.jwtService = jwtService;
-        this.activeUserGuard = activeUserGuard;
+        this.sysUserMapper = sysUserMapper;
     }
 
     @Override
@@ -38,8 +42,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 token = request.getParameter("token");
             }
             if (StringUtils.hasText(token)) {
-                LoginUser user = jwtService.parse(token);
-                activeUserGuard.requireEnabled(user.getUserId());
+                LoginUser user = requireCurrent(jwtService.parse(token));
                 UserContext.set(user);
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                         user,
@@ -55,6 +58,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } finally {
             UserContext.clear();
         }
+    }
+
+    LoginUser requireCurrent(LoginUser tokenUser) {
+        SysUser stored = tokenUser == null ? null : sysUserMapper.selectById(tokenUser.getUserId());
+        if (stored == null) {
+            throw new BizException(ErrorCode.UNAUTHORIZED, "用户不存在或已删除");
+        }
+        if (!UserStatus.ENABLED.equals(stored.getStatus())) {
+            throw new BizException(ErrorCode.FORBIDDEN, "账号已停用");
+        }
+        return new LoginUser(stored.getId(), stored.getUsername(), stored.getEmail(),
+                stored.getDisplayName(), stored.getRole());
     }
 
     private static String resolveToken(HttpServletRequest request) {
