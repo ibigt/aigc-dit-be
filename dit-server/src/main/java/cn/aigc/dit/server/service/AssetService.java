@@ -12,6 +12,7 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.mapper.AssetMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.media.MediaUrls;
+import cn.aigc.dit.server.media.AssetUploadPolicy;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -54,11 +55,11 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
     @Transactional
     public AssetResp upload(MultipartFile file, String name) {
         Long userId = UserContext.requireUserId();
-        String mime = file == null || file.getContentType() == null
-                ? "" : file.getContentType().toLowerCase(Locale.ROOT);
+        AssetUploadPolicy.Validated validated = AssetUploadPolicy.validate(file);
+        String mime = validated.mimeType();
         String storedName = assetName(name, file == null ? null : file.getOriginalFilename());
         String key = putOwnedFile(file, "assets");
-        String kind = AssetKind.fromMime(mime);
+        String kind = validated.kind();
         String posterKey = AssetKind.VIDEO.equals(kind) ? posterExtractor.extract(key)
                 : AssetKind.AUDIO.equals(kind) ? null : key;
         Asset asset = new Asset();
@@ -77,15 +78,10 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
      * 把文件写入当前用户目录，不创建素材库记录。短剧参考图走这条路径。
      */
     public String putOwnedFile(MultipartFile file, String folder) {
-        if (file == null || file.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请选择文件");
-        }
-        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase(Locale.ROOT);
-        if (!mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/")) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "仅支持图片、视频或音频");
-        }
+        AssetUploadPolicy.Validated validated = AssetUploadPolicy.validate(file);
+        String mime = validated.mimeType();
         Long userId = UserContext.requireUserId();
-        String ext = extension(file.getOriginalFilename(), mime);
+        String ext = validated.dottedExtension();
         String key = "users/" + userId + "/" + sanitizeFolder(folder) + "/" + UUID.randomUUID() + ext;
         try {
             objectStorage.put(key, file.getBytes(), mime);
@@ -132,10 +128,15 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         boolean sharedWithCreation = creationMapper.selectCount(new LambdaQueryWrapper<Creation>()
                 .eq(Creation::getUserId, asset.getUserId())
                 .eq(Creation::getStorageKey, asset.getStorageKey())) > 0;
-        boolean sharedWithDramaVoice = dramaAssetMapper.selectCount(new LambdaQueryWrapper<DramaAsset>()
+        boolean sharedWithDramaReference = dramaAssetMapper.selectCount(new LambdaQueryWrapper<DramaAsset>()
                 .eq(DramaAsset::getUserId, asset.getUserId())
-                .eq(DramaAsset::getVoiceReferenceKey, asset.getStorageKey())) > 0;
-        if (!sharedWithCreation && !sharedWithDramaVoice) {
+                .and(reference -> reference
+                        .eq(DramaAsset::getVoiceReferenceKey, asset.getStorageKey())
+                        .or()
+                        .eq(DramaAsset::getImageAssetId, asset.getId())
+                        .or()
+                        .eq(DramaAsset::getImageStorageKey, asset.getStorageKey()))) > 0;
+        if (!sharedWithCreation && !sharedWithDramaReference) {
             objectStorage.delete(asset.getStorageKey());
             if (asset.getPosterKey() != null && !asset.getPosterKey().equals(asset.getStorageKey())) {
                 try {
@@ -150,6 +151,13 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
 
     @Transactional
     public AssetResp importFromStorage(Long userId, String name, String category, String storageKey, String posterKey) {
+        Asset existing = getOne(new LambdaQueryWrapper<Asset>()
+                .eq(Asset::getUserId, userId)
+                .eq(Asset::getStorageKey, storageKey)
+                .last("LIMIT 1"), false);
+        if (existing != null) {
+            return toResp(existing);
+        }
         Asset asset = new Asset();
         asset.setUserId(userId);
         asset.setName(name);
