@@ -107,8 +107,23 @@ public class OpenAiCompatChatClient {
         if (!StringUtils.hasText(content)) {
             content = choice.path("text").asText("");
         }
+        JsonNode usage = root.path("usage");
+        long promptTokens = tokenCount(usage, "prompt_tokens", "input_tokens");
+        long completionTokens = tokenCount(usage, "completion_tokens", "output_tokens");
+        long cachedTokens = tokenCount(usage.path("prompt_tokens_details"), "cached_tokens");
+        if (cachedTokens == 0L) {
+            cachedTokens = tokenCount(usage.path("input_tokens_details"), "cached_tokens");
+        }
         return TextChatResult.of(content, root.path("model").asText(model),
-                choice.path("finish_reason").asText(null));
+                choice.path("finish_reason").asText(null), promptTokens, completionTokens, cachedTokens);
+    }
+
+    private static long tokenCount(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.canConvertToLong()) return Math.max(0L, value.asLong());
+        }
+        return 0L;
     }
 
     private static String option(Map<String, Object> config, String key, String fallback) {

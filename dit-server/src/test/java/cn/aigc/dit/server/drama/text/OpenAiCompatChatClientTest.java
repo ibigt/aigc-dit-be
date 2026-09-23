@@ -70,6 +70,34 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void chatReadsOpenAiCompatibleTokenUsage() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":300,\"prompt_tokens_details\":{\"cached_tokens\":200}}}"));
+
+        TextChatResult result = client.chat("https://example.com/v1", "sk", "portable-model",
+                new TextChatRequest("sys", "user", false));
+
+        assertEquals(1200L, result.getPromptTokens());
+        assertEquals(300L, result.getCompletionTokens());
+        assertEquals(200L, result.getCachedPromptTokens());
+    }
+
+    @Test
+    void chatReadsResponsesStyleTokenUsageAliases() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":\"ok\"}}],\"usage\":{\"input_tokens\":90,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":30}}}"));
+
+        TextChatResult result = client.chat("https://example.com/v1", "sk", "portable-model",
+                new TextChatRequest("sys", "user", false));
+
+        assertEquals(90L, result.getPromptTokens());
+        assertEquals(10L, result.getCompletionTokens());
+        assertEquals(30L, result.getCachedPromptTokens());
+    }
+
+    @Test
     void jsonChatSendsRequestedTokenLimitForNonDeepSeekModels() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         ObjectMapper mapper = new ObjectMapper();

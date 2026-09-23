@@ -18,4 +18,15 @@ public interface TextChatGateway {
     Optional<ResolvedTextModel> resolve(long seriesId);
 
     TextChatResult chat(long seriesId, TextChatRequest req);
+
+    /**
+     * 开启一次业务任务级的用量汇总。默认实现供测试替身和旧扩展兼容。
+     */
+    default TextBillingSession openBilling(long seriesId, String operation) {
+        return TextBillingSession.noop();
+    }
+
+    /** 业务操作成功后一次性结算；重复结算由 billingRef 幂等保护。 */
+    default void settleBilling(TextBillingSession session) {
+    }
 }
