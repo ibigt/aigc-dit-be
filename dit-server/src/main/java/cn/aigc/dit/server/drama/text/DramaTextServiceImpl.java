@@ -273,7 +273,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         try {
             ShotDraftList drafts = llmDraftShots(seriesId, script, safe(assetNames), duration, episodeBudgetSec);
             int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
-            ShotDraftList result = ShotDraftMinimizer.minimize(drafts, duration);
+            ShotDraftList result = ShotDraftMinimizer.minimize(drafts, DramaContract.MAX_DURATION_SEC);
             log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
                     seriesId, before, result.getShots() == null ? 0 : result.getShots().size(), elapsedMs(started));
             return result;

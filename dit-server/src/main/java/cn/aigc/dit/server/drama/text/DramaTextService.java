@@ -45,7 +45,7 @@ public interface DramaTextService {
 
     /**
      * 锁定剧本 + 资产名 → 章节与分镜草稿。不含 compiled_prompt。
-     * 此 default 仅保留给旧扩展兼容；正式实现按适中粒度拆镜，仅合并极短且连续的同场草稿。
+     * 此 default 仅保留给旧扩展兼容；正式实现优先少拆（约 10–15 秒），同场连续对谈可同镜。
      */
     default ShotDraftList draftShots(long seriesId, ScriptDoc script, java.util.List<String> assetNames) {
         return draftShots(seriesId, script, assetNames, cn.aigc.dit.server.drama.DramaContract.DEFAULT_DURATION_SEC);

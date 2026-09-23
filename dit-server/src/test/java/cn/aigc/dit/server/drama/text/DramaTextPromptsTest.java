@@ -2,57 +2,62 @@ package cn.aigc.dit.server.drama.text;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DramaTextPromptsTest {
 
     @Test
-    void shotSchemaAsksForVisibleActionNotPlotBeats() {
+    void shotSchemaPrefersLongerContinuousShotsAndKeepsDialogueTurnsTogether() {
         String system = DramaTextPrompts.shotSystem();
 
-        assertTrue(system.contains("中景。风扇转动，夏安往白板贴照片。"));
-        assertTrue(system.contains("近景。洛白用书盖脸后拿开。"));
+        assertTrue(system.contains("侦探社对谈"));
+        assertTrue(system.contains("duration_sec\": 12"));
+        assertTrue(system.contains("优先估在 10–15 秒"));
+        assertTrue(system.contains("同场连续对谈"));
+        assertTrue(system.contains("不要一句一镜"));
+        assertTrue(system.contains("有戏份的场常见 1～3 镜"));
+        assertTrue(system.contains("不要仅因景别、运镜、正反打偏好而拆镜"));
+        assertTrue(system.contains("下列硬边界才拆开"));
         assertTrue(system.contains("按动作/对白里出场先后排序"));
-        assertTrue(system.contains("动作只写一个人时"));
-        assertTrue(system.contains("只列本镜被使用或被拿在手上的道具"));
         assertTrue(system.contains("画面出入点"));
-        assertTrue(system.contains("1～2 个紧密相连的可见动作"));
         assertTrue(system.contains("不要写 compiled_prompt"));
-        assertTrue(system.contains("按本镜对白长短、动作节拍"));
-        assertTrue(system.contains("同一场允许只有 1 镜"));
-        assertTrue(system.contains("有戏份的场通常 2～5 镜"));
-        assertTrue(system.contains("不要把多个独立节拍"));
-        assertTrue(system.contains("不要仅因景别或运镜变化拆镜"));
         assertTrue(system.contains("dialogue（台词）优先完整保留"));
         assertTrue(system.contains("禁止摘要、改写、删半句"));
         assertTrue(system.contains("dialogue 不受上述字数上限约束"));
-        assertFalse(system.contains("只放被摄像机正面拍到的关键句"));
-        assertFalse(system.contains("15 秒内优先合并"));
+        assertFalse(system.contains("有戏份的场通常 2～5 镜"));
+        assertFalse(system.contains("对白轮次明显切换"));
         assertFalse(system.contains("全部镜头必须等于用户指定的秒数"));
         assertFalse(system.contains("交代空间与二人关系"));
-        assertFalse(system.contains("不要写镜头语言"));
-        assertFalse(system.contains("门被推开"));
     }
 
     @Test
-    void shotUserAsksForPerShotDurationWithoutForcingEpisodeSum() {
+    void shotUserAsksForTenToFifteenPreferenceWithoutForcingEpisodeSum() {
         String user = DramaTextPrompts.shotUser("{}", "洛白", 8, 30);
-        assertTrue(user.contains("自行估计"));
+        assertTrue(user.contains("优先估在 10 到 15 秒"));
+        assertTrue(user.contains("无法判断时再用 10 秒"));
         assertTrue(user.contains("不要所有镜头填同一个秒数"));
         assertTrue(user.contains("严格按剧本场次先后"));
         assertTrue(user.contains("本集故事体量大约 30 秒"));
-        assertTrue(user.contains("镜头粒度取中间"));
-        assertTrue(user.contains("不要压成少数超长镜"));
-        assertTrue(user.contains("有戏份的单场通常 2～5 镜"));
+        assertTrue(user.contains("镜头粒度优先少拆"));
+        assertTrue(user.contains("同场连续对谈"));
+        assertTrue(user.contains("有戏份的单场常见 1～3 镜"));
         assertTrue(user.contains("台词必须尽量原样保留"));
         assertTrue(user.contains("不得为压缩体积而丢掉或改写台词"));
-        assertFalse(user.contains("禁止复述剧本全文"));
-        assertFalse(user.contains("大约 6 个只是参考"));
+        assertFalse(user.contains("不要压成少数超长镜"));
+        assertFalse(user.contains("对白轮次切换"));
+        assertFalse(user.contains("有戏份的单场通常 2～5 镜"));
         assertFalse(user.contains("各镜秒数之和尽量接近"));
         assertFalse(user.contains("必须是 8，不得改成其它秒数"));
-        assertFalse(user.contains("镜头数量以最少且完整为目标"));
-        assertFalse(user.contains("15 秒内优先合并成一镜"));
+    }
+
+    @Test
+    void preferredFallbackBiasesTowardTenToFifteen() {
+        assertEquals(10, DramaTextPrompts.preferredFallback(5));
+        assertEquals(10, DramaTextPrompts.preferredFallback(8));
+        assertEquals(12, DramaTextPrompts.preferredFallback(12));
+        assertEquals(15, DramaTextPrompts.preferredFallback(20));
     }
 
     @Test
