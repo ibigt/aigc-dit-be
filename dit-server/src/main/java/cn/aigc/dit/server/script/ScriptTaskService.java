@@ -5,6 +5,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.drama.DramaService;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.text.TextChatRequest;
 import cn.aigc.dit.server.drama.text.TextChatResult;
@@ -20,6 +21,7 @@ import cn.aigc.dit.server.script.model.req.ScriptChatReq;
 import cn.aigc.dit.server.script.model.req.ScriptDocumentSaveReq;
 import cn.aigc.dit.server.script.model.req.ScriptModelUpdateReq;
 import cn.aigc.dit.server.script.model.req.ScriptTaskCreateReq;
+import cn.aigc.dit.server.script.model.req.ScriptTitleUpdateReq;
 import cn.aigc.dit.server.script.model.resp.ScriptMessageResp;
 import cn.aigc.dit.server.script.model.resp.ScriptTaskResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -38,7 +40,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -52,6 +57,8 @@ public class ScriptTaskService {
     private static final int SUMMARY_MAX_TOKENS = 4_000;
     private static final int ASSISTANT_MAX_TOKENS = 6_000;
     private static final int GENERATION_SOURCE_MAX_CHARS = 16_000;
+    private static final Pattern EPISODE_MARKER = Pattern.compile(
+            "(?m)^\\s*(?:第\\s*(\\d+)\\s*集|第\\s*([一二三四五六七八九十百]+)\\s*集|EP\\s*(\\d+)).*$");
 
     private final ScriptTaskMapper taskMapper;
     private final ScriptMessageMapper messageMapper;
@@ -98,18 +105,142 @@ public class ScriptTaskService {
     public ScriptTaskResp saveDocument(Long id, ScriptDocumentSaveReq req) {
         ScriptTask task = requireTask(id);
         String next = req.getDocument() == null ? "" : req.getDocument();
+        if (Objects.equals(task.getDocument(), next)) {
+            return toResp(task, true);
+        }
+        saveDocumentVersion(task, next);
+        task.setDocument(next);
+        task.setStatus("DRAFT");
+        taskMapper.updateById(task);
+        return toResp(task, true);
+    }
+
+    private void saveDocumentVersion(ScriptTask task, String document) {
         int nextVersion = versionMapper.selectCount(new LambdaQueryWrapper<ScriptTaskVersion>()
                 .eq(ScriptTaskVersion::getTaskId, task.getId())).intValue() + 1;
         ScriptTaskVersion version = new ScriptTaskVersion();
         version.setTaskId(task.getId());
         version.setUserId(task.getUserId());
         version.setVersionNo(nextVersion);
-        version.setDocument(next);
+        version.setDocument(document == null ? "" : document);
         version.setCreatedAt(OffsetDateTime.now());
         versionMapper.insert(version);
-        task.setDocument(next);
-        task.setStatus("DRAFT");
+    }
+
+    @Transactional
+    public ScriptTaskResp complete(Long id) {
+        ScriptTask task = requireTask(id);
+        if (!StringUtils.hasText(task.getDocument())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写剧本正文");
+        }
+        if (!"SUCCEEDED".equals(task.getStatus())) {
+            task.setStatus("SUCCEEDED");
+            taskMapper.updateById(task);
+        }
+        return toResp(task, true);
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        ScriptTask task = requireTask(id);
+        taskMapper.deleteById(task.getId());
+    }
+
+    /** 为模型只返回正文的历史任务补全人物设定和分集大纲。 */
+    @Transactional
+    public ScriptTaskResp repairStructure(Long id) {
+        ScriptTask task = requireTask(id);
+        if (!StringUtils.hasText(task.getDocument())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先生成剧本正文");
+        }
+        Map<String, Object> current = task.getResultJson() == null
+                ? new LinkedHashMap<>() : new LinkedHashMap<>(task.getResultJson());
+        Map<String, Object> repaired = normalizeResult(task,
+                mergeStructure(current, repairStructure(task, task.getDocument())));
+        if (!hasStructure(repaired)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "模型未返回人物设定和分集大纲，请稍后重试");
+        }
+        applyGeneratedTitle(task, repaired);
+        Object repairedScript = repaired.get("script_markdown");
+        String repairedDocument = repairedScript != null && StringUtils.hasText(String.valueOf(repairedScript))
+                ? String.valueOf(repairedScript) : task.getDocument();
+        repairedDocument = limitEpisodes(repairedDocument,
+                task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes());
+        repaired.put("script_markdown", repairedDocument);
+        task.setResultJson(repaired);
+        task.setDocument(repairedDocument);
         taskMapper.updateById(task);
+        return toResp(task, true);
+    }
+
+    /** 续写下一集，并同步正文、分集大纲、人物设定和故事摘要。 */
+    @Transactional
+    public ScriptTaskResp continueEpisode(Long id) {
+        ScriptTask task = requireTask(id);
+        if (!StringUtils.hasText(task.getDocument())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写第1集正文");
+        }
+        int targetEpisodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
+        int currentEpisode = lastDocumentEpisode(task.getDocument());
+        if (currentEpisode >= targetEpisodes) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "已完成目标集数，无需继续续写");
+        }
+        int nextEpisode = currentEpisode + 1;
+        Map<String, Object> current = normalizeResult(task, task.getResultJson() == null
+                ? new LinkedHashMap<>() : task.getResultJson());
+        String system = "你是竖屏短剧续写编剧。只续写指定的一集，并只返回严格 JSON，不要输出 Markdown 代码围栏。";
+        String user = "剧本名称：" + task.getTitle()
+                + "\n目标集数：" + targetEpisodes
+                + "\n本次只续写第" + nextEpisode + "集，不得输出其他集。"
+                + "\n请保持既有人物动机、世界观和叙事节奏；如人物设定或故事设定发生变化，请在 JSON 中返回更新后的完整 characters、logline。"
+                + "\nJSON Schema：{\"episode\":" + nextEpisode
+                + ",\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],"
+                + "\"outline_item\":{\"episode\":" + nextEpisode + ",\"title\":\"\",\"hook\":\"\",\"summary\":\"\"},"
+                + "\"script_markdown\":\"第" + nextEpisode + "集标准分场剧本正文\"}"
+                + "\n当前故事摘要：" + String.valueOf(current.getOrDefault("logline", "暂无"))
+                + "\n当前人物设定：" + String.valueOf(current.getOrDefault("characters", List.of()))
+                + "\n已有分集大纲：" + String.valueOf(current.getOrDefault("outline", List.of()))
+                + "\n已完成正文：\n" + truncate(task.getDocument(), GENERATION_SOURCE_MAX_CHARS);
+        TextChatResult response = llmGateway.chat(task.getModelId(),
+                new TextChatRequest(system, user, true, GENERATION_MAX_TOKENS));
+        Map<String, Object> generated = normalizeResult(task, parseResult(response.getContent()));
+        Object generatedScript = generated.get("script_markdown");
+        if (generatedScript == null || !StringUtils.hasText(String.valueOf(generatedScript))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "模型未返回续写正文，请稍后重试");
+        }
+        String episodeDocument = extractEpisodeBlock(String.valueOf(generatedScript), nextEpisode);
+        if (!StringUtils.hasText(episodeDocument)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "模型未返回有效的第" + nextEpisode + "集正文，请稍后重试");
+        }
+        if (!startsWithEpisodeMarker(episodeDocument, nextEpisode)) {
+            episodeDocument = "第" + nextEpisode + "集\n\n" + episodeDocument.trim();
+        }
+
+        Map<String, Object> merged = new LinkedHashMap<>(current);
+        replaceNonEmptyStructure(merged, generated, "title", "logline", "characters", "evaluation");
+        List<Map<String, Object>> outline = new ArrayList<>(normalizeList(merged.get("outline"), Integer.MAX_VALUE));
+        Map<String, Object> nextOutline = continuationOutlineItem(generated, nextEpisode);
+        if (nextOutline != null) {
+            boolean replaced = false;
+            for (int i = 0; i < outline.size(); i++) {
+                if (episodeValue(outline.get(i).get("episode")) == nextEpisode) {
+                    outline.set(i, nextOutline);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) outline.add(nextOutline);
+        }
+        merged.put("outline", normalizeList(outline, targetEpisodes));
+        String document = task.getDocument().trim() + "\n\n" + episodeDocument.trim();
+        merged.put("script_markdown", limitEpisodes(document, targetEpisodes));
+        task.setResultJson(normalizeResult(task, merged));
+        applyGeneratedTitle(task, task.getResultJson());
+        task.setDocument(String.valueOf(task.getResultJson().get("script_markdown")));
+        task.setStatus("SUCCEEDED");
+        saveDocumentVersion(task, task.getDocument());
+        taskMapper.updateById(task);
+        saveMessage(task, "assistant", episodeDocument, "已续写第" + nextEpisode + "集，并同步更新正文、分集大纲和人物设定。");
         return toResp(task, true);
     }
 
@@ -117,6 +248,14 @@ public class ScriptTaskService {
     public ScriptTaskResp updateModel(Long id, ScriptModelUpdateReq req) {
         ScriptTask task = requireTask(id);
         task.setModelId(resolveModelId(req.getModelId()));
+        taskMapper.updateById(task);
+        return toResp(task, true);
+    }
+
+    @Transactional
+    public ScriptTaskResp updateTitle(Long id, ScriptTitleUpdateReq req) {
+        ScriptTask task = requireTask(id);
+        task.setTitle(req.getTitle().trim());
         taskMapper.updateById(task);
         return toResp(task, true);
     }
@@ -138,10 +277,21 @@ public class ScriptTaskService {
             TextChatResult response = llmGateway.chat(task.getModelId(),
                     new TextChatRequest(systemPrompt(task), generationPrompt(task, source), true,
                             GENERATION_MAX_TOKENS));
-            Map<String, Object> result = parseResult(response.getContent());
+            Map<String, Object> result = normalizeResult(task, parseResult(response.getContent()));
+            String document = documentFromResult(task, result);
+            if (!hasStructure(result)) {
+                try {
+                    result = mergeStructure(result, repairStructure(task, document));
+                    document = documentFromResult(task, result);
+                } catch (RuntimeException repairError) {
+                    log.warn("script structure repair skipped, taskId={}", task.getId(), repairError);
+                }
+            }
+            applyGeneratedTitle(task, result);
             task.setResultJson(result);
-            task.setDocument(documentFromResult(task, result));
+            task.setDocument(document);
             task.setStatus("SUCCEEDED");
+            saveDocumentVersion(task, task.getDocument());
             taskMapper.updateById(task);
             saveMessage(task, "assistant", task.getDocument(),
                     "已按" + task.getMode() + "工作流完成结构化生成，并将结果同步到剧本正文。");
@@ -200,6 +350,12 @@ public class ScriptTaskService {
         if (task.getDramaSeriesId() != null) {
             return dramaService.getSeries(task.getDramaSeriesId());
         }
+        if (!StringUtils.hasText(task.getDocument())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写剧本正文后再创建短剧");
+        }
+        if (!"SUCCEEDED".equals(task.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "剧本已保存为草稿，请先点击“完成剧本”后再创建短剧");
+        }
         DramaSeriesCreateReq req = new DramaSeriesCreateReq();
         req.setName(StringUtils.hasText(task.getTitle()) ? task.getTitle() : "未命名短剧");
         req.setStyleKey("live-realism");
@@ -209,9 +365,16 @@ public class ScriptTaskService {
         req.setPlannedEpisodeCount(task.getTargetEpisodes());
         req.setTextModelId(task.getModelId());
         DramaSeriesResp series = dramaService.createSeries(req);
+        if (series.getEpisodes() == null || series.getEpisodes().isEmpty()
+                || series.getEpisodes().get(0).getId() == null) {
+            throw new BizException(ErrorCode.INTERNAL, "短剧首集创建失败，无法导入剧本");
+        }
+        DramaScriptSaveReq scriptReq = new DramaScriptSaveReq();
+        scriptReq.setSourceText(task.getDocument());
+        dramaService.saveScript(series.getEpisodes().get(0).getId(), scriptReq);
         task.setDramaSeriesId(series.getId());
         taskMapper.updateById(task);
-        return series;
+        return dramaService.getSeries(series.getId());
     }
 
     private TextChatResult callAssistant(ScriptTask task, String latest) {
@@ -258,11 +421,219 @@ public class ScriptTaskService {
     }
 
     private String generationPrompt(ScriptTask task, String source) {
-        String schema = "{\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],\"outline\":[{\"episode\":1,\"title\":\"\",\"hook\":\"\",\"summary\":\"\"}],\"opening_scene\":\"标准分场格式：场次/时间/地点/动作/对白/旁白\",\"script_markdown\":\"可直接编辑的剧本正文\",\"evaluation\":{\"character_arc\":0,\"hook\":0,\"emotion\":0,\"commercial\":0,\"strategy\":\"\"}}";
+        int episodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
+        String schema = "{\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],\"outline\":[{\"episode\":1,\"title\":\"\",\"hook\":\"\",\"summary\":\"\"}],\"opening_scene\":\"标准分场格式：场次/时间/地点/动作/对白/旁白\",\"script_markdown\":\"只写第1集可直接拍摄的剧本正文\",\"evaluation\":{\"character_arc\":0,\"hook\":0,\"emotion\":0,\"commercial\":0,\"strategy\":\"\"}}";
         return "题材：" + (task.getGenre() == null ? "未指定" : task.getGenre())
-                + "；目标集数：" + task.getTargetEpisodes()
-                + "。请保留可拍摄细节，避免空泛建议。\n输出 JSON Schema：" + schema
+                + "；目标集数：" + episodes
+                + "。请严格遵守：outline 必须恰好输出 " + episodes + " 项；script_markdown 只输出第1集正文，绝对不要继续写第2集或其他集；characters 至少输出主要人物。请保留可拍摄细节，避免空泛建议。\n输出 JSON Schema：" + schema
                 + "\n用户输入：\n" + truncate(source, GENERATION_SOURCE_MAX_CHARS);
+    }
+
+    private Map<String, Object> repairStructure(ScriptTask task, String document) {
+        int episodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
+        String system = "你是短剧项目结构整理器。请基于给定剧本正文提取主要人物和分集大纲，只返回严格 JSON，不要输出 Markdown。";
+        String user = "目标集数：" + episodes
+                + "。outline 必须恰好输出目标集数项；characters 至少输出主要人物。"
+                + "\nJSON Schema：{\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],\"outline\":[{\"episode\":1,\"title\":\"\",\"hook\":\"\",\"summary\":\"\"}]}"
+                + "\n剧本正文：\n" + truncate(document, GENERATION_SOURCE_MAX_CHARS);
+        TextChatResult result = llmGateway.chat(task.getModelId(),
+                new TextChatRequest(system, user, true, SUMMARY_MAX_TOKENS));
+        return normalizeResult(task, parseResult(result.getContent()));
+    }
+
+    private Map<String, Object> mergeStructure(Map<String, Object> base, Map<String, Object> extra) {
+        Map<String, Object> merged = new LinkedHashMap<>();
+        if (base != null) merged.putAll(base);
+        if (extra != null) {
+            for (String key : List.of("title", "logline", "characters", "outline", "evaluation")) {
+                Object value = extra.get(key);
+                if (value != null && (!(value instanceof List<?> list) || !list.isEmpty())) {
+                    merged.put(key, value);
+                }
+            }
+        }
+        return merged;
+    }
+
+    private Map<String, Object> normalizeResult(ScriptTask task, Map<String, Object> source) {
+        Map<String, Object> result = source == null ? new LinkedHashMap<>() : new LinkedHashMap<>(source);
+        copyAlias(result, "characters", "character_settings", "characterSettings", "characterProfiles", "character");
+        copyAlias(result, "outline", "episode_outline", "episodeOutline", "story_outline", "episodes");
+        copyAlias(result, "script_markdown", "scriptMarkdown", "screenplay", "script");
+        result.put("characters", normalizeList(result.get("characters"), Integer.MAX_VALUE));
+        int targetEpisodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
+        result.put("outline", normalizeList(result.get("outline"), targetEpisodes));
+        Object script = result.get("script_markdown");
+        if (script != null && StringUtils.hasText(String.valueOf(script))) {
+            result.put("script_markdown", limitEpisodes(String.valueOf(script), targetEpisodes));
+        }
+        return result;
+    }
+
+    private static void copyAlias(Map<String, Object> result, String canonical, String... aliases) {
+        Object current = result.get(canonical);
+        if (current instanceof List<?> list && !list.isEmpty()) return;
+        if (current != null && StringUtils.hasText(String.valueOf(current))) return;
+        for (String alias : aliases) {
+            Object value = result.get(alias);
+            if (value != null) {
+                result.put(canonical, value);
+                return;
+            }
+        }
+    }
+
+    private static void applyGeneratedTitle(ScriptTask task, Map<String, Object> result) {
+        String title = generatedTitle(result == null ? null : result.get("title"));
+        if (title != null) task.setTitle(title);
+    }
+
+    private static String generatedTitle(Object value) {
+        if (value == null) return null;
+        String title = String.valueOf(value).trim();
+        if (!StringUtils.hasText(title)
+                || List.of("剧本生成结果", "未命名剧本", "新剧本", "灵感起草任务", "小说改编任务", "剧本评估任务")
+                .contains(title)) {
+            return null;
+        }
+        return title.length() > 256 ? title.substring(0, 256).trim() : title;
+    }
+
+    private static List<Map<String, Object>> normalizeList(Object value, int max) {
+        if (!(value instanceof List<?> list)) return new ArrayList<>();
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Map<String, Object> next = new LinkedHashMap<>();
+                map.forEach((key, val) -> next.put(String.valueOf(key), val));
+                normalized.add(next);
+                if (normalized.size() >= max) break;
+            }
+        }
+        return normalized;
+    }
+
+    private static void replaceNonEmptyStructure(Map<String, Object> target, Map<String, Object> source,
+                                                  String... keys) {
+        if (source == null) return;
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof List<?> list && !list.isEmpty()) {
+                target.put(key, value);
+            } else if (value instanceof Map<?, ?> map && !map.isEmpty()) {
+                target.put(key, value);
+            } else if (value != null && StringUtils.hasText(String.valueOf(value))) {
+                target.put(key, value);
+            }
+        }
+    }
+
+    private static Map<String, Object> continuationOutlineItem(Map<String, Object> generated, int episode) {
+        if (generated == null) return null;
+        Object direct = generated.get("outline_item");
+        if (direct instanceof Map<?, ?> map) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            map.forEach((key, value) -> item.put(String.valueOf(key), value));
+            item.put("episode", episode);
+            return item;
+        }
+        Object outline = generated.get("outline");
+        if (outline instanceof List<?> list) {
+            for (Object value : list) {
+                if (value instanceof Map<?, ?> map && episodeValue(map.get("episode")) == episode) {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    map.forEach((key, itemValue) -> item.put(String.valueOf(key), itemValue));
+                    item.put("episode", episode);
+                    return item;
+                }
+            }
+            if (!list.isEmpty() && list.get(0) instanceof Map<?, ?> map) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                map.forEach((key, value) -> item.put(String.valueOf(key), value));
+                item.put("episode", episode);
+                return item;
+            }
+        }
+        return null;
+    }
+
+    private static int episodeValue(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value == null) return -1;
+        String text = String.valueOf(value).trim();
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static int lastDocumentEpisode(String document) {
+        int last = 0;
+        Matcher matcher = EPISODE_MARKER.matcher(document == null ? "" : document);
+        while (matcher.find()) {
+            int episode = episodeNumber(matcher.group(1), matcher.group(2), matcher.group(3));
+            if (episode != Integer.MAX_VALUE) last = Math.max(last, episode);
+        }
+        return last < 1 ? 1 : last;
+    }
+
+    private static String extractEpisodeBlock(String document, int episode) {
+        if (!StringUtils.hasText(document)) return "";
+        Matcher matcher = EPISODE_MARKER.matcher(document);
+        int start = -1;
+        int end = document.length();
+        while (matcher.find()) {
+            int current = episodeNumber(matcher.group(1), matcher.group(2), matcher.group(3));
+            if (current == episode && start < 0) {
+                start = matcher.start();
+            } else if (start >= 0 && current > episode) {
+                end = matcher.start();
+                break;
+            }
+        }
+        return start < 0 ? document.trim() : document.substring(start, end).trim();
+    }
+
+    private static boolean startsWithEpisodeMarker(String document, int episode) {
+        Matcher matcher = EPISODE_MARKER.matcher(document == null ? "" : document);
+        return matcher.find() && episodeNumber(matcher.group(1), matcher.group(2), matcher.group(3)) == episode;
+    }
+
+    private static boolean hasStructure(Map<String, Object> result) {
+        return result != null
+                && result.get("characters") instanceof List<?> characters && !characters.isEmpty()
+                && result.get("outline") instanceof List<?> outline && !outline.isEmpty();
+    }
+
+    private static String limitEpisodes(String document, int targetEpisodes) {
+        if (!StringUtils.hasText(document) || targetEpisodes < 1) return document;
+        Matcher matcher = EPISODE_MARKER.matcher(document);
+        while (matcher.find()) {
+            int episode = episodeNumber(matcher.group(1), matcher.group(2), matcher.group(3));
+            if (episode > targetEpisodes) {
+                return document.substring(0, matcher.start()).trim()
+                        + "\n\n【已按目标集数截取正文】";
+            }
+        }
+        return document;
+    }
+
+    private static int episodeNumber(String digits, String chinese, String epDigits) {
+        try {
+            if (digits != null) return Integer.parseInt(digits);
+            if (epDigits != null) return Integer.parseInt(epDigits);
+        } catch (NumberFormatException ignored) {
+            return Integer.MAX_VALUE;
+        }
+        if (chinese == null || chinese.isBlank()) return Integer.MAX_VALUE;
+        if (chinese.length() == 1 && "一二三四五六七八九".contains(chinese)) {
+            return "一二三四五六七八九".indexOf(chinese) + 1;
+        }
+        if ("十".equals(chinese)) return 10;
+        if (chinese.startsWith("十")) return 10 + "一二三四五六七八九".indexOf(chinese.substring(1)) + 1;
+        if (chinese.endsWith("十")) return ("一二三四五六七八九".indexOf(chinese.substring(0, 1)) + 1) * 10;
+        return Integer.MAX_VALUE;
     }
 
     private Map<String, Object> parseResult(String content) {
