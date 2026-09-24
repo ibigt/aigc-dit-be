@@ -31,6 +31,9 @@ public class OpenAiCompatChatClient {
     static final Duration PING_TIMEOUT = Duration.ofSeconds(10);
     /** 结构化剧本请求包含完整剧本和严格 JSON 输出，复杂剧本允许模型最多运行 10 分钟。 */
     static final Duration CHAT_TIMEOUT = Duration.ofSeconds(600);
+    private static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
+    private static final int DEFAULT_OUTPUT_TOKENS = 8_192;
+    private static final int CONTEXT_SAFETY_TOKENS = 1_024;
     private static final String USER_AGENT = "Mozilla/5.0 (compatible; aigc-dit/1.0; +https://www.agnes-ai.cn)";
 
     private final ObjectMapper objectMapper;
@@ -91,7 +94,19 @@ public class OpenAiCompatChatClient {
             if (!"max_completion_tokens".equals(tokenParameter)) {
                 tokenParameter = "max_tokens";
             }
-            body.put(tokenParameter, req.getMaxTokens() == null ? 32768 : req.getMaxTokens());
+            int requestedTokens = req.getMaxTokens() == null
+                    ? DEFAULT_OUTPUT_TOKENS : Math.max(1, req.getMaxTokens());
+            int contextWindowTokens = integerOption(adapterConfig, "contextWindowTokens",
+                    DEFAULT_CONTEXT_WINDOW_TOKENS);
+            int estimatedInputTokens = estimateInputTokens(req.getSystem(), userContent);
+            int availableOutputTokens = Math.max(256,
+                    contextWindowTokens - estimatedInputTokens - CONTEXT_SAFETY_TOKENS);
+            int outputTokens = Math.min(requestedTokens, availableOutputTokens);
+            if (outputTokens < requestedTokens) {
+                log.info("[text-chat] cap output tokens requested={} actual={} contextWindow={} estimatedInput={}",
+                        requestedTokens, outputTokens, contextWindowTokens, estimatedInputTokens);
+            }
+            body.put(tokenParameter, outputTokens);
             // 全部模型一律关闭 vLLM chat_template 思考：32k JSON 输出再叠加 reasoning
             // 会把耗时顶到分钟级，触发客户端超时且无 reasoning 价值。OpenAI 兼容的
             // 非 vLLM 后端收到未知字段会忽略，不会报错。
@@ -144,6 +159,30 @@ public class OpenAiCompatChatClient {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private static int integerOption(Map<String, Object> config, String key, int fallback) {
+        if (!hasOption(config, key)) {
+            return fallback;
+        }
+        Object value = config.get(key);
+        try {
+            int parsed = value instanceof Number number
+                    ? number.intValue() : Integer.parseInt(String.valueOf(value).trim());
+            return parsed > CONTEXT_SAFETY_TOKENS ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    /**
+     * 保守估算输入预算：中文通常接近一字一 token，英文会有更多余量。
+     * 精确分词由各供应商决定，此处只负责避免 max_tokens 占满整个上下文窗口。
+     */
+    private static int estimateInputTokens(String system, String user) {
+        int systemChars = system == null ? 0 : system.codePointCount(0, system.length());
+        int userChars = user == null ? 0 : user.codePointCount(0, user.length());
+        return Math.max(1, systemChars + userChars);
     }
 
     private JsonNode post(String endpoint, String apiKey, ObjectNode body, Duration timeout, boolean ping) {

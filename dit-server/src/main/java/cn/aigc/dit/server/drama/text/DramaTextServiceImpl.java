@@ -5,6 +5,7 @@ import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDurations;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,7 +49,7 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final ObjectMapper LENIENT_MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .configure(JsonParser.Feature.ALLOW_COMMENTS, true)
-            .configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
+            .configure(JsonReadFeature.ALLOW_TRAILING_COMMA.mappedFeature(), true)
             .configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true)
             .configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
 
