@@ -331,6 +331,24 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void startDraftProducesShotsAndClearsLock() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(detectiveDoc()));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        stubLlmDrafts();
+
+        DramaStoryboardResp board = service.startDraft(31L, 15);
+
+        assertFalse(storedShots.isEmpty());
+        assertNotNull(board);
+        org.junit.jupiter.api.Assertions.assertNull(episode.getStoryboardDraftingAt());
+    }
+
+    @Test
     void confirmRejectsUnlockedNamedAssets() {
         DramaShot shot = pendingShot();
         storedShots.add(shot);

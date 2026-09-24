@@ -342,7 +342,7 @@ public class DramaController {
     public CommonResult<DramaStoryboardResp> draftStoryboard(
             @PathVariable Long id,
             @RequestParam(required = false) Integer durationSec) {
-        return CommonResult.success(dramaStoryboardService.draft(id, true, durationSec));
+        return CommonResult.success(dramaStoryboardService.startDraft(id, durationSec));
     }
 
     @Operation(summary = "重新编译本集全部分镜（预览，不调视频模型）")
