@@ -17,6 +17,8 @@
 
 ## Docker Compose
 
+字幕模型与跨服务器部署见 [短剧字幕功能部署](docs/subtitle-deployment.md)。
+
 两仓作为兄弟目录（`aigc-dit-be` 与 `aigc-dit-fe`），Linux 上先建数据目录，再一键拉起 Postgres、Redis、MinIO、backend、frontend：
 
 ```bash
