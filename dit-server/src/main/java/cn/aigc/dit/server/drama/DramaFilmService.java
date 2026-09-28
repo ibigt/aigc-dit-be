@@ -144,11 +144,15 @@ public class DramaFilmService {
     }
 
     /**
-     * shotIds 为空：本集全部已出片。有值：须属本集且已出片，结果按镜序，忽略请求顺序。
+     * shotIds 为 null：兼容旧客户端，拼本集全部已出片。
+     * shotIds 非 null：必须按勾选入片；空列表直接拒绝，避免「空列表回退全集」误拼。
      */
     static List<DramaShot> resolveAssembleClips(List<DramaShot> shots, List<Long> shotIds) {
-        if (shotIds == null || shotIds.isEmpty()) {
+        if (shotIds == null) {
             return DramaFilms.clips(shots);
+        }
+        if (shotIds.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请至少选择一个已出片镜头再拼接");
         }
         Map<Long, DramaShot> byId = new HashMap<>();
         for (DramaShot shot : shots) {

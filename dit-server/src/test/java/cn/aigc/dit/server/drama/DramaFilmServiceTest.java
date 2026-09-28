@@ -219,6 +219,15 @@ class DramaFilmServiceTest {
         assertTrue(unready.getMessage().contains("尚未出片"));
     }
 
+    @Test
+    void assembleRejectsExplicitEmptyShotIds() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(shotMapper.selectList(any())).thenReturn(List.of(clip(11L, 1, "users/7/a.mp4")));
+
+        BizException empty = assertThrows(BizException.class, () -> service.assemble(31L, List.of()));
+        assertTrue(empty.getMessage().contains("至少选择"));
+    }
+
     private static DramaEpisode ownedEpisode() {
         DramaEpisode episode = new DramaEpisode();
         episode.setId(31L);
