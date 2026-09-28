@@ -87,12 +87,20 @@ class CreationServiceTest {
     void projectFilterParsesKindAndId() {
         CreationService.ProjectFilter all = CreationService.ProjectFilter.parse(null);
         CreationService.ProjectFilter drama = CreationService.ProjectFilter.parse("drama:18");
+        CreationService.ProjectFilter quick = CreationService.ProjectFilter.parse("quick");
+        CreationService.ProjectFilter dramaKind = CreationService.ProjectFilter.parse("drama");
         CreationService.ProjectFilter none = CreationService.ProjectFilter.parse("none");
         CreationService.ProjectFilter invalid = CreationService.ProjectFilter.parse("workflow");
 
         assertEquals(true, all.all());
         assertEquals("drama", drama.kind());
         assertEquals(18L, drama.id());
+        assertEquals("quick", quick.kind());
+        assertNull(quick.id());
+        assertEquals(false, quick.all());
+        assertEquals("drama", dramaKind.kind());
+        assertNull(dramaKind.id());
+        assertEquals(false, dramaKind.all());
         assertEquals(true, none.none());
         assertEquals(true, invalid.all());
     }

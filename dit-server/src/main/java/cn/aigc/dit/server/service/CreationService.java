@@ -152,7 +152,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 .lt(to != null, Creation::getCreatedAt, to)
                 .and(filter.none(), w -> w.isNull(Creation::getProjectKind).or().isNull(Creation::getProjectId))
                 .eq(!filter.all() && !filter.none(), Creation::getProjectKind, filter.kind())
-                .eq(!filter.all() && !filter.none(), Creation::getProjectId, filter.id())
+                .eq(!filter.all() && !filter.none() && filter.id() != null, Creation::getProjectId, filter.id())
                 .orderByDesc(Creation::getCreatedAt);
         List<Creation> items = list(wrapper);
         return toGallery(items);
@@ -473,6 +473,9 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             }
             if ("none".equalsIgnoreCase(project)) {
                 return new ProjectFilter(null, null, false, true);
+            }
+            if ("quick".equals(project) || "drama".equals(project)) {
+                return new ProjectFilter(project, null, false, false);
             }
             int split = project.indexOf(':');
             if (split <= 0 || split >= project.length() - 1) {
