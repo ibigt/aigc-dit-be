@@ -9,10 +9,18 @@ public final class MediaUrls {
     }
 
     public static String of(String storageKey) {
+        return of(storageKey, null);
+    }
+
+    public static String of(String storageKey, Integer width) {
         if (storageKey == null || storageKey.isBlank()) {
             return null;
         }
-        return "/api/media?key=" + URLEncoder.encode(storageKey, StandardCharsets.UTF_8);
+        String url = "/api/media?key=" + URLEncoder.encode(storageKey, StandardCharsets.UTF_8);
+        if (width != null && width > 0) {
+            url += "&w=" + width;
+        }
+        return url;
     }
 
     public static String contentType(String storageKey, String fallback) {

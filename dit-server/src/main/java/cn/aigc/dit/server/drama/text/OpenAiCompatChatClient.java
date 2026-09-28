@@ -76,7 +76,9 @@ public class OpenAiCompatChatClient {
         }
         int status = response.status();
         String raw = response.body() == null ? "" : response.body();
-        if (status == 405 || status == 403) {
+        // 部分兼容网关（含火山方舟）不实现 GET /models；鉴权失败也可能是 403。
+        // 405/404/501/403 视为“列表不可用”，跳过模型存在性校验，由后续真实对话再验。
+        if (status == 405 || status == 404 || status == 501 || status == 403) {
             return "";
         }
         if (status < 200 || status >= 300) {
@@ -275,18 +277,49 @@ public class OpenAiCompatChatClient {
     }
 
     /**
-     * 去掉末尾斜杠；已含 {@code /v1} 则截到该层，否则补 {@code /v1}。
+     * 去掉末尾斜杠。
+     * <ul>
+     *   <li>已含 OpenAI 风格 {@code /v1}：截到该层</li>
+     *   <li>已是方舟等版本化根路径（{@code /api/v3}、{@code /api/plan/v3} 等）：原样保留，勿再拼 {@code /v1}</li>
+     *   <li>否则补 {@code /v1}</li>
+     * </ul>
      */
     public static String normalizeEndpoint(String endpoint) {
         String raw = stripTrailingSlash(endpoint == null ? "" : endpoint.trim());
         if (raw.isEmpty()) {
             return raw;
         }
-        int marker = raw.toLowerCase().indexOf("/v1");
-        if (marker >= 0) {
-            return raw.substring(0, marker + 3);
+        String lower = raw.toLowerCase();
+        int v1 = indexOfPathVersion(lower, "/v1");
+        if (v1 >= 0) {
+            return raw.substring(0, v1 + 3);
+        }
+        if (isVersionedApiRoot(lower)) {
+            return raw;
         }
         return raw + "/v1";
+    }
+
+    /** 匹配 {@code /v1} 作为路径段，避免误伤 {@code /v10}。 */
+    private static int indexOfPathVersion(String lower, String marker) {
+        int from = 0;
+        while (from < lower.length()) {
+            int at = lower.indexOf(marker, from);
+            if (at < 0) {
+                return -1;
+            }
+            int after = at + marker.length();
+            if (after >= lower.length() || lower.charAt(after) == '/' || lower.charAt(after) == '?') {
+                return at;
+            }
+            from = after;
+        }
+        return -1;
+    }
+
+    /** 方舟 OpenAI 兼容根：{@code .../api/v3}、{@code .../api/plan/v3}、{@code .../api/coding/v3}。 */
+    private static boolean isVersionedApiRoot(String lower) {
+        return lower.matches(".*/api(?:/[a-z][a-z0-9_-]*)?/v\\d+$");
     }
 
     static String formatError(int status, String body) {

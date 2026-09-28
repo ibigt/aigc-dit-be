@@ -27,6 +27,28 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void normalizeEndpointKeepsArkApiV3Root() {
+        assertEquals("https://ark.cn-beijing.volces.com/api/v3",
+                OpenAiCompatChatClient.normalizeEndpoint("https://ark.cn-beijing.volces.com/api/v3/"));
+        assertEquals("https://ark.cn-beijing.volces.com/api/plan/v3",
+                OpenAiCompatChatClient.normalizeEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3"));
+        assertEquals("https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                OpenAiCompatChatClient.chatCompletionsUrl("https://ark.cn-beijing.volces.com/api/v3"));
+        assertEquals("https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+                OpenAiCompatChatClient.chatCompletionsUrl("https://ark.cn-beijing.volces.com/api/v3/"));
+    }
+
+    @Test
+    void pingTreatsModels404AsSoftPass() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> {
+                    assertEquals("https://ark.cn-beijing.volces.com/api/v3/models", target.toString());
+                    return new OpenAiCompatChatClient.Transport.Response(404, "{\"error\":{\"message\":\"not found\"}}");
+                });
+        client.ping("https://ark.cn-beijing.volces.com/api/v3", "sk-test", "deepseek-v4-flash");
+    }
+
+    @Test
     void pingPostsMinimalChatBody() {
         AtomicReference<URI> uri = new AtomicReference<>();
         AtomicReference<Duration> timeout = new AtomicReference<>();
