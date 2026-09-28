@@ -38,6 +38,7 @@ class DramaShotCaptionServiceTest {
     @BeforeEach
     void setUp() {
         properties = new GenerateProperties();
+        properties.getFfmpeg().setCaptionBurnEnabled(true);
         service = new DramaShotCaptionService(shotMapper, videoCaptionBurner, properties);
     }
 

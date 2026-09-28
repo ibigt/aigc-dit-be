@@ -21,6 +21,11 @@ public final class ComfyUiUrls {
         return URI.create(base + "/prompt");
     }
 
+    /** 只读系统状态接口，管理端连通性测试使用。 */
+    public static URI systemStats(String base) {
+        return URI.create(base + "/system_stats");
+    }
+
     public static URI history(String base, String promptId) {
         return URI.create(base + "/history/" + encodePath(promptId));
     }

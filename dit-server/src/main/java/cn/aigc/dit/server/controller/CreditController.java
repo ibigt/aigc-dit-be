@@ -45,7 +45,7 @@ public class CreditController {
     @Operation(summary = "Mock 充值（1 元 = 10 积分）")
     @PostMapping("/recharge")
     public CommonResult<UserProfileResp> recharge(@Valid @RequestBody CreditRechargeReq req) {
-        creditService.recharge(req.getAmountYuan(), req.getPayment());
+        creditService.recharge(req.getAmountYuan(), req.getPayment(), req.getRequestId());
         return CommonResult.success(authService.currentUser());
     }
 }

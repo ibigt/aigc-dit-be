@@ -5,6 +5,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.ffmpeg.FfmpegSupport;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
@@ -39,6 +40,7 @@ public class DramaFilmService {
     private final PosterExtractor posterExtractor;
     private final DramaFilmConcat filmConcat;
     private final DramaCaptionService captionService;
+    private final CreationService creationService;
 
     public DramaFilmResp get(Long episodeId) {
         DramaEpisode episode = requireEpisode(episodeId);
@@ -91,6 +93,11 @@ public class DramaFilmService {
             episode.setFilmShotIds(clips.stream().map(DramaShot::getId).toList());
             episode.setFilmAssembledAt(OffsetDateTime.now());
             episodeMapper.updateById(episode);
+            try {
+                creationService.recordDramaFilm(episode);
+            } catch (Exception recorded) {
+                log.warn("record drama film into creations failed, episode={}", episode.getId(), recorded);
+            }
             return DramaFilms.describe(episode, shots);
         } catch (BizException e) {
             throw e;
@@ -123,6 +130,7 @@ public class DramaFilmService {
         if (!hadFilm) {
             return;
         }
+        creationService.removeDramaFilm(episode.getUserId(), episode.getFilmKey());
         deleteObjectQuietly(episode.getFilmKey());
         deleteObjectQuietly(episode.getFilmPosterKey());
         captionService.deleteEpisodeVtt(episode.getFilmKey());

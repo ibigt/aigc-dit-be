@@ -142,6 +142,26 @@ public class ArkGenerateProvider implements GenerateProvider {
         jobs.computeIfAbsent(jobId, id -> new Job(request, base, apiKey));
     }
 
+    /**
+     * 用一个不存在的任务号查询任务：HTTP 200/404 = 鉴权通过；401/403 = Key 无效；其他 HTTP 错误视为通过。
+     * 不消耗方舟额度。{@code provider} 用于 payg/plan 端点归一。
+     */
+    @Override
+    public void ping(GenerateRequest request) {
+        String apiKey = resolveApiKey(request);
+        String provider = request.getProvider();
+        String v3Base = ArkUrls.v3Base(request.getEndpoint(), properties.getBaseUrl(), provider);
+        String url = ArkUrls.queryTask(v3Base, cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID);
+        try {
+            http.getJson(java.net.URI.create(url), apiKey);
+        } catch (cn.aigc.dit.common.exception.BizException e) {
+            Integer status = cn.aigc.dit.generate.PingSupport.httpStatusOf(e);
+            if (status == null || cn.aigc.dit.generate.PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
+        }
+    }
+
     @Override
     public PollResult poll(String jobId) {
         Job job = jobs.get(jobId);

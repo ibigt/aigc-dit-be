@@ -28,22 +28,19 @@ class OpenAiCompatChatClientTest {
 
     @Test
     void pingPostsMinimalChatBody() {
-        AtomicReference<String> body = new AtomicReference<>();
         AtomicReference<URI> uri = new AtomicReference<>();
         AtomicReference<Duration> timeout = new AtomicReference<>();
         OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
                 (target, apiKey, json, wait) -> {
                     uri.set(target);
-                    body.set(json);
                     timeout.set(wait);
                     assertEquals("sk-test", apiKey);
-                    return new OpenAiCompatChatClient.Transport.Response(200, "{\"id\":\"ok\"}");
+                    return new OpenAiCompatChatClient.Transport.Response(200,
+                            "{\"data\":[{\"id\":\"agnes-2.5-flash\"}]}");
                 });
         client.ping("https://api.agnes-ai.cn/v1", "sk-test", "agnes-2.5-flash");
-        assertEquals("https://api.agnes-ai.cn/v1/chat/completions", uri.get().toString());
+        assertEquals("https://api.agnes-ai.cn/v1/models", uri.get().toString());
         assertEquals(OpenAiCompatChatClient.PING_TIMEOUT, timeout.get());
-        assertTrue(body.get().contains("\"content\":\"ping\""));
-        assertTrue(body.get().contains("\"max_tokens\":1"));
     }
 
     @Test
@@ -70,6 +67,34 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void chatReadsOpenAiCompatibleTokenUsage() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":300,\"prompt_tokens_details\":{\"cached_tokens\":200}}}"));
+
+        TextChatResult result = client.chat("https://example.com/v1", "sk", "portable-model",
+                new TextChatRequest("sys", "user", false));
+
+        assertEquals(1200L, result.getPromptTokens());
+        assertEquals(300L, result.getCompletionTokens());
+        assertEquals(200L, result.getCachedPromptTokens());
+    }
+
+    @Test
+    void chatReadsResponsesStyleTokenUsageAliases() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":\"ok\"}}],\"usage\":{\"input_tokens\":90,\"output_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":30}}}"));
+
+        TextChatResult result = client.chat("https://example.com/v1", "sk", "portable-model",
+                new TextChatRequest("sys", "user", false));
+
+        assertEquals(90L, result.getPromptTokens());
+        assertEquals(10L, result.getCompletionTokens());
+        assertEquals(30L, result.getCachedPromptTokens());
+    }
+
+    @Test
     void jsonChatSendsRequestedTokenLimitForNonDeepSeekModels() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         ObjectMapper mapper = new ObjectMapper();
@@ -86,6 +111,25 @@ class OpenAiCompatChatClientTest {
         JsonNode sent = mapper.readTree(body.get());
         assertEquals(4321, sent.path("max_tokens").asInt(),
                 "非 DeepSeek 模型也必须收到调用方要求的输出 token 上限，否则长 JSON 会按供应商默认值截断");
+    }
+
+    @Test
+    void jsonChatKeepsInputRoomInsideContextWindow() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://example.com/v1", "sk", "32k-model",
+                new TextChatRequest("系统提示", "用户输入", true, 32768));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertTrue(sent.path("max_tokens").asInt() < 32768,
+                "输出预算必须给系统提示词和用户输入预留上下文空间");
     }
 
     @Test

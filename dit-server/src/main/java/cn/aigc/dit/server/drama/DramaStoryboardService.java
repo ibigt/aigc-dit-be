@@ -171,6 +171,39 @@ public class DramaStoryboardService {
     }
 
     /**
+     * 顶栏「重新拆镜」：同步占锁并立刻返回 drafting 状态，LLM 在后台跑。
+     * 避免 HTTP 长时间无响应，前端看起来像点击没反应。
+     */
+    public DramaStoryboardResp startDraft(Long episodeId, Integer durationSec) {
+        assertCanDraft(episodeId);
+        LoginUser user = UserContext.require();
+        draftLock.claim(episodeId);
+        draftExecutor().execute(() -> {
+            LoginUser previous = UserContext.get();
+            UserContext.set(user);
+            try {
+                log.info("[drama] 手动拆镜开始 episodeId={} durationSec={}", episodeId, durationSec);
+                ops().runClaimedDraft(episodeId, durationSec, null);
+                log.info("[drama] 手动拆镜完成 episodeId={}", episodeId);
+            } catch (Exception e) {
+                log.warn("手动拆镜失败 episodeId={}: {}", episodeId, e.toString());
+                try {
+                    draftLock.fail(episodeId, e.getMessage());
+                } catch (RuntimeException ignored) {
+                    log.warn("手动拆镜记录失败原因失败 episodeId={}", episodeId);
+                }
+            } finally {
+                if (previous != null) {
+                    UserContext.set(previous);
+                } else {
+                    UserContext.clear();
+                }
+            }
+        });
+        return getStoryboard(episodeId);
+    }
+
+    /**
      * 分析结束后立刻占锁，让分镜页能显示「正在自动拆镜中」，真正的 LLM 拆镜在后台跑。
      */
     public void enqueueAutoDraft(Long episodeId, Integer episodeBudgetSec) {
@@ -301,9 +334,6 @@ public class DramaStoryboardService {
         ScriptDoc doc = ScriptDocs.fromMap(episode.getScript());
         if (doc == null || doc.getScenes() == null || doc.getScenes().isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集没有可拆章的分场剧本");
-        }
-        if (listShots(episode.getId()).stream().anyMatch(item -> DramaContract.STATUS_LOCKED.equals(item.getStatus()))) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "已有确认分镜，锁定剧本变更过期后再重新拆镜");
         }
     }
 

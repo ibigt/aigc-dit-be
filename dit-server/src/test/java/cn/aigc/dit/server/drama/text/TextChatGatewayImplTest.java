@@ -7,6 +7,7 @@ import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.service.TextBillingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -38,12 +39,15 @@ class TextChatGatewayImplTest {
     private AesGcmEncryptor encryptor;
     @Mock
     private OpenAiCompatChatClient chatClient;
+    @Mock
+    private TextBillingService textBillingService;
 
     private TextChatGatewayImpl gateway;
 
     @BeforeEach
     void setUp() {
-        gateway = new TextChatGatewayImpl(seriesMapper, aiModelMapper, encryptor, chatClient);
+        gateway = new TextChatGatewayImpl(
+                seriesMapper, aiModelMapper, encryptor, chatClient, textBillingService);
     }
 
     @Test
@@ -89,7 +93,8 @@ class TextChatGatewayImplTest {
         TextChatRequest req = new TextChatRequest(null, "ping", false);
         TextChatResult result = gateway.chat(21L, req);
         assertEquals("ok", result.getContent());
-        verify(chatClient).chat("https://api.agnes-ai.cn/v1", "sk-bound", "agnes-2.5-flash", req, java.util.Map.of());
+        verify(chatClient).chat("https://api.agnes-ai.cn/v1", "sk-bound", "agnes-2.5-flash", req,
+                java.util.Map.of("enableThinking", false));
     }
 
     @Test
@@ -130,12 +135,32 @@ class TextChatGatewayImplTest {
         TextChatRequest req = new TextChatRequest(null, "ping", false);
         TextChatResult result = gateway.chat(21L, req);
         assertEquals("ok", result.getContent());
-        verify(chatClient).chat("http://172.171.114.10:8080/v1", null, "deepseek-v3-flash", req, java.util.Map.of());
+        verify(chatClient).chat("http://172.171.114.10:8080/v1", null, "deepseek-v3-flash", req,
+                java.util.Map.of("enableThinking", false));
+    }
+
+    @Test
+    void opensTaskBillingFromSeriesOwnerAndBoundModelPricing() {
+        DramaSeries series = series(21L, 11L);
+        AiModel model = textModel(11L, "绑定的模型", true);
+        model.setPricing(java.util.Map.of(
+                "unit", "千Token", "sale", java.util.Map.of("input", 1, "output", 2, "cache", 0.5)));
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(11L)).thenReturn(model);
+
+        TextBillingSession session = gateway.openBilling(21L, "SCRIPT_PARSE");
+
+        assertTrue(session.isBillable());
+        assertEquals(7L, session.getUserId());
+        assertEquals(21L, session.getSeriesId());
+        assertEquals(11L, session.getModelId());
+        assertEquals("SCRIPT_PARSE", session.getOperation());
     }
 
     private static DramaSeries series(long id, Long textModelId) {
         DramaSeries series = new DramaSeries();
         series.setId(id);
+        series.setUserId(7L);
         series.setTextModelId(textModelId);
         return series;
     }

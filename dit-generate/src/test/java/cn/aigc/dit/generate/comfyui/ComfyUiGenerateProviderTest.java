@@ -200,6 +200,40 @@ class ComfyUiGenerateProviderTest {
         return node.get("class_type").asText();
     }
 
+    @Test
+    void pingUsesSystemStatsAndTreatsAnyHttpErrorAsFailure() {
+        http.historyResponse = "{\"system\":{\"os\":\"linux\"}}";
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey("minimax-h3")
+                .setCategory("video")
+                .setEndpoint("http://172.200.0.237:8188");
+        provider.ping(request);
+        assertEquals(URI.create("http://172.200.0.237:8188/system_stats"), http.lastGetUri);
+    }
+
+    @Test
+    void pingFailsWhenServiceReturns401() {
+        http.historyError = new BizException(cn.aigc.dit.common.exception.ErrorCode.INTERNAL,
+                "ComfyUI HTTP 401");
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey("minimax-h3")
+                .setCategory("video")
+                .setEndpoint("http://172.200.0.237:8188");
+        BizException error = assertThrows(BizException.class, () -> provider.ping(request));
+        assertTrue(error.getMessage().contains("ComfyUI HTTP 401"));
+    }
+
+    @Test
+    void pingPassesWhenServiceReturns404() {
+        http.historyError = new BizException(cn.aigc.dit.common.exception.ErrorCode.INTERNAL,
+                "ComfyUI HTTP 404");
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey("minimax-h3")
+                .setCategory("video")
+                .setEndpoint("http://172.200.0.237:8188");
+        provider.ping(request);
+    }
+
     private static JsonNode nodeByClass(JsonNode prompt, String type) {
         var fields = prompt.fields();
         while (fields.hasNext()) {

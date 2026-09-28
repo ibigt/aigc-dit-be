@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.server.mapper.CreditLedgerMapper;
+import cn.aigc.dit.server.mapper.RechargeOrderMapper;
 import cn.aigc.dit.server.mapper.SysUserMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,12 +21,14 @@ class CreditServiceNetByRefTest {
     private SysUserMapper sysUserMapper;
     @Mock
     private CreditLedgerMapper creditLedgerMapper;
+    @Mock
+    private RechargeOrderMapper rechargeOrderMapper;
 
     private CreditService service;
 
     @BeforeEach
     void setUp() {
-        service = new CreditService(sysUserMapper, creditLedgerMapper);
+        service = new CreditService(sysUserMapper, creditLedgerMapper, rechargeOrderMapper);
     }
 
     @Test

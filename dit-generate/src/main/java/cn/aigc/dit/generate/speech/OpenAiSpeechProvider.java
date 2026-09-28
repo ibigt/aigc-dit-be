@@ -94,6 +94,32 @@ public class OpenAiSpeechProvider implements GenerateProvider {
         }
     }
 
+    /**
+     * 用 {@code GET /v1/models} 验证 Key：HTTP 200 + 模型列表中含模型标识即为通过；
+     * 401/403 = Key 无效。零生成消耗。
+     */
+    @Override
+    public void ping(GenerateRequest request) {
+        String apiKey = firstNonBlank(request.getApiKey(), properties.getApiKey());
+        String base = firstNonBlank(request.getEndpoint(), properties.getBaseUrl(), "https://api.openai.com/v1")
+                .replaceAll("/+$", "");
+        URI uri = URI.create(base + (base.endsWith("/models") ? "" : "/models"));
+        String body;
+        try {
+            body = http.getString(uri, apiKey);
+        } catch (cn.aigc.dit.common.exception.BizException e) {
+            Integer status = cn.aigc.dit.generate.PingSupport.httpStatusOf(e);
+            if (status == null || cn.aigc.dit.generate.PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
+            return;
+        }
+        java.util.List<String> ids = cn.aigc.dit.generate.PingSupport.parseModelIds(body);
+        if (ids != null) {
+            cn.aigc.dit.generate.PingSupport.assertModelListed(ids, request.getModelKey());
+        }
+    }
+
     private void assertSupported(GenerateRequest request) {
         if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
                 || !GenerateMode.T2A.equalsIgnoreCase(GenerateMode.canonical(request.getMode()))) {

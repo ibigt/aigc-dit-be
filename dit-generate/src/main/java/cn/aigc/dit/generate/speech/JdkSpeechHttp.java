@@ -53,4 +53,34 @@ final class JdkSpeechHttp implements SpeechHttp {
             throw new BizException(ErrorCode.INTERNAL, "语音生成请求失败: " + e.getMessage());
         }
     }
+
+    @Override
+    public String getString(URI uri, String apiKey) {
+        try {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                    .timeout(requestTimeout)
+                    .header("Accept", "application/json")
+                    .GET();
+            if (apiKey != null && !apiKey.isBlank()) {
+                builder.header("Authorization", "Bearer " + apiKey.trim());
+            }
+            HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
+            int status = response.statusCode();
+            String body = new String(response.body(), StandardCharsets.UTF_8);
+            if (status < 200 || status >= 300) {
+                if (body.length() > 240) {
+                    body = body.substring(0, 240);
+                }
+                throw new BizException(ErrorCode.INTERNAL, "语音模型 HTTP " + status + ": " + body);
+            }
+            return body;
+        } catch (BizException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BizException(ErrorCode.INTERNAL, "语音模型请求被中断");
+        } catch (Exception e) {
+            throw new BizException(ErrorCode.INTERNAL, "语音模型请求失败: " + e.getMessage());
+        }
+    }
 }

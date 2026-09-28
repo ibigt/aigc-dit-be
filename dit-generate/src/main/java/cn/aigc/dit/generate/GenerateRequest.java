@@ -16,6 +16,8 @@ public class GenerateRequest {
     /** 适配协议（翻译包），如 gpt-image-2 / seedance-2 / minimax-h3 / agnes-image-2.5。 */
     private String adapterKey;
     private String category;
+    /** 接入来源标签（官方API / 官方API（token plan） / ComfyUI / RunningHub / 自定义配置）；探活时用于区分同协议多来源。 */
+    private String provider;
     private String mode;
     private String prompt;
     private String ratio;
@@ -82,6 +84,15 @@ public class GenerateRequest {
 
     public GenerateRequest setCategory(String category) {
         this.category = category;
+        return this;
+    }
+
+    public String getProvider() {
+        return provider;
+    }
+
+    public GenerateRequest setProvider(String provider) {
+        this.provider = provider;
         return this;
     }
 

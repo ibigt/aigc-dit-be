@@ -2,6 +2,7 @@ package cn.aigc.dit.server.service;
 
 import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
@@ -27,6 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +43,9 @@ class AdminModelServiceTest {
     private AesGcmEncryptor encryptor;
     @Mock
     private cn.aigc.dit.server.drama.text.OpenAiCompatChatClient chatClient;
+
+    @Mock
+    private cn.aigc.dit.generate.GenerateProviderRegistry providerRegistry;
 
     @Mock
     private cn.aigc.dit.server.drama.mapper.DramaSeriesMapper seriesMapper;
@@ -52,7 +60,7 @@ class AdminModelServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AdminModelService(encryptor, chatClient, seriesMapper, genTaskMapper, creationMapper, speechVoiceMapper);
+        service = new AdminModelService(encryptor, chatClient, providerRegistry, seriesMapper, genTaskMapper, creationMapper, speechVoiceMapper);
         ReflectionTestUtils.setField(service, "baseMapper", modelMapper);
     }
 
@@ -394,6 +402,8 @@ class AdminModelServiceTest {
     @Test
     void testConnectionAllowsBlankApiKey() {
         AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setCategory(ModelCategory.TEXT);
+        req.setAdapterKey("openai-compat");
         req.setEndpoint("http://172.171.114.10:8080/v1");
         req.setModelKey("deepseek-v3-flash");
         req.setApiKey("");
@@ -402,6 +412,119 @@ class AdminModelServiceTest {
         assertEquals("连接成功", resp.getMessage());
         org.mockito.Mockito.verify(chatClient).ping(
                 "http://172.171.114.10:8080/v1", null, "deepseek-v3-flash");
+    }
+
+    @Test
+    void testConnectionDispatchesImageProviderWhenCategoryAndAdapterGiven() {
+        cn.aigc.dit.generate.GenerateProvider provider =
+                org.mockito.Mockito.mock(cn.aigc.dit.generate.GenerateProvider.class);
+        when(providerRegistry.resolveByAdapter(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(provider);
+
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setCategory(ModelCategory.IMAGE);
+        req.setAdapterKey("gpt-image-2");
+        req.setProvider("RunningHub");
+        req.setEndpoint("https://www.runninghub.ai");
+        req.setApiKey("sk-rh");
+        req.setModelKey("gpt-image-2");
+
+        var resp = service.testConnection(req);
+        assertEquals("连接成功", resp.getMessage());
+        verify(providerRegistry).resolveByAdapter("gpt-image-2", "RunningHub",
+                ModelCategory.IMAGE, "gpt-image-2");
+        verify(provider).ping(org.mockito.ArgumentMatchers.argThat(
+                (cn.aigc.dit.generate.GenerateRequest r) ->
+                        "gpt-image-2".equals(r.getAdapterKey())
+                                && ModelCategory.IMAGE.equalsIgnoreCase(r.getCategory())
+                                && "RunningHub".equals(r.getProvider())
+                                && "sk-rh".equals(r.getApiKey())));
+        verify(chatClient, never()).ping(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testConnectionUsesStoredVideoCredentialsWhenIdProvided() {
+        AiModel existing = new AiModel();
+        existing.setId(31L);
+        existing.setCategory(ModelCategory.VIDEO);
+        existing.setAdapterKey("minimax-h3");
+        existing.setProvider("官方API");
+        existing.setEndpoint("https://api.minimax.cn");
+        existing.setModelKey("MiniMax-H3");
+        existing.setApiKeyEnc("v1:cipher");
+        when(modelMapper.selectById(31L)).thenReturn(existing);
+        when(encryptor.decrypt("v1:cipher")).thenReturn("sk-mm");
+        cn.aigc.dit.generate.GenerateProvider provider =
+                org.mockito.Mockito.mock(cn.aigc.dit.generate.GenerateProvider.class);
+        when(providerRegistry.resolveByAdapter("minimax-h3", "官方API",
+                ModelCategory.VIDEO, "MiniMax-H3")).thenReturn(provider);
+
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setId(31L);
+        req.setApiKey("");
+
+        var resp = service.testConnection(req);
+        assertEquals("连接成功", resp.getMessage());
+        verify(provider).ping(org.mockito.ArgumentMatchers.argThat(
+                (cn.aigc.dit.generate.GenerateRequest r) ->
+                        "minimax-h3".equals(r.getAdapterKey())
+                                && "https://api.minimax.cn".equals(r.getEndpoint())
+                                && "sk-mm".equals(r.getApiKey())));
+    }
+
+    @Test
+    void testConnectionRequiresAdapterKeyForNonText() {
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setCategory(ModelCategory.IMAGE);
+        req.setEndpoint("https://www.runninghub.ai");
+        req.setApiKey("sk-rh");
+        req.setModelKey("gpt-image-2");
+
+        BizException error = assertThrows(BizException.class, () -> service.testConnection(req));
+        assertEquals(ErrorCode.BAD_REQUEST, error.getCode());
+        verify(providerRegistry, never()).resolveByAdapter(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testConnectionBubblesUpProviderPingFailure() {
+        cn.aigc.dit.generate.GenerateProvider provider =
+                org.mockito.Mockito.mock(cn.aigc.dit.generate.GenerateProvider.class);
+        when(providerRegistry.resolveByAdapter(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(provider);
+        doThrow(new BizException(ErrorCode.BAD_REQUEST, "Ark HTTP 401: 方舟拒绝了 API Key"))
+                .when(provider).ping(any());
+
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setCategory(ModelCategory.VIDEO);
+        req.setAdapterKey("seedance-2.5");
+        req.setProvider("官方API");
+        req.setEndpoint("https://ark.cn-beijing.volces.com/api/v3");
+        req.setApiKey("sk-ark");
+        req.setModelKey("doubao-seedance-2-5-260628");
+
+        BizException error = assertThrows(BizException.class, () -> service.testConnection(req));
+        assertTrue(error.getMessage().contains("Ark HTTP 401"));
+    }
+
+    @Test
+    void testConnectionRejectsUnknownAdapterWithoutFallingBackToMock() {
+        org.mockito.Mockito.lenient().when(providerRegistry.resolveByAdapter(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new BizException(ErrorCode.BAD_REQUEST, "未配置适配协议，请在管理端选择已接入的适配协议"));
+
+        AdminModelTestConnectionReq req = new AdminModelTestConnectionReq();
+        req.setCategory(ModelCategory.AUDIO);
+        req.setAdapterKey("unknown-voice-clone");
+        req.setProvider("官方API");
+        req.setEndpoint("https://example.com");
+        req.setApiKey("sk");
+        req.setModelKey("voice-clone-1");
+
+        BizException error = assertThrows(BizException.class, () -> service.testConnection(req));
+        assertTrue(error.getMessage().contains("未配置适配协议"));
     }
 
     @Test

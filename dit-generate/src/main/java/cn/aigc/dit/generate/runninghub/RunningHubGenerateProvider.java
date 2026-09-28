@@ -96,6 +96,31 @@ public class RunningHubGenerateProvider implements GenerateProvider {
         jobs.computeIfAbsent(jobId, id -> new Job(request, openApiBase, apiKey));
     }
 
+    /**
+     * 用一个不存在的任务号查询：HTTP 成功即鉴权通过；401/403 = Key 无效；其他 HTTP 错误（任务不存在等）= 通过。
+     * 整体无副作用、不消耗 RunningHub 调用额度。
+     */
+    @Override
+    public void ping(GenerateRequest request) {
+        String apiKey = firstNonBlank(request.getApiKey(), properties.getApiKey());
+        if (apiKey == null) {
+            throw new cn.aigc.dit.common.exception.BizException(
+                    cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "RunningHub 测试连接需要 API Key");
+        }
+        String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), properties.getBaseUrl());
+        String url = RunningHubUrls.queryUrl(openApiBase);
+        try {
+            http.postJson(URI.create(url), apiKey,
+                    "{\"taskId\":\"" + cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID + "\"}");
+        } catch (cn.aigc.dit.common.exception.BizException e) {
+            // HTTP 层异常：401/403 = Key 无效；其他状态（含 200 但鉴权错误码）= 链路与鉴权通过
+            Integer status = cn.aigc.dit.generate.PingSupport.httpStatusOf(e);
+            if (status == null || cn.aigc.dit.generate.PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
+        }
+    }
+
     @Override
     public PollResult poll(String jobId) {
         Job job = jobs.get(jobId);

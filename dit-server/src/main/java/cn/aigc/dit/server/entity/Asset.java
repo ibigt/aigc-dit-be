@@ -24,6 +24,9 @@ public class Asset {
     private String storageKey;
     private String posterKey;
     private Long sizeBytes;
+    private Integer width;
+    private Integer height;
+    private Long durationMs;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

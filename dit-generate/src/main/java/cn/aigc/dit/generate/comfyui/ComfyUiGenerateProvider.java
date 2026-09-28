@@ -83,6 +83,22 @@ public class ComfyUiGenerateProvider implements GenerateProvider {
         return SubmitResult.accepted(jobId);
     }
 
+    /** 只读 {@code GET /system_stats}：本地网关无鉴权，2xx 即视为连通。 */
+    @Override
+    public void ping(GenerateRequest request) {
+        String base = ComfyUiUrls.base(request.getEndpoint(), properties.getBaseUrl());
+        String apiKey = request.getApiKey();
+        try {
+            getJson(ComfyUiUrls.systemStats(base), apiKey);
+        } catch (BizException e) {
+            // ComfyUI 永远 INTERNAL；连接不上/超时原样抛出，否则任何 HTTP 错误都视为鉴权失败
+            Integer status = cn.aigc.dit.generate.PingSupport.httpStatusOf(e);
+            if (status == null || cn.aigc.dit.generate.PingSupport.isUnauthorized(status)) {
+                throw e;
+            }
+        }
+    }
+
     public void remember(String jobId, GenerateRequest request, String endpoint) {
         if (!StringUtils.hasText(jobId) || request == null) {
             return;

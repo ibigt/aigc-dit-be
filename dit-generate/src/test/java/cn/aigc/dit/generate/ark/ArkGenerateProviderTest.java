@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArkGenerateProviderTest {
@@ -285,6 +286,38 @@ class ArkGenerateProviderTest {
                 .setDurationSec(5)
                 .setEndpoint("https://ark.cn-beijing.volces.com/api/v3")
                 .setApiKey("sk-ark");
+    }
+
+    @Test
+    void pingUsesQueryTaskEndpointAndIgnoresNotFound() {
+        ArkGenerateProvider provider = new ArkGenerateProvider(storage, properties,
+                http, mapper, new FakeAudioReferenceProcessor());
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey("seedance-2.5")
+                .setCategory("video")
+                .setProvider("官方API")
+                .setEndpoint("https://ark.cn-beijing.volces.com/api/v3")
+                .setApiKey("sk-ark")
+                .setModelKey("doubao-seedance-2-5-260628");
+        provider.ping(request);
+        assertTrue(http.lastPollUri.toString().contains("/api/v3/contents/generations/tasks/"));
+        assertTrue(http.lastPollUri.toString().endsWith("/" + cn.aigc.dit.generate.PingSupport.PROBE_TASK_ID));
+    }
+
+    @Test
+    void pingFailsWhenArkRejectsKeyWith401() {
+        http.pollError = new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
+                "Seedance 查询 HTTP 401: 方舟拒绝了 API Key");
+        ArkGenerateProvider provider = new ArkGenerateProvider(storage, properties,
+                http, mapper, new FakeAudioReferenceProcessor());
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey("seedance-2.5")
+                .setCategory("video")
+                .setProvider("官方API")
+                .setEndpoint("https://ark.cn-beijing.volces.com/api/v3")
+                .setApiKey("sk-bad");
+        BizException error = assertThrows(BizException.class, () -> provider.ping(request));
+        assertTrue(error.getMessage().contains("方舟拒绝了 API Key"));
     }
 
     private static final class FakeAudioReferenceProcessor implements AudioReferenceProcessor {

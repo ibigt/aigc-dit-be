@@ -31,6 +31,9 @@ public class OpenAiCompatChatClient {
     static final Duration PING_TIMEOUT = Duration.ofSeconds(10);
     /** 结构化剧本请求包含完整剧本和严格 JSON 输出，复杂剧本允许模型最多运行 10 分钟。 */
     static final Duration CHAT_TIMEOUT = Duration.ofSeconds(600);
+    private static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
+    private static final int DEFAULT_OUTPUT_TOKENS = 8_192;
+    private static final int CONTEXT_SAFETY_TOKENS = 1_024;
     private static final String USER_AGENT = "Mozilla/5.0 (compatible; aigc-dit/1.0; +https://www.agnes-ai.cn)";
 
     private final ObjectMapper objectMapper;
@@ -48,14 +51,38 @@ public class OpenAiCompatChatClient {
     }
 
     public void ping(String endpoint, String apiKey, String model) {
-        ObjectNode body = objectMapper.createObjectNode();
-        body.put("model", model);
-        body.put("max_tokens", 1);
-        ArrayNode messages = body.putArray("messages");
-        ObjectNode user = messages.addObject();
-        user.put("role", "user");
-        user.put("content", "ping");
-        post(endpoint, apiKey, body, PING_TIMEOUT, true);
+        String body = getModels(endpoint, apiKey, PING_TIMEOUT);
+        java.util.List<String> ids = cn.aigc.dit.generate.PingSupport.parseModelIds(body);
+        if (ids != null) {
+            cn.aigc.dit.generate.PingSupport.assertModelListed(ids, model);
+        }
+    }
+
+    private String getModels(String endpoint, String apiKey, Duration timeout) {
+        URI uri = URI.create(normalizeEndpoint(endpoint) + "/models");
+        Transport.Response response;
+        try {
+            response = transport.get(uri, apiKey == null ? "" : apiKey.trim(), timeout);
+        } catch (BizException e) {
+            throw e;
+        } catch (HttpTimeoutException e) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "连接超时");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BizException(ErrorCode.INTERNAL, "测试连接被中断");
+        } catch (Exception e) {
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new BizException(ErrorCode.BAD_REQUEST, "连接失败: " + truncate(detail, 240));
+        }
+        int status = response.status();
+        String raw = response.body() == null ? "" : response.body();
+        if (status == 405 || status == 403) {
+            return "";
+        }
+        if (status < 200 || status >= 300) {
+            throw new BizException(ErrorCode.BAD_REQUEST, formatError(status, raw));
+        }
+        return raw;
     }
 
     public TextChatResult chat(String endpoint, String apiKey, String model, TextChatRequest req) {
@@ -91,7 +118,19 @@ public class OpenAiCompatChatClient {
             if (!"max_completion_tokens".equals(tokenParameter)) {
                 tokenParameter = "max_tokens";
             }
-            body.put(tokenParameter, req.getMaxTokens() == null ? 32768 : req.getMaxTokens());
+            int requestedTokens = req.getMaxTokens() == null
+                    ? DEFAULT_OUTPUT_TOKENS : Math.max(1, req.getMaxTokens());
+            int contextWindowTokens = integerOption(adapterConfig, "contextWindowTokens",
+                    DEFAULT_CONTEXT_WINDOW_TOKENS);
+            int estimatedInputTokens = estimateInputTokens(req.getSystem(), userContent);
+            int availableOutputTokens = Math.max(256,
+                    contextWindowTokens - estimatedInputTokens - CONTEXT_SAFETY_TOKENS);
+            int outputTokens = Math.min(requestedTokens, availableOutputTokens);
+            if (outputTokens < requestedTokens) {
+                log.info("[text-chat] cap output tokens requested={} actual={} contextWindow={} estimatedInput={}",
+                        requestedTokens, outputTokens, contextWindowTokens, estimatedInputTokens);
+            }
+            body.put(tokenParameter, outputTokens);
             // 全部模型一律关闭 vLLM chat_template 思考：32k JSON 输出再叠加 reasoning
             // 会把耗时顶到分钟级，触发客户端超时且无 reasoning 价值。OpenAI 兼容的
             // 非 vLLM 后端收到未知字段会忽略，不会报错。
@@ -107,8 +146,23 @@ public class OpenAiCompatChatClient {
         if (!StringUtils.hasText(content)) {
             content = choice.path("text").asText("");
         }
+        JsonNode usage = root.path("usage");
+        long promptTokens = tokenCount(usage, "prompt_tokens", "input_tokens");
+        long completionTokens = tokenCount(usage, "completion_tokens", "output_tokens");
+        long cachedTokens = tokenCount(usage.path("prompt_tokens_details"), "cached_tokens");
+        if (cachedTokens == 0L) {
+            cachedTokens = tokenCount(usage.path("input_tokens_details"), "cached_tokens");
+        }
         return TextChatResult.of(content, root.path("model").asText(model),
-                choice.path("finish_reason").asText(null));
+                choice.path("finish_reason").asText(null), promptTokens, completionTokens, cachedTokens);
+    }
+
+    private static long tokenCount(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.canConvertToLong()) return Math.max(0L, value.asLong());
+        }
+        return 0L;
     }
 
     private static String option(Map<String, Object> config, String key, String fallback) {
@@ -144,6 +198,30 @@ public class OpenAiCompatChatClient {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private static int integerOption(Map<String, Object> config, String key, int fallback) {
+        if (!hasOption(config, key)) {
+            return fallback;
+        }
+        Object value = config.get(key);
+        try {
+            int parsed = value instanceof Number number
+                    ? number.intValue() : Integer.parseInt(String.valueOf(value).trim());
+            return parsed > CONTEXT_SAFETY_TOKENS ? parsed : fallback;
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    /**
+     * 保守估算输入预算：中文通常接近一字一 token，英文会有更多余量。
+     * 精确分词由各供应商决定，此处只负责避免 max_tokens 占满整个上下文窗口。
+     */
+    private static int estimateInputTokens(String system, String user) {
+        int systemChars = system == null ? 0 : system.codePointCount(0, system.length());
+        int userChars = user == null ? 0 : user.codePointCount(0, user.length());
+        return Math.max(1, systemChars + userChars);
     }
 
     private JsonNode post(String endpoint, String apiKey, ObjectNode body, Duration timeout, boolean ping) {
@@ -263,6 +341,13 @@ public class OpenAiCompatChatClient {
     interface Transport {
         Response post(URI uri, String apiKey, String jsonBody, Duration timeout) throws Exception;
 
+        /**
+         * 默认转给 {@link #post}，便于老测试桩继续编译；{@link JdkTransport} 重写为真 GET。
+         */
+        default Response get(URI uri, String apiKey, Duration timeout) throws Exception {
+            return post(uri, apiKey, "{}", timeout);
+        }
+
         record Response(int status, String body) {
         }
     }
@@ -281,6 +366,21 @@ public class OpenAiCompatChatClient {
                     .header("Content-Type", "application/json")
                     .header("User-Agent", USER_AGENT)
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8));
+            if (StringUtils.hasText(apiKey)) {
+                builder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpResponse<String> response = httpClient.send(builder.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return new Response(response.statusCode(), response.body());
+        }
+
+        @Override
+        public Response get(URI uri, String apiKey, Duration timeout) throws Exception {
+            HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                    .timeout(timeout)
+                    .header("Accept", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .GET();
             if (StringUtils.hasText(apiKey)) {
                 builder.header("Authorization", "Bearer " + apiKey);
             }

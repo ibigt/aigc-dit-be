@@ -13,6 +13,7 @@ import cn.aigc.dit.server.mapper.AssetMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.media.AssetUploadPolicy;
+import cn.aigc.dit.server.media.AssetMetadataProbe;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -24,6 +25,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -38,12 +41,16 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
     private final DramaAssetMapper dramaAssetMapper;
 
     public List<AssetResp> listMine(String kind, String query) {
+        return listMine(kind, query, null);
+    }
+
+    public List<AssetResp> listMine(String kind, String query, String orderBy) {
         Long userId = UserContext.requireUserId();
         LambdaQueryWrapper<Asset> wrapper = new LambdaQueryWrapper<Asset>()
                 .eq(Asset::getUserId, userId)
                 .eq(StringUtils.hasText(kind) && !"all".equalsIgnoreCase(kind), Asset::getKind, kind)
-                .like(StringUtils.hasText(query), Asset::getName, query)
-                .orderByDesc(Asset::getCreatedAt);
+                .like(StringUtils.hasText(query), Asset::getName, query);
+        applyOrder(wrapper, orderBy);
         return list(wrapper).stream().map(this::toResp).toList();
     }
 
@@ -70,6 +77,7 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         asset.setStorageKey(key);
         asset.setPosterKey(posterKey);
         asset.setSizeBytes(file.getSize());
+        applyMetadata(asset, file, kind);
         save(asset);
         return toResp(asset);
     }
@@ -185,8 +193,63 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         resp.setPosterUrl(MediaUrls.of(asset.getPosterKey() == null ? asset.getStorageKey() : asset.getPosterKey()));
         resp.setPoster(resp.getPosterUrl());
         resp.setSizeBytes(asset.getSizeBytes());
+        resp.setWidth(asset.getWidth());
+        resp.setHeight(asset.getHeight());
+        resp.setDurationMs(asset.getDurationMs());
         resp.setCreatedAt(asset.getCreatedAt());
         return resp;
+    }
+
+    private static void applyOrder(LambdaQueryWrapper<Asset> wrapper, String orderBy) {
+        if ("time_asc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByAsc(Asset::getCreatedAt);
+            return;
+        }
+        if ("name_asc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByAsc(Asset::getName);
+            return;
+        }
+        if ("name_desc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByDesc(Asset::getName);
+            return;
+        }
+        if ("size_asc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByAsc(Asset::getSizeBytes);
+            return;
+        }
+        if ("size_desc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByDesc(Asset::getSizeBytes);
+            return;
+        }
+        if ("duration_desc".equalsIgnoreCase(orderBy)) {
+            wrapper.orderByDesc(Asset::getDurationMs);
+            return;
+        }
+        wrapper.orderByDesc(Asset::getCreatedAt);
+    }
+
+    private static void applyMetadata(Asset asset, MultipartFile file, String kind) {
+        try {
+            byte[] bytes = file.getBytes();
+            AssetMetadataProbe.Metadata metadata;
+            if (AssetKind.IMAGE.equals(kind)) {
+                metadata = AssetMetadataProbe.probeImage(bytes);
+            } else {
+                String suffix = extension(file.getOriginalFilename(), file.getContentType());
+                Path temp = Files.createTempFile("aigc-asset-", suffix);
+                try {
+                    Files.write(temp, bytes);
+                    metadata = AssetMetadataProbe.probeMedia(temp);
+                } finally {
+                    Files.deleteIfExists(temp);
+                }
+            }
+            asset.setWidth(metadata.width());
+            asset.setHeight(metadata.height());
+            asset.setDurationMs(metadata.durationMs());
+        } catch (Exception ignored) {
+            // 元数据仅用于展示；外部探测或临时文件异常不得影响上传。
+        }
     }
 
     static String displayName(String filename) {

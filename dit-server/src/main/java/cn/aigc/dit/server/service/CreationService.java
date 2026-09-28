@@ -4,6 +4,9 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.drama.entity.DramaEpisode;
+import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
@@ -17,6 +20,7 @@ import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.model.req.CreationSessionCreateReq;
 import cn.aigc.dit.server.model.resp.CreationItemResp;
+import cn.aigc.dit.server.model.resp.CreationProjectResp;
 import cn.aigc.dit.server.model.resp.CreationSessionResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -46,6 +50,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     private final GenTaskMapper genTaskMapper;
     private final AiModelMapper aiModelMapper;
     private final AssetService assetService;
+    private final DramaSeriesMapper dramaSeriesMapper;
 
     public List<CreationSessionResp> listSessions() {
         Long userId = UserContext.requireUserId();
@@ -120,27 +125,118 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         return session;
     }
 
-    public List<CreationItemResp> listMine(String category, String query) {
+    public List<CreationItemResp> listMine(String category, String query, String project, OffsetDateTime from, OffsetDateTime to) {
         Long userId = UserContext.requireUserId();
+        ProjectFilter filter = ProjectFilter.parse(project);
         LambdaQueryWrapper<Creation> wrapper = new LambdaQueryWrapper<Creation>()
                 .eq(Creation::getUserId, userId)
                 .eq(StringUtils.hasText(category) && !"all".equalsIgnoreCase(category), Creation::getCategory, category)
                 .and(StringUtils.hasText(query), w -> w.like(Creation::getTitle, query).or().like(Creation::getPrompt, query))
+                .ge(from != null, Creation::getCreatedAt, from)
+                .lt(to != null, Creation::getCreatedAt, to)
+                .and(filter.none(), w -> w.isNull(Creation::getProjectKind).or().isNull(Creation::getProjectId))
+                .eq(!filter.all() && !filter.none(), Creation::getProjectKind, filter.kind())
+                .eq(!filter.all() && !filter.none(), Creation::getProjectId, filter.id())
                 .orderByDesc(Creation::getCreatedAt);
         List<Creation> items = list(wrapper);
-        items = excludeDramaCreations(items);
-        Map<Long, String> modelNames = loadModelNames(items.stream().map(Creation::getModelId).toList());
-        return items.stream().map(item -> toItem(item, modelNames.get(item.getModelId()))).toList();
+        return toGallery(items);
+    }
+
+    public List<CreationProjectResp> listProjects() {
+        Long userId = UserContext.requireUserId();
+        List<Creation> items = list(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .orderByDesc(Creation::getCreatedAt));
+        Map<String, CreationProjectResp> projects = new LinkedHashMap<>();
+        boolean unassigned = false;
+        for (Creation item : items) {
+            if (!StringUtils.hasText(item.getProjectKind()) || item.getProjectId() == null) {
+                unassigned = true;
+                continue;
+            }
+            String key = item.getProjectKind() + ":" + item.getProjectId();
+            projects.computeIfAbsent(key, ignored -> {
+                CreationProjectResp resp = new CreationProjectResp();
+                resp.setKey(key);
+                resp.setKind(item.getProjectKind());
+                resp.setId(item.getProjectId());
+                return resp;
+            });
+        }
+        Map<Long, String> sessionNames = loadSessionNames(projects.values().stream()
+                .filter(item -> "quick".equals(item.getKind()))
+                .map(CreationProjectResp::getId)
+                .toList());
+        Map<Long, String> seriesNames = loadSeriesNames(projects.values().stream()
+                .filter(item -> "drama".equals(item.getKind()))
+                .map(CreationProjectResp::getId)
+                .toList());
+        for (CreationProjectResp projectItem : projects.values()) {
+            if ("drama".equals(projectItem.getKind())) {
+                projectItem.setName(seriesNames.getOrDefault(projectItem.getId(), "短剧项目"));
+            } else {
+                projectItem.setName(sessionNames.getOrDefault(projectItem.getId(), "未命名创作"));
+            }
+        }
+        List<CreationProjectResp> result = new ArrayList<>(projects.values());
+        if (unassigned) {
+            CreationProjectResp none = new CreationProjectResp();
+            none.setKey("none");
+            none.setKind("none");
+            none.setName("未归入项目");
+            result.add(none);
+        }
+        return result;
     }
 
     public CreationItemResp getMine(Long id) {
         Creation creation = requireMine(id);
-        String modelName = null;
-        if (creation.getModelId() != null) {
-            AiModel model = aiModelMapper.selectById(creation.getModelId());
-            modelName = model == null ? null : model.getName();
+        return toGallery(List.of(creation)).get(0);
+    }
+
+    @Transactional
+    public void recordDramaFilm(DramaEpisode episode) {
+        if (episode == null || episode.getUserId() == null || !StringUtils.hasText(episode.getFilmKey())) {
+            return;
         }
-        return toItem(creation, modelName);
+        DramaSeries series = episode.getSeriesId() == null ? null : dramaSeriesMapper.selectById(episode.getSeriesId());
+        String seriesName = series == null || !StringUtils.hasText(series.getName()) ? "短剧" : series.getName().trim();
+        String title = filmTitle(seriesName, episode);
+        Creation existing = getOne(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, episode.getUserId())
+                .eq(Creation::getStorageKey, episode.getFilmKey())
+                .last("LIMIT 1"), false);
+        if (existing != null) {
+            existing.setPosterKey(episode.getFilmPosterKey());
+            existing.setTitle(title);
+            existing.setPrompt(title);
+            existing.setProjectKind("drama");
+            existing.setProjectId(episode.getSeriesId());
+            updateById(existing);
+            return;
+        }
+        Creation creation = new Creation();
+        creation.setUserId(episode.getUserId());
+        creation.setTitle(title);
+        creation.setCategory(ModelCategory.VIDEO);
+        creation.setStorageKey(episode.getFilmKey());
+        creation.setPosterKey(episode.getFilmPosterKey());
+        creation.setPrompt(title);
+        creation.setCreditCost(0L);
+        creation.setCopyIndex(1);
+        creation.setProjectKind("drama");
+        creation.setProjectId(episode.getSeriesId());
+        save(creation);
+    }
+
+    @Transactional
+    public void removeDramaFilm(Long userId, String storageKey) {
+        if (userId == null || !StringUtils.hasText(storageKey)) {
+            return;
+        }
+        remove(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getStorageKey, storageKey));
     }
 
     public cn.aigc.dit.server.model.resp.AssetResp saveToAsset(Long creationId) {
@@ -275,23 +371,107 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         return resp;
     }
 
-    private List<Creation> excludeDramaCreations(List<Creation> items) {
-        Set<Long> taskIds = items.stream().map(Creation::getTaskId).filter(Objects::nonNull).collect(Collectors.toSet());
-        if (taskIds.isEmpty()) {
-            return items;
+    private List<CreationItemResp> toGallery(List<Creation> items) {
+        if (items.isEmpty()) {
+            return List.of();
         }
-        Set<Long> dramaTaskIds = new HashSet<>();
-        for (GenTask task : genTaskMapper.selectBatchIds(taskIds)) {
-            if (GenerateRequests.isDramaSource(task.getParams())) {
-                dramaTaskIds.add(task.getId());
+        Map<Long, GenTask> tasks = loadTasks(items.stream().map(Creation::getTaskId).toList());
+        Map<Long, String> modelNames = loadModelNames(items.stream().map(Creation::getModelId).toList());
+        Map<Long, String> sessionNames = loadSessionNames(items.stream()
+                .filter(item -> "quick".equals(item.getProjectKind()))
+                .map(Creation::getProjectId)
+                .toList());
+        Map<Long, String> seriesNames = loadSeriesNames(items.stream()
+                .filter(item -> "drama".equals(item.getProjectKind()))
+                .map(Creation::getProjectId)
+                .toList());
+        return items.stream().map(item -> {
+            CreationItemResp resp = toItem(item, modelNames.get(item.getModelId()));
+            GenTask task = item.getTaskId() == null ? null : tasks.get(item.getTaskId());
+            resp.setElapsed(task == null ? "—" : elapsedLabel(task));
+            fillProject(resp, item, sessionNames, seriesNames);
+            return resp;
+        }).toList();
+    }
+
+    private void fillProject(CreationItemResp resp, Creation creation, Map<Long, String> sessionNames, Map<Long, String> seriesNames) {
+        String kind = creation.getProjectKind();
+        Long projectId = creation.getProjectId();
+        resp.setProjectKind(kind);
+        resp.setProjectId(projectId);
+        if (!StringUtils.hasText(kind) || projectId == null) {
+            resp.setProjectKey("none");
+            resp.setProjectName("未归入项目");
+            return;
+        }
+        resp.setProjectKey(kind + ":" + projectId);
+        if ("drama".equals(kind)) {
+            resp.setProjectName(seriesNames.getOrDefault(projectId, "短剧项目"));
+        } else {
+            resp.setProjectName(sessionNames.getOrDefault(projectId, "未命名创作"));
+        }
+    }
+
+    private Map<Long, GenTask> loadTasks(List<Long> ids) {
+        List<Long> taskIds = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (taskIds.isEmpty()) {
+            return new HashMap<>();
+        }
+        return genTaskMapper.selectBatchIds(taskIds).stream()
+                .filter(item -> item.getId() != null)
+                .collect(Collectors.toMap(GenTask::getId, item -> item, (a, b) -> a, HashMap::new));
+    }
+
+    private Map<Long, String> loadSessionNames(List<Long> ids) {
+        List<Long> sessionIds = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (sessionIds.isEmpty()) {
+            return new HashMap<>();
+        }
+        return sessionMapper.selectBatchIds(sessionIds).stream()
+                .filter(item -> item.getId() != null)
+                .collect(Collectors.toMap(CreationSession::getId, item -> StringUtils.hasText(item.getTitle()) ? item.getTitle() : "未命名创作", (a, b) -> a, HashMap::new));
+    }
+
+    private Map<Long, String> loadSeriesNames(List<Long> ids) {
+        List<Long> seriesIds = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (seriesIds.isEmpty()) {
+            return new HashMap<>();
+        }
+        return dramaSeriesMapper.selectBatchIds(seriesIds).stream()
+                .filter(item -> item.getId() != null)
+                .collect(Collectors.toMap(DramaSeries::getId, item -> StringUtils.hasText(item.getName()) ? item.getName() : "短剧项目", (a, b) -> a, HashMap::new));
+    }
+
+    private static String filmTitle(String seriesName, DramaEpisode episode) {
+        String episodeName = StringUtils.hasText(episode.getName())
+                ? episode.getName().trim()
+                : "第" + (episode.getEpisodeNumber() == null ? 1 : episode.getEpisodeNumber()) + "集";
+        String title = seriesName + " · " + episodeName + " · 成片";
+        return title.length() > 80 ? title.substring(0, 80) : title;
+    }
+
+    record ProjectFilter(String kind, Long id, boolean all, boolean none) {
+        static ProjectFilter parse(String project) {
+            if (!StringUtils.hasText(project) || "all".equalsIgnoreCase(project)) {
+                return new ProjectFilter(null, null, true, false);
+            }
+            if ("none".equalsIgnoreCase(project)) {
+                return new ProjectFilter(null, null, false, true);
+            }
+            int split = project.indexOf(':');
+            if (split <= 0 || split >= project.length() - 1) {
+                return new ProjectFilter(null, null, true, false);
+            }
+            String kind = project.substring(0, split);
+            if (!"quick".equals(kind) && !"drama".equals(kind)) {
+                return new ProjectFilter(null, null, true, false);
+            }
+            try {
+                return new ProjectFilter(kind, Long.parseLong(project.substring(split + 1)), false, false);
+            } catch (NumberFormatException e) {
+                return new ProjectFilter(null, null, true, false);
             }
         }
-        if (dramaTaskIds.isEmpty()) {
-            return items;
-        }
-        return items.stream()
-                .filter(item -> item.getTaskId() == null || !dramaTaskIds.contains(item.getTaskId()))
-                .toList();
     }
 
     private Set<Long> dramaBoundSessionIds(Long userId) {

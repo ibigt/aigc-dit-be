@@ -8,7 +8,8 @@ import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
-import lombok.RequiredArgsConstructor;
+import cn.aigc.dit.server.service.TextBillingService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -16,13 +17,29 @@ import java.util.Map;
 import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
 public class TextChatGatewayImpl implements TextChatGateway {
 
     private final DramaSeriesMapper seriesMapper;
     private final AiModelMapper aiModelMapper;
     private final AesGcmEncryptor encryptor;
     private final OpenAiCompatChatClient chatClient;
+    private final TextBillingService textBillingService;
+
+    @Autowired
+    public TextChatGatewayImpl(DramaSeriesMapper seriesMapper, AiModelMapper aiModelMapper,
+                               AesGcmEncryptor encryptor, OpenAiCompatChatClient chatClient,
+                               TextBillingService textBillingService) {
+        this.seriesMapper = seriesMapper;
+        this.aiModelMapper = aiModelMapper;
+        this.encryptor = encryptor;
+        this.chatClient = chatClient;
+        this.textBillingService = textBillingService;
+    }
+
+    TextChatGatewayImpl(DramaSeriesMapper seriesMapper, AiModelMapper aiModelMapper,
+                        AesGcmEncryptor encryptor, OpenAiCompatChatClient chatClient) {
+        this(seriesMapper, aiModelMapper, encryptor, chatClient, null);
+    }
 
     @Override
     public boolean llmAvailable(long seriesId) {
@@ -66,6 +83,30 @@ public class TextChatGatewayImpl implements TextChatGateway {
         String apiKey = encryptor.decrypt(model.getApiKeyEnc());
         ResolvedTextModel resolved = toResolved(model);
         return chatClient.chat(resolved.endpoint(), apiKey, resolved.chatModel(), req, resolved.adapterConfig());
+    }
+
+    @Override
+    public TextBillingSession openBilling(long seriesId, String operation) {
+        if (textBillingService == null) {
+            return TextBillingSession.noop();
+        }
+        DramaSeries series = seriesMapper.selectById(seriesId);
+        if (series == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "漫剧项目不存在");
+        }
+        AiModel model = series.getTextModelId() == null ? null : aiModelMapper.selectById(series.getTextModelId());
+        if (!usable(model)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    series.getTextModelId() == null ? "项目未绑定文本模型" : BINDING_UNUSABLE);
+        }
+        return new TextBillingSession(series.getUserId(), seriesId, model.getId(), operation, model.getPricing());
+    }
+
+    @Override
+    public void settleBilling(TextBillingSession session) {
+        if (textBillingService != null) {
+            textBillingService.settle(session);
+        }
     }
 
     public static boolean usable(AiModel model) {

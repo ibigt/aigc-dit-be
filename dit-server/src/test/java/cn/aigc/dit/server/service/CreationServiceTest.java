@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.service;
 
+import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -34,13 +35,15 @@ class CreationServiceTest {
     @Mock
     private AssetService assetService;
     @Mock
+    private DramaSeriesMapper dramaSeriesMapper;
+    @Mock
     private CreationMapper creationMapper;
 
     private CreationService service;
 
     @BeforeEach
     void setUp() {
-        service = new CreationService(sessionMapper, genTaskMapper, aiModelMapper, assetService);
+        service = new CreationService(sessionMapper, genTaskMapper, aiModelMapper, assetService, dramaSeriesMapper);
         ReflectionTestUtils.setField(service, "baseMapper", creationMapper);
     }
 
@@ -70,5 +73,19 @@ class CreationServiceTest {
         assertNull(CreationService.modelNameOf(Map.of(), null));
         assertNull(CreationService.modelNameOf(Map.of(3L, "Seedance"), null));
         assertEquals("Seedance", CreationService.modelNameOf(Map.of(3L, "Seedance"), 3L));
+    }
+
+    @Test
+    void projectFilterParsesKindAndId() {
+        CreationService.ProjectFilter all = CreationService.ProjectFilter.parse(null);
+        CreationService.ProjectFilter drama = CreationService.ProjectFilter.parse("drama:18");
+        CreationService.ProjectFilter none = CreationService.ProjectFilter.parse("none");
+        CreationService.ProjectFilter invalid = CreationService.ProjectFilter.parse("workflow");
+
+        assertEquals(true, all.all());
+        assertEquals("drama", drama.kind());
+        assertEquals(18L, drama.id());
+        assertEquals(true, none.none());
+        assertEquals(true, invalid.all());
     }
 }

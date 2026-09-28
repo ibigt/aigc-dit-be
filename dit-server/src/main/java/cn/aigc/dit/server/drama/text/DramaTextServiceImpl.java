@@ -5,6 +5,7 @@ import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDurations;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,7 +49,7 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final ObjectMapper LENIENT_MAPPER = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .configure(JsonParser.Feature.ALLOW_COMMENTS, true)
-            .configure(JsonParser.Feature.ALLOW_TRAILING_COMMA, true)
+            .configure(JsonReadFeature.ALLOW_TRAILING_COMMA.mappedFeature(), true)
             .configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true)
             .configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
 
@@ -102,10 +103,12 @@ public class DramaTextServiceImpl implements DramaTextService {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
                     "项目未绑定文本模型，请先在基础信息中选择文本模型");
         }
+        TextBillingSession billing = openBilling(seriesId, "SCRIPT_PARSE");
         long started = System.nanoTime();
         log.info("[drama-text] 分场开始 seriesId={} rawLength={}", seriesId, raw == null ? 0 : raw.length());
         try {
-            ScriptDoc result = record(seriesId, ENGINE_LLM, llmParse(seriesId, raw));
+            ScriptDoc result = record(seriesId, ENGINE_LLM, llmParse(seriesId, raw, billing));
+            gateway.settleBilling(billing);
             log.info("[drama-text] 分场完成 seriesId={} scenes={} elapsedMs={}",
                     seriesId, result.getScenes() == null ? 0 : result.getScenes().size(), elapsedMs(started));
             return result;
@@ -143,13 +146,14 @@ public class DramaTextServiceImpl implements DramaTextService {
             log.warn("[drama-text] 文本模型不可用，保留确定性资产骨架 seriesId={} error={}", seriesId, e.getMessage());
             return skeleton;
         }
+        TextBillingSession billing = openBilling(seriesId, "ASSET_ENRICH");
         List<AssetDraftList.AssetDraft> assets = skeleton.getAssets();
         List<int[]> ranges = new ArrayList<>();
         for (int from = 0; from < assets.size(); from += ASSET_ENRICHMENT_BATCH_SIZE) {
             ranges.add(new int[]{from, Math.min(from + ASSET_ENRICHMENT_BATCH_SIZE, assets.size())});
         }
         if (ranges.size() == 1) {
-            enrichAssetBatch(seriesId, script, assets, ranges.get(0)[0], ranges.get(0)[1]);
+            enrichAssetBatch(seriesId, script, assets, ranges.get(0)[0], ranges.get(0)[1], billing);
         } else {
             int workers = Math.min(ASSET_ENRICHMENT_CONCURRENCY, ranges.size());
             ExecutorService pool = Executors.newFixedThreadPool(workers);
@@ -158,7 +162,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                 for (int[] range : ranges) {
                     int from = range[0];
                     int to = range[1];
-                    futures.add(pool.submit(() -> enrichAssetBatch(seriesId, script, assets, from, to)));
+                    futures.add(pool.submit(() -> enrichAssetBatch(seriesId, script, assets, from, to, billing)));
                 }
                 for (Future<?> future : futures) {
                     try {
@@ -184,19 +188,21 @@ public class DramaTextServiceImpl implements DramaTextService {
                 }
             }
         }
+        gateway.settleBilling(billing);
         log.info("[drama-text] 资产增强完成 seriesId={} assets={} elapsedMs={}",
                 seriesId, assets.size(), elapsedMs(started));
         return skeleton;
     }
 
     private void enrichAssetBatch(
-            long seriesId, ScriptDoc script, List<AssetDraftList.AssetDraft> assets, int from, int to) {
+            long seriesId, ScriptDoc script, List<AssetDraftList.AssetDraft> assets, int from, int to,
+            TextBillingSession billing) {
         AssetDraftList batch = new AssetDraftList();
         batch.setAssets(new ArrayList<>(assets.subList(from, to)));
         try {
             AssetDraftList enriched = attemptJson(seriesId, DramaTextPrompts.assetSystem(),
                     DramaTextPrompts.assetEnrichmentUser(toJson(script), toJson(batch)),
-                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 16384);
+                    content -> normalizeAssets(readList(content, AssetDraftList.class)), "AssetDraftList", 16384, billing);
             mergeAssetEnrichment(batch, enriched);
         } catch (RuntimeException e) {
             log.warn("[drama-text] 资产批次增强失败 seriesId={} from={} to={} error={}",
@@ -267,13 +273,18 @@ public class DramaTextServiceImpl implements DramaTextService {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
                     "项目未绑定文本模型，请先在基础信息中选择文本模型");
         }
+        TextBillingSession billing = openBilling(seriesId, "SHOT_DRAFT");
         long started = System.nanoTime();
         log.info("[drama-text] 分镜草稿开始 seriesId={} scenes={} assets={} durationSec={}",
                 seriesId, script.getScenes().size(), safe(assetNames).size(), duration);
         try {
-            ShotDraftList drafts = llmDraftShots(seriesId, script, safe(assetNames), duration, episodeBudgetSec);
+            ShotDraftList drafts = llmDraftShots(
+                    seriesId, script, safe(assetNames), duration, episodeBudgetSec, billing);
             int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
+
             ShotDraftList result = ShotDraftMinimizer.minimize(drafts, DramaContract.MAX_DURATION_SEC);
+            gateway.settleBilling(billing);
+
             log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
                     seriesId, before, result.getShots() == null ? 0 : result.getShots().size(), elapsedMs(started));
             return result;
@@ -293,17 +304,22 @@ public class DramaTextServiceImpl implements DramaTextService {
         return gateway.resolve(seriesId).isPresent();
     }
 
-    private ScriptDoc llmParse(long seriesId, String raw) {
+    private TextBillingSession openBilling(long seriesId, String operation) {
+        TextBillingSession session = gateway.openBilling(seriesId, operation);
+        return session == null ? TextBillingSession.noop() : session;
+    }
+
+    private ScriptDoc llmParse(long seriesId, String raw, TextBillingSession billing) {
         List<String> chunks = DramaTextChunker.packRawChunks(raw);
         if (chunks.size() <= 1) {
-            return parseRawChunk(seriesId, raw, 1, 1);
+            return parseRawChunk(seriesId, raw, 1, 1, billing);
         }
         log.info("[drama-text] 分场分片 seriesId={} chunks={} rawLength={}",
                 seriesId, chunks.size(), raw == null ? 0 : raw.length());
-        return mergeParsedChunks(seriesId, chunks);
+        return mergeParsedChunks(seriesId, chunks, billing);
     }
 
-    private ScriptDoc mergeParsedChunks(long seriesId, List<String> chunks) {
+    private ScriptDoc mergeParsedChunks(long seriesId, List<String> chunks, TextBillingSession billing) {
         ScriptDoc merged = new ScriptDoc();
         List<ScriptDoc.Scene> scenes = new ArrayList<>();
         int total = Math.max(1, chunks.size());
@@ -312,7 +328,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         for (int i = 0; i < chunks.size(); i++) {
             int chunkIndex = i + 1;
             try {
-                ScriptDoc part = parseRawChunk(seriesId, chunks.get(i), chunkIndex, total);
+                ScriptDoc part = parseRawChunk(seriesId, chunks.get(i), chunkIndex, total, billing);
                 if (scenes.isEmpty()) {
                     merged.setTitle(part.getTitle());
                     merged.setLogline(part.getLogline());
@@ -344,7 +360,8 @@ public class DramaTextServiceImpl implements DramaTextService {
      * 解析一片原文。截断或合同失败且仍可细拆时再切；禁止把残缺大输出塞进 length-repair。
      * 仅影响分场；拆镜路径不经过此处。
      */
-    private ScriptDoc parseRawChunk(long seriesId, String raw, int chunkIndex, int chunkTotal) {
+    private ScriptDoc parseRawChunk(long seriesId, String raw, int chunkIndex, int chunkTotal,
+                                    TextBillingSession billing) {
         String user = chunkTotal <= 1
                 ? DramaTextPrompts.scriptUser(raw)
                 : DramaTextPrompts.scriptUserChunk(raw, chunkIndex, chunkTotal);
@@ -353,17 +370,18 @@ public class DramaTextServiceImpl implements DramaTextService {
                     seriesId, chunkIndex, chunkTotal, raw == null ? 0 : raw.length());
             return attemptJson(seriesId, DramaTextPrompts.scriptSystem(), user,
                     DramaTextServiceImpl::readScript, "ScriptDoc", 16384,
-                    TruncationPolicy.BUMP_ONLY_NO_REPAIR);
+                    TruncationPolicy.BUMP_ONLY_NO_REPAIR, billing);
         } catch (TruncatedOutputException truncated) {
-            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, truncated.getMessage());
+            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, truncated.getMessage(), billing);
         } catch (BizException contractFailed) {
             // MiniMax 常见：finish_reason=stop 但 JSON 非法/空 scenes，同样尝试细拆。
-            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, contractFailed.getMessage());
+            return resplitParseChunk(seriesId, raw, chunkIndex, chunkTotal, contractFailed.getMessage(), billing);
         }
     }
 
     private ScriptDoc resplitParseChunk(
-            long seriesId, String raw, int chunkIndex, int chunkTotal, String reason) {
+            long seriesId, String raw, int chunkIndex, int chunkTotal, String reason,
+            TextBillingSession billing) {
         List<String> finer = DramaTextChunker.packRawChunksAfterTruncation(raw);
         if (finer.size() <= 1) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST,
@@ -371,7 +389,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         log.warn("[drama-text] 分场失败后细拆重跑 seriesId={} chunk={}/{} length={} -> subChunks={} reason={}",
                 seriesId, chunkIndex, chunkTotal, raw == null ? 0 : raw.length(), finer.size(), reason);
-        return mergeParsedChunks(seriesId, finer);
+        return mergeParsedChunks(seriesId, finer, billing);
     }
 
     private ShotDraftList llmDraftShots(
@@ -379,7 +397,8 @@ public class DramaTextServiceImpl implements DramaTextService {
             ScriptDoc script,
             List<String> assetNames,
             int duration,
-            Integer episodeBudgetSec) {
+            Integer episodeBudgetSec,
+            TextBillingSession billing) {
         List<List<ScriptDoc.Scene>> packs = DramaTextChunker.packScenes(script.getScenes());
         log.info("[drama-text] 分镜分片 seriesId={} chunks={} scenes={} concurrency={}",
                 seriesId, packs.size(), script.getScenes().size(),
@@ -392,7 +411,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             try {
                 parts[0] = draftShotPack(
                         seriesId, script, assetNames, duration, episodeBudgetSec,
-                        packs.get(0), 1, chunkTotal);
+                        packs.get(0), 1, chunkTotal, billing);
             } catch (RuntimeException e) {
                 errors[0] = e;
                 log.warn("[drama-text] 分镜分片失败已跳过 seriesId={} chunk={}/{} error={}",
@@ -409,7 +428,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                         try {
                             parts[idx] = draftShotPack(
                                     seriesId, script, assetNames, duration, episodeBudgetSec,
-                                    packs.get(idx), idx + 1, chunkTotal);
+                                    packs.get(idx), idx + 1, chunkTotal, billing);
                         } catch (RuntimeException e) {
                             errors[idx] = e;
                             log.warn("[drama-text] 分镜分片失败已跳过 seriesId={} chunk={}/{} error={}",
@@ -481,7 +500,8 @@ public class DramaTextServiceImpl implements DramaTextService {
             Integer episodeBudgetSec,
             List<ScriptDoc.Scene> pack,
             int chunkIndex,
-            int chunkTotal) {
+            int chunkTotal,
+            TextBillingSession billing) {
         ScriptDoc chunkDoc = scriptChunk(script, pack);
         String assets = String.join("、", assetsForScenes(pack, assetNames));
         String user = chunkTotal <= 1 && pack.size() == script.getScenes().size()
@@ -495,7 +515,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                     content -> clampDurations(
                             normalizeShots(readShots(content), chunkDoc, assetNames),
                             duration),
-                    "ShotDraftList", 16384, TruncationPolicy.BUMP_ONLY_NO_REPAIR);
+                    "ShotDraftList", 16384, TruncationPolicy.BUMP_ONLY_NO_REPAIR, billing);
             remapShotChunk(part, pack);
             return part.getShots() == null ? List.of() : part.getShots();
         } catch (TruncatedOutputException truncated) {
@@ -508,9 +528,9 @@ public class DramaTextServiceImpl implements DramaTextService {
                     seriesId, chunkIndex, chunkTotal, pack.size(), mid, pack.size() - mid);
             List<ShotDraftList.ShotDraft> shots = new ArrayList<>();
             shots.addAll(draftShotPack(seriesId, script, assetNames, duration, episodeBudgetSec,
-                    pack.subList(0, mid), chunkIndex, chunkTotal));
+                    pack.subList(0, mid), chunkIndex, chunkTotal, billing));
             shots.addAll(draftShotPack(seriesId, script, assetNames, duration, episodeBudgetSec,
-                    pack.subList(mid, pack.size()), chunkIndex, chunkTotal));
+                    pack.subList(mid, pack.size()), chunkIndex, chunkTotal, billing));
             return shots;
         }
     }
@@ -549,13 +569,15 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     private <T> T attemptJson(long seriesId, String system, String user,
-                              java.util.function.Function<String, T> reader, String what, int maxTokens) {
-        return attemptJson(seriesId, system, user, reader, what, maxTokens, TruncationPolicy.BUMP_AND_REPAIR);
+                              java.util.function.Function<String, T> reader, String what, int maxTokens,
+                              TextBillingSession billing) {
+        return attemptJson(seriesId, system, user, reader, what, maxTokens,
+                TruncationPolicy.BUMP_AND_REPAIR, billing);
     }
 
     private <T> T attemptJson(long seriesId, String system, String user,
                               java.util.function.Function<String, T> reader, String what, int maxTokens,
-                              TruncationPolicy truncationPolicy) {
+                              TruncationPolicy truncationPolicy, TextBillingSession billing) {
         String requestUser = user;
         String lastReason = "输出未通过合同校验";
         int tokens = maxTokens;
@@ -570,6 +592,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             String content = response.getContent();
             T value = reader.apply(content);
             if (value != null) {
+                billing.record(response);
                 if (attempt > 1) {
                     log.info("[drama-text] {} 第 {} 次输出符合合同 seriesId={}", what, attempt, seriesId);
                 }
