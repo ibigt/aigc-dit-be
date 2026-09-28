@@ -124,7 +124,7 @@ public final class CaptionAligner {
         for (int i = 0; i < phrases.size(); i++) {
             long end = i == phrases.size() - 1
                     ? segment.endMs()
-                    : segment.startMs() + Math.max(1L, Math.round(
+                    : cursor + Math.max(1L, Math.round(
                     segment.durationMs() * weight(phrases.get(i)) / (double) totalWeight));
             end = Math.min(segment.endMs(), end);
             if (end > cursor) {

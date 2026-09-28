@@ -25,6 +25,10 @@ public class AssVideoCaptionBurner {
     private final GenerateProperties properties;
 
     public String burn(String storageKey, List<CaptionCue> cues) {
+        return burn(storageKey, cues, null);
+    }
+
+    public String burn(String storageKey, List<CaptionCue> cues, String version) {
         if (!StringUtils.hasText(storageKey) || cues == null || cues.isEmpty()
                 || alreadyCaptioned(storageKey) || !isVideo(storageKey)) {
             return storageKey;
@@ -50,7 +54,8 @@ public class AssVideoCaptionBurner {
             if (!Files.isRegularFile(output) || Files.size(output) < 32) {
                 return storageKey;
             }
-            String captionKey = toCaptionKey(storageKey);
+            String captionKey = StringUtils.hasText(version)
+                    ? toCaptionKey(storageKey, version) : toCaptionKey(storageKey);
             objectStorage.put(captionKey, Files.readAllBytes(output), "video/mp4");
             log.info("burned ASS captions into {} -> {}", storageKey, captionKey);
             return captionKey;
@@ -63,17 +68,22 @@ public class AssVideoCaptionBurner {
     }
 
     static String toCaptionKey(String storageKey) {
+        return toCaptionKey(storageKey, null);
+    }
+
+    static String toCaptionKey(String storageKey, String version) {
         int dot = storageKey.lastIndexOf('.');
         String base = dot > 0 ? storageKey.substring(0, dot) : storageKey;
         String ext = dot > 0 ? storageKey.substring(dot) : ".mp4";
-        return base + "-caption" + ext;
+        String suffix = StringUtils.hasText(version) ? "-" + version : "-caption";
+        return base + suffix + ext;
     }
 
     static boolean alreadyCaptioned(String storageKey) {
         String lower = storageKey.toLowerCase(Locale.ROOT);
         int slash = Math.max(lower.lastIndexOf('/'), lower.lastIndexOf('\\'));
         String name = slash >= 0 ? lower.substring(slash + 1) : lower;
-        return name.contains("-caption.");
+        return name.contains("-caption");
     }
 
     static boolean isVideo(String storageKey) {

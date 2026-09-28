@@ -31,4 +31,13 @@ class CaptionAlignerTest {
                 (cue.startMs() >= 720 && cue.endMs() <= 1200)
                         || (cue.startMs() >= 1800 && cue.endMs() <= 2400)));
     }
+
+    @Test
+    void splitsMultiplePhrasesAcrossOneSpeechIntervalWithoutDroppingAny() {
+        assertEquals(List.of(
+                new SubtitleCue(1000, 3000, "甲，"),
+                new SubtitleCue(3000, 5000, "乙，"),
+                new SubtitleCue(5000, 7000, "丙。")),
+                CaptionAligner.align("旁白：甲，乙，丙。", List.of(new SpeechSegment(1000, 7000))));
+    }
 }

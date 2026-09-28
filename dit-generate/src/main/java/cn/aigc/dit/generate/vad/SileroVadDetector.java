@@ -57,19 +57,26 @@ public class SileroVadDetector implements VoiceActivityDetector {
             return List.of();
         }
         try {
-            return normalize(runModel(samples, sampleRate), samples.length, sampleRate);
+            RunResult inference = runModel(samples, sampleRate);
+            List<SpeechSegment> segments = normalize(inference.segments(), samples.length, sampleRate);
+            log.info("Silero VAD analyzed {} frames: maxProbability={}, aboveThreshold={}, segments={}",
+                    inference.frameCount(), inference.maxProbability(), inference.activeFrames(), segments.size());
+            return segments;
         } catch (OrtException e) {
             throw new IllegalStateException("Silero VAD inference failed", e);
         }
     }
 
-    private List<SpeechSegment> runModel(float[] samples, int sampleRate) throws OrtException {
+    private RunResult runModel(float[] samples, int sampleRate) throws OrtException {
         OrtSession current = session();
         SetNames names = SetNames.resolve(current);
         int frameSamples = Math.max(128, properties.getFrameSamples());
         float[] state = new float[2 * 1 * 128];
         List<SpeechSegment> raw = new ArrayList<>();
         long openStart = -1L;
+        float maxProbability = 0F;
+        int activeFrames = 0;
+        int frameCount = 0;
         for (int offset = 0; offset < samples.length; offset += frameSamples) {
             float[] frame = new float[frameSamples];
             int copy = Math.min(frameSamples, samples.length - offset);
@@ -86,6 +93,8 @@ public class SileroVadDetector implements VoiceActivityDetector {
                 inputs.put(names.sampleRate(), sampleRateTensor);
                 try (OrtSession.Result result = current.run(inputs)) {
                     float probability = scalar(result.get(0).getValue());
+                    maxProbability = Math.max(maxProbability, probability);
+                    frameCount++;
                     if (result.size() > 1) {
                         float[] nextState = flatten(result.get(1).getValue());
                         if (nextState.length == state.length) {
@@ -94,6 +103,7 @@ public class SileroVadDetector implements VoiceActivityDetector {
                     }
                     long frameStart = Math.round(offset * 1000D / sampleRate);
                     if (probability >= properties.getThreshold()) {
+                        activeFrames++;
                         if (openStart < 0) {
                             openStart = frameStart;
                         }
@@ -108,7 +118,7 @@ public class SileroVadDetector implements VoiceActivityDetector {
             long end = Math.round(samples.length * 1000D / sampleRate);
             raw.add(new SpeechSegment(openStart, Math.max(openStart + 1, end)));
         }
-        return raw;
+        return new RunResult(raw, maxProbability, activeFrames, frameCount);
     }
 
     private OrtSession session() throws OrtException {
@@ -256,5 +266,8 @@ public class SileroVadDetector implements VoiceActivityDetector {
                     .findFirst()
                     .orElse(null);
         }
+    }
+
+    private record RunResult(List<SpeechSegment> segments, float maxProbability, int activeFrames, int frameCount) {
     }
 }

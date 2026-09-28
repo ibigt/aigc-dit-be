@@ -30,15 +30,15 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class DramaShotCaptionPostProcessService {
 
-    public static final String PROCESSOR_VERSION = "caption-3";
+    public static final String PROCESSOR_VERSION = "caption-6";
 
     private final DramaShotCaptionMapper captionMapper;
     private final DramaShotMapper shotMapper;
     private final VoiceActivityDetector voiceActivityDetector;
     private final ForcedAlignmentTimingProvider forcedAlignmentTimingProvider;
     private final VadTimingProvider vadTimingProvider;
-    private final EstimatedTimingProvider estimatedTimingProvider;
     private final AssVideoCaptionBurner assVideoCaptionBurner;
+    private final DramaCaptionService dramaCaptionService;
     private final ObjectStorage storage;
     private final GenerateProperties generateProperties;
     private final ObjectMapper objectMapper;
@@ -89,13 +89,11 @@ public class DramaShotCaptionPostProcessService {
                     AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue());
             TimingResult forced = forcedAlignmentTimingProvider.provide(wav, shot.getDialogue(), speech);
             TimingResult timing = forced.usable() ? forced : vadTimingProvider.provide(wav, shot.getDialogue(), speech);
-            String fallbackReason = forced.usable() ? null : forced.failureReason();
-            if (!timing.usable()) {
-                TimingResult estimated = estimatedTimingProvider.provide(wav, shot.getDialogue(), speech);
-                if (estimated.usable()) {
-                    timing = estimated;
-                    fallbackReason = fallbackReason == null ? "VAD_NO_CAPTIONS" : fallbackReason + ";VAD_NO_CAPTIONS";
-                }
+            String fallbackReason = forced.usable()
+                    ? (speech.isEmpty() ? "VAD_EMPTY_FULL_AUDIO_ALIGNMENT" : null)
+                    : forced.failureReason();
+            if (!timing.usable() && !speech.isEmpty()) {
+                fallbackReason = fallbackReason == null ? "VAD_NO_CAPTIONS" : fallbackReason + ";VAD_NO_CAPTIONS";
             }
             List<SubtitleCue> captions = timing.captions();
             long durationMs = durationMs(wav, speech);
@@ -103,20 +101,26 @@ public class DramaShotCaptionPostProcessService {
                     timing.sourceType(), PROCESSOR_VERSION, durationMs, speech, captions,
                     timing.confidence(), timing.coverage(), fallbackReason, timing.modelVersion(),
                     timing.tokens(), normalizedText.rawText(), normalizedText.normalizedText());
-            String subtitleKey = siblingKey(task.getSourceVideoKey(), "-subtitle", ".json");
-            String audioKey = siblingKey(task.getSourceVideoKey(), "-audio", ".wav");
+            String subtitleKey = siblingKey(task.getSourceVideoKey(), "-" + PROCESSOR_VERSION + "-subtitle", ".json");
+            String audioKey = siblingKey(task.getSourceVideoKey(), "-" + PROCESSOR_VERSION + "-audio", ".wav");
             storage.put(audioKey, Files.readAllBytes(wav), "audio/wav");
             storage.put(subtitleKey, objectMapper.writeValueAsBytes(document), "application/json");
             task.setAudioKey(audioKey);
             task.setSubtitleJsonKey(subtitleKey);
             if (captions.isEmpty()) {
-                task.setStatus("NO_SPEECH");
-                task.setErrorMessage(null);
-                captionMapper.updateById(task);
+                if (speech.isEmpty()) {
+                    task.setStatus("NO_SPEECH");
+                    task.setErrorMessage(null);
+                    captionMapper.updateById(task);
+                    refreshFilmCaptions(task);
+                } else {
+                    fail(task, fallbackReason);
+                }
                 return;
             }
             List<CaptionCue> burnCues = CaptionAligner.toCaptionCues(captions);
-            String captionVideoKey = assVideoCaptionBurner.burn(task.getSourceVideoKey(), burnCues);
+            String captionVideoKey = assVideoCaptionBurner.burn(
+                    task.getSourceVideoKey(), burnCues, PROCESSOR_VERSION);
             if (!StringUtils.hasText(captionVideoKey) || captionVideoKey.equals(task.getSourceVideoKey())) {
                 fail(task, "ASS 字幕视频生成失败");
                 return;
@@ -125,6 +129,7 @@ public class DramaShotCaptionPostProcessService {
             task.setStatus("READY");
             task.setErrorMessage(null);
             captionMapper.updateById(task);
+            refreshFilmCaptions(task);
         } catch (Exception e) {
             log.warn("shot caption post-process failed shot={} source={}", task.getShotId(), task.getSourceVideoKey(), e);
             fail(task, e.getMessage() == null ? "字幕后处理失败" : e.getMessage());
@@ -146,6 +151,14 @@ public class DramaShotCaptionPostProcessService {
         task.setStatus("FAILED");
         task.setErrorMessage(message == null ? "字幕后处理失败" : message);
         captionMapper.updateById(task);
+    }
+
+    private void refreshFilmCaptions(DramaShotCaption task) {
+        try {
+            dramaCaptionService.refreshEpisodeVttForShot(task.getShotId(), task.getSourceVideoKey());
+        } catch (Exception e) {
+            log.warn("refresh assembled film captions failed shot={}", task.getShotId(), e);
+        }
     }
 
     private boolean enabled() {

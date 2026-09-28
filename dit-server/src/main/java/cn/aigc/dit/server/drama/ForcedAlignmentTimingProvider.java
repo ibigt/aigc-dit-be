@@ -21,6 +21,8 @@ import java.util.stream.Stream;
 @Component
 public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
 
+    private static final double MIN_CONFIDENCE_WITHOUT_VAD = 0.25D;
+
     private final ForcedAlignmentService alignmentService;
     private final AlignmentConfidenceEvaluator confidenceEvaluator;
     private final GenerateProperties properties;
@@ -37,7 +39,7 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
     public TimingResult provide(Path audioFile, String dialogue, List<SpeechSegment> speechSegments) {
         GenerateProperties.ForcedAlignment config = properties.getForcedAlignment();
         if (config == null || !config.isEnabled()) return failure("FORCED_ALIGNMENT_DISABLED");
-        if (speechSegments == null || speechSegments.isEmpty()) return failure("NO_SPEECH_SEGMENTS");
+        boolean vadEmpty = speechSegments == null || speechSegments.isEmpty();
         List<String> phrases = CaptionAligner.phrases(dialogue);
         if (phrases.isEmpty()) return failure("TRANSCRIPT_EMPTY");
         String rawText = String.join("", phrases);
@@ -45,12 +47,17 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
         if (normalizedText.isBlank()) return failure("TRANSCRIPT_EMPTY");
 
         Path cropped = null;
-        long cropStartMs = speechSegments.get(0).startMs();
-        long cropEndMs = speechSegments.get(speechSegments.size() - 1).endMs();
+        long cropStartMs = vadEmpty ? 0L : speechSegments.get(0).startMs();
+        long cropEndMs = 0L;
         try {
             Pcm16Audio audio = Pcm16Audio.read(audioFile, config.getSampleRate());
             int start = (int) Math.min(audio.samples().length,
                     Math.max(0L, Math.round(cropStartMs * config.getSampleRate() / 1000D)));
+            if (vadEmpty) {
+                cropEndMs = Math.round(audio.samples().length * 1000D / config.getSampleRate());
+            } else {
+                cropEndMs = speechSegments.get(speechSegments.size() - 1).endMs();
+            }
             int end = (int) Math.min(audio.samples().length,
                     Math.max(start + 1L, Math.round(cropEndMs * config.getSampleRate() / 1000D)));
             if (end <= start) return failure("INVALID_VAD_CROP");
@@ -63,6 +70,9 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
                     result, normalizedText.codePointCount(0, normalizedText.length()),
                     Math.max(1L, Math.round(crop.length * 1000D / config.getSampleRate())));
             if (!decision.accepted()) return failure(decision.reason(), result);
+            if (vadEmpty && result.confidence() < MIN_CONFIDENCE_WITHOUT_VAD) {
+                return failure("ALIGNMENT_LOW_CONFIDENCE_WITHOUT_VAD", result);
+            }
 
             List<AlignmentToken> absoluteTokens = result.tokens().stream()
                     .map(token -> new AlignmentToken(token.text(), token.startMs() + cropStartMs,
@@ -70,7 +80,8 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
                     .toList();
             List<SubtitleCue> captions = captions(phrases, absoluteTokens);
             if (captions.isEmpty()) return failure("ALIGNMENT_NO_CAPTIONS", result);
-            return new TimingResult("FORCED_ALIGNMENT", result.confidence(), result.coverage(), captions,
+            return new TimingResult(vadEmpty ? "FORCED_ALIGNMENT_FULL_AUDIO" : "FORCED_ALIGNMENT",
+                    result.confidence(), result.coverage(), captions,
                     absoluteTokens, null, result.modelVersion());
         } catch (Exception e) {
             log.warn("forced-alignment timing provider failed for {}", audioFile, e);

@@ -122,7 +122,8 @@ trap cleanup EXIT
 
 cp "$JAR" "$LOCAL_STAGE/dit-server.jar"
 cp "$ROOT/deploy/Dockerfile.prebuilt" "$LOCAL_STAGE/Dockerfile.prebuilt"
-tar -czf "$ARCHIVE" -C "$LOCAL_STAGE" dit-server.jar Dockerfile.prebuilt
+cp "$ROOT/docker-compose.yml" "$LOCAL_STAGE/docker-compose.yml"
+tar -czf "$ARCHIVE" -C "$LOCAL_STAGE" dit-server.jar Dockerfile.prebuilt docker-compose.yml
 
 echo "[2/4] 上传发布包到 $DEPLOY_USER@$DEPLOY_HOST..."
 "${SCP[@]}" "$ARCHIVE" "$DEPLOY_USER@$DEPLOY_HOST:$REMOTE_ARCHIVE"
@@ -148,17 +149,22 @@ docker image inspect "$image" >/dev/null 2>&1 || {
 }
 
 tar -xzf "$archive" -C "$stage"
+compose_backup="$backend_root/docker-compose.yml.pre-deploy-$(date +%Y%m%d%H%M%S).bak"
+cp -a "$backend_root/docker-compose.yml" "$compose_backup"
+install -m 0644 "$stage/docker-compose.yml" "$backend_root/docker-compose.yml"
+docker compose --project-name aigc-dit -f "$backend_root/docker-compose.yml" config -q
 docker build --build-arg "BASE_IMAGE=$image" -f "$stage/Dockerfile.prebuilt" -t "$image" "$stage"
-docker compose -f "$backend_root/docker-compose.yml" up -d --no-deps --no-build --force-recreate backend
+docker compose --project-name aigc-dit -f "$backend_root/docker-compose.yml" up -d --no-deps --no-build --force-recreate backend
 
 for ((i=1; i<=36; i++)); do
-  status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' dit-backend 2>/dev/null || true)"
+  container_id="$(docker compose --project-name aigc-dit -f "$backend_root/docker-compose.yml" ps -q backend)"
+  status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
   if [[ "$status" == "healthy" ]]; then
     echo "后端健康检查通过。"
     exit 0
   fi
   if [[ "$status" == "unhealthy" || "$status" == "exited" || "$status" == "dead" ]]; then
-    docker compose -f "$backend_root/docker-compose.yml" logs --tail=100 backend
+    docker compose --project-name aigc-dit -f "$backend_root/docker-compose.yml" logs --tail=100 backend
     echo "后端启动失败：$status" >&2
     exit 1
   fi
@@ -166,7 +172,7 @@ for ((i=1; i<=36; i++)); do
   sleep 5
 done
 
-docker compose -f "$backend_root/docker-compose.yml" logs --tail=100 backend
+docker compose --project-name aigc-dit -f "$backend_root/docker-compose.yml" logs --tail=100 backend
 echo "后端健康检查超时。" >&2
 exit 1
 REMOTE_SCRIPT

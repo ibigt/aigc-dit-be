@@ -122,7 +122,7 @@ public class CharsiuForcedAlignmentService implements ForcedAlignmentService {
             return AlignmentResult.failure("NOT_ENOUGH_SPEECH_FRAMES", version);
         }
 
-        int[] path = forcedAlign(probabilities, vocabSize, nonSilenceFrames.size(), target.phoneIds());
+        int[] path = forcedAlign(probabilities, vocabSize, nonSilenceFrames, target.phoneIds());
         int phoneCount = target.phoneIds().size();
         int[] startFrame = new int[phoneCount];
         int[] endFrame = new int[phoneCount];
@@ -173,13 +173,15 @@ public class CharsiuForcedAlignmentService implements ForcedAlignmentService {
     }
 
     /** DTW equivalent to charsiu-js forcedAlign: stay or advance one phone. */
-    private static int[] forcedAlign(float[] probabilities, int vocabSize, int frames, List<Integer> phoneIds) {
+    static int[] forcedAlign(float[] probabilities, int vocabSize, List<Integer> frameIndices, List<Integer> phoneIds) {
+        int frames = frameIndices.size();
         int phones = phoneIds.size();
         double[] scores = new double[frames * phones];
         byte[] back = new byte[frames * phones];
         Arrays.fill(scores, Double.POSITIVE_INFINITY);
-        scores[0] = -probabilities[phoneIds.get(0)];
+        scores[0] = -probabilities[frameIndices.get(0) * vocabSize + phoneIds.get(0)];
         for (int frame = 1; frame < frames; frame++) {
+            int sourceFrame = frameIndices.get(frame);
             int maxPhone = Math.min(frame, phones - 1);
             for (int phone = 0; phone <= maxPhone; phone++) {
                 double stay = scores[(frame - 1) * phones + phone];
@@ -187,11 +189,11 @@ public class CharsiuForcedAlignmentService implements ForcedAlignmentService {
                         ? scores[(frame - 1) * phones + phone - 1] : Double.POSITIVE_INFINITY;
                 if (advance <= stay) {
                     scores[frame * phones + phone] = advance
-                            - probabilities[frame * vocabSize + phoneIds.get(phone)];
+                            - probabilities[sourceFrame * vocabSize + phoneIds.get(phone)];
                     back[frame * phones + phone] = 1;
                 } else if (stay < Double.POSITIVE_INFINITY) {
                     scores[frame * phones + phone] = stay
-                            - probabilities[frame * vocabSize + phoneIds.get(phone)];
+                            - probabilities[sourceFrame * vocabSize + phoneIds.get(phone)];
                 }
             }
         }

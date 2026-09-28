@@ -37,6 +37,10 @@ public final class DramaCaptionVtt {
                 offset += duration;
             }
         }
+        return renderCues(timeline);
+    }
+
+    static String renderCues(List<CaptionCue> timeline) {
         StringBuilder vtt = new StringBuilder("WEBVTT\n\n");
         for (int i = 0; i < timeline.size(); i++) {
             CaptionCue cue = timeline.get(i);

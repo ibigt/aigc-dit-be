@@ -1713,6 +1713,15 @@ public class DramaStoryboardService {
         resp.setVideoKey(shot.getVideoKey());
         resp.setVideoUrl(MediaUrls.of(shot.getVideoKey()));
         if (captionPostProcessService != null) {
+            // A processor upgrade also needs to schedule already generated shots.
+            if (StringUtils.hasText(shot.getVideoKey())) {
+                try {
+                    captionPostProcessService.enqueue(
+                            shot.getId(), shot.getGenTaskId(), shot.getUserId(), shot.getVideoKey());
+                } catch (RuntimeException e) {
+                    log.warn("enqueue existing shot caption failed, shot={}", shot.getId(), e);
+                }
+            }
             DramaShotCaption caption = captionPostProcessService.findForSource(shot.getId(), shot.getVideoKey());
             if (caption != null) {
                 resp.setCaptionStatus(caption.getStatus());
