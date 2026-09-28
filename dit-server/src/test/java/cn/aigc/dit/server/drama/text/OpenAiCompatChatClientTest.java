@@ -114,6 +114,25 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void jsonChatKeepsInputRoomInsideContextWindow() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://example.com/v1", "sk", "32k-model",
+                new TextChatRequest("系统提示", "用户输入", true, 32768));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertTrue(sent.path("max_tokens").asInt() < 32768,
+                "输出预算必须给系统提示词和用户输入预留上下文空间");
+    }
+
+    @Test
     void modelOptionsCanUsePlainJsonAndAlternateTokenParameter() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         ObjectMapper mapper = new ObjectMapper();
