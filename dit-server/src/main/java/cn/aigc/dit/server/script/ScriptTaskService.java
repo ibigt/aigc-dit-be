@@ -92,7 +92,9 @@ public class ScriptTaskService {
         task.setMode(mode);
         task.setStatus("DRAFT");
         task.setGenre(trimToNull(req.getGenre()));
-        task.setTargetEpisodes(req.getTargetEpisodes() == null ? 6 : req.getTargetEpisodes());
+        task.setTargetEpisodes("review".equals(mode)
+                ? null
+                : (req.getTargetEpisodes() == null ? 6 : req.getTargetEpisodes()));
         task.setModelId(resolveModelId(req.getModelId()));
         task.setInputText(req.getInputText());
         task.setDocument("");
@@ -130,6 +132,7 @@ public class ScriptTaskService {
     @Transactional
     public ScriptTaskResp complete(Long id) {
         ScriptTask task = requireTask(id);
+        ensureCreativeTask(task);
         if (!StringUtils.hasText(task.getDocument())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写剧本正文");
         }
@@ -150,6 +153,7 @@ public class ScriptTaskService {
     @Transactional
     public ScriptTaskResp repairStructure(Long id) {
         ScriptTask task = requireTask(id);
+        ensureCreativeTask(task);
         if (!StringUtils.hasText(task.getDocument())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成剧本正文");
         }
@@ -177,6 +181,7 @@ public class ScriptTaskService {
     @Transactional
     public ScriptTaskResp continueEpisode(Long id) {
         ScriptTask task = requireTask(id);
+        ensureCreativeTask(task);
         if (!StringUtils.hasText(task.getDocument())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写第1集正文");
         }
@@ -266,6 +271,9 @@ public class ScriptTaskService {
         if (!StringUtils.hasText(task.getInputText())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先输入创意、小说原文或待评估剧本");
         }
+        if ("review".equals(task.getMode())) {
+            return evaluate(task);
+        }
         task.setStatus("RUNNING");
         taskMapper.updateById(task);
         try {
@@ -347,6 +355,7 @@ public class ScriptTaskService {
     @Transactional
     public DramaSeriesResp createDrama(Long id) {
         ScriptTask task = requireTask(id);
+        ensureCreativeTask(task);
         if (task.getDramaSeriesId() != null) {
             return dramaService.getSeries(task.getDramaSeriesId());
         }
@@ -429,6 +438,102 @@ public class ScriptTaskService {
             case "review" -> "你是剧本开发顾问。使用人物弧光、黄金三秒钩子、情绪爽点、商业价值四项 Rubric 评估。所有字段必须输出，结果只能是 JSON。";
             default -> "你是专业短剧编剧，结果只能是 JSON。";
         };
+    }
+
+    private ScriptTaskResp evaluate(ScriptTask task) {
+        task.setStatus("RUNNING");
+        taskMapper.updateById(task);
+        try {
+            saveMessage(task, "user", initialSubmissionMessage(task), null);
+            String source = truncate(task.getInputText(), GENERATION_SOURCE_MAX_CHARS);
+            TextChatResult response = llmGateway.chat(task.getModelId(),
+                    new TextChatRequest(reviewSystemPrompt(), reviewPrompt(task, source), true,
+                            GENERATION_MAX_TOKENS));
+            Map<String, Object> result = normalizeReviewResult(parseResult(response.getContent()), response.getContent());
+            task.setResultJson(result);
+            task.setDocument("");
+            task.setStatus("SUCCEEDED");
+            taskMapper.updateById(task);
+            saveMessage(task, "assistant", evaluationMessage(result),
+                    "已从人物弧光、黄金三秒钩子、情绪爽点和商业价值四个维度完成剧本评估。");
+            return toResp(task, true);
+        } catch (RuntimeException ex) {
+            task.setStatus("FAILED");
+            taskMapper.updateById(task);
+            throw ex;
+        }
+    }
+
+    private String reviewSystemPrompt() {
+        return "你是专业短剧开发顾问，只负责评估用户提交的现有剧本。"
+                + "不得续写、改写或生成新的剧本正文，不得生成新的人物设定和分集大纲。"
+                + "必须基于原剧本内容给出可执行的修改建议，结果只能是严格 JSON。";
+    }
+
+    private String reviewPrompt(ScriptTask task, String source) {
+        String schema = "{\"evaluation\":{"
+                + "\"overall_score\":0,\"summary\":\"\","
+                + "\"dimensions\":["
+                + "{\"key\":\"character_arc\",\"name\":\"人物弧光\",\"score\":0,\"comment\":\"\",\"suggestions\":[]},"
+                + "{\"key\":\"hook\",\"name\":\"黄金三秒钩子\",\"score\":0,\"comment\":\"\",\"suggestions\":[]},"
+                + "{\"key\":\"emotion\",\"name\":\"情绪爽点\",\"score\":0,\"comment\":\"\",\"suggestions\":[]},"
+                + "{\"key\":\"commercial\",\"name\":\"商业价值\",\"score\":0,\"comment\":\"\",\"suggestions\":[]}],"
+                + "\"strengths\":[],\"risks\":[],\"priority_strategy\":[]}}";
+        return "请评估下面这份已有剧本。"
+                + "原稿没有提供目标集数时，不要自行假定集数；可以根据正文识别已完成的集数并写入 summary。"
+                + "四个维度各按 100 分制评分，overall_score 为四项平均分。"
+                + "每项必须说明判断依据，并给出具体修改建议；不要输出 script_markdown、opening_scene、characters 或 outline。"
+                + "输出 JSON Schema：" + schema
+                + "\n剧本：\n" + source;
+    }
+
+    private Map<String, Object> normalizeReviewResult(Map<String, Object> parsed, String raw) {
+        Map<String, Object> result = parsed == null ? new LinkedHashMap<>() : new LinkedHashMap<>(parsed);
+        Map<String, Object> evaluation = mapValue(result.get("evaluation"));
+        if (evaluation == null) {
+            evaluation = new LinkedHashMap<>();
+            evaluation.put("summary", raw == null ? "模型未返回结构化评估报告" : raw);
+        }
+        result.put("evaluation", evaluation);
+        result.remove("script_markdown");
+        result.remove("opening_scene");
+        result.remove("characters");
+        result.remove("outline");
+        return result;
+    }
+
+    private Map<String, Object> mapValue(Object value) {
+        if (!(value instanceof Map<?, ?> source)) return null;
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
+    }
+
+    private String evaluationMessage(Map<String, Object> result) {
+        Map<String, Object> evaluation = mapValue(result.get("evaluation"));
+        if (evaluation == null) return "评估已完成，请查看右侧评估报告。";
+        StringBuilder message = new StringBuilder("评估已完成\n\n");
+        Object score = evaluation.get("overall_score");
+        if (score != null) message.append("综合评分：").append(score).append(" / 100\n\n");
+        Object summary = evaluation.get("summary");
+        if (summary != null) message.append(summary).append("\n\n");
+        if (evaluation.get("dimensions") instanceof List<?> dimensions) {
+            for (Object item : dimensions) {
+                Map<String, Object> dimension = mapValue(item);
+                if (dimension == null) continue;
+                message.append(dimension.getOrDefault("name", "评估维度"));
+                if (dimension.get("score") != null) message.append("：").append(dimension.get("score")).append("分");
+                if (dimension.get("comment") != null) message.append("\n").append(dimension.get("comment"));
+                message.append("\n\n");
+            }
+        }
+        return message.toString().trim();
+    }
+
+    private void ensureCreativeTask(ScriptTask task) {
+        if ("review".equals(task.getMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "剧本评估任务只生成评估报告，不能续写、补全或创建短剧");
+        }
     }
 
     private String generationPrompt(ScriptTask task, String source) {
