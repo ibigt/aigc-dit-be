@@ -108,7 +108,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             }
             if (StringUtils.hasText(prompt) && (session.getTitle() == null || "未命名创作".equals(session.getTitle())
                     || "新建创作".equals(session.getTitle()))) {
-                session.setTitle(prompt.trim().length() > 12 ? prompt.trim().substring(0, 12) : prompt.trim());
+                session.setTitle(titleFromPrompt(prompt));
             }
             if (StringUtils.hasText(category)) {
                 session.setCategory(category);
@@ -119,10 +119,26 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         CreationSession session = new CreationSession();
         session.setUserId(userId);
         session.setCategory(category);
-        String title = prompt == null ? "未命名创作" : prompt.trim();
-        session.setTitle(title.length() > 12 ? title.substring(0, 12) : (title.isEmpty() ? "未命名创作" : title));
+        session.setTitle(titleFromPrompt(prompt));
         sessionMapper.insert(session);
         return session;
+    }
+
+    /** 会话标题：去掉模型侧 Picture/Video/Audio 锚点后再截取。 */
+    static String titleFromPrompt(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return "未命名创作";
+        }
+        String text = prompt
+                .replaceAll("(?i)[（(]\\s*<Picture\\s+\\d+>\\s*[)）]", " ")
+                .replaceAll("(?i)\\s*=\\s*<Picture\\s+\\d+>", " ")
+                .replaceAll("(?i)<(Picture|Video|Audio)\\s+\\d+>", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (text.isBlank()) {
+            return "未命名创作";
+        }
+        return text.length() > 12 ? text.substring(0, 12) : text;
     }
 
     public List<CreationItemResp> listMine(String category, String query, String project, OffsetDateTime from, OffsetDateTime to) {

@@ -1098,7 +1098,17 @@ public class GenerateWorker {
         if (prompt == null || prompt.isBlank()) {
             return "未命名作品";
         }
-        String text = prompt.trim();
+        // 去掉模型侧 Picture/Video/Audio 锚点，避免「我的创作」标题显示成 <Picture 1>
+        String text = prompt
+                .replaceAll("(?i)[（(]\\s*<Picture\\s+\\d+>\\s*[)）]", " ")
+                .replaceAll("(?i)\\s*=\\s*<Picture\\s+\\d+>", " ")
+                .replaceAll("(?i)<(Picture|Video|Audio)\\s+\\d+>", " ")
+                .replaceAll("[ \\t]{2,}", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (text.isBlank()) {
+            return "未命名作品";
+        }
         return text.length() > 24 ? text.substring(0, 24) : text;
     }
 

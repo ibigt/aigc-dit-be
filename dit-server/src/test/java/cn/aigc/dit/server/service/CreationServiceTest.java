@@ -76,6 +76,14 @@ class CreationServiceTest {
     }
 
     @Test
+    void titleFromPromptStripsPictureAnchors() {
+        assertEquals("高精度二次元写实，半写实", CreationService.titleFromPrompt(
+                "<Picture 1> <Picture 2> <Picture 3> 高精度二次元写实，半写实3D渲染"));
+        assertEquals("未命名创作", CreationService.titleFromPrompt("<Picture 1> <Picture 2>"));
+        assertEquals("雨后城市", CreationService.titleFromPrompt("雨后城市"));
+    }
+
+    @Test
     void projectFilterParsesKindAndId() {
         CreationService.ProjectFilter all = CreationService.ProjectFilter.parse(null);
         CreationService.ProjectFilter drama = CreationService.ProjectFilter.parse("drama:18");
