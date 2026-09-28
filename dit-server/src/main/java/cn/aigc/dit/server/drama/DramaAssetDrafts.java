@@ -114,6 +114,9 @@ public final class DramaAssetDrafts {
             return;
         }
         String name = rawName.trim();
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type) && DramaDialogueSpeakers.isNarration(name)) {
+            return;
+        }
         String stateTag = inferStateTag(name);
         boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
         String key = uniqueKey(type, name, stateTag);

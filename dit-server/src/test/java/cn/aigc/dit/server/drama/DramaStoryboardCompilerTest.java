@@ -109,6 +109,8 @@ class DramaStoryboardCompilerTest {
                 DramaStoryboardCompiler.captionLines("局长：洛老弟，别睡了。"));
         assertEquals(List.of("风很大。", "走吧。"),
                 DramaStoryboardCompiler.captionLines("旁白：风很大。\n洛白：走吧。"));
+        assertEquals(List.of("你给我站住！"),
+                DramaStoryboardCompiler.captionLines("局长（愤怒）：你给我站住！"));
         assertEquals(List.of("没有冒号的台词"),
                 DramaStoryboardCompiler.captionLines("没有冒号的台词"));
         assertEquals(List.of(), DramaStoryboardCompiler.captionLines("局长：  \n  "));

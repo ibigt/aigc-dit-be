@@ -2517,9 +2517,14 @@ public class DramaStoryboardService {
         }
         List<String> cleaned = new ArrayList<>();
         for (String name : names) {
-            if (StringUtils.hasText(name) && !cleaned.contains(name.trim())) {
-                cleaned.add(name.trim());
+            if (!StringUtils.hasText(name)) {
+                continue;
             }
+            String trimmed = name.trim();
+            if (DramaDialogueSpeakers.isNarration(trimmed) || cleaned.contains(trimmed)) {
+                continue;
+            }
+            cleaned.add(trimmed);
         }
         return cleaned;
     }

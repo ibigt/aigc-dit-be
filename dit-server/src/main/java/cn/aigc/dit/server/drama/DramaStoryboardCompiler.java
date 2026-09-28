@@ -26,7 +26,10 @@ public final class DramaStoryboardCompiler {
     public static final String SCENE_PICTURE_HINT = "只借空间陈设，必须有人在此演戏，不继承原图构图、机位、光线";
     public static final String MOVIE_SCENE_MUST =
             "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
-    public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号；口型与每个字严格同步，不得增删或改写。";
+    public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号，不得增删或改写。";
+    public static final String NARRATION_MOUTH_CLOSED = "画面中角色保持闭嘴，不对旁白台词对口型。";
+    public static final String DIALOGUE_PERFORMANCE_PREFIX = "对白表演：表情与语气一致，呈现";
+    public static final String DIALOGUE_PERFORMANCE_SUFFIX = "神态，动作自然克制，不夸张演过头。";
     public static final String I2V_MUST_START =
             "Must start: 以提供的首帧为起幅（空间、已在画面中人物的服装与站位）。严格按 Action 的主语演出，禁止改写谁做了什么。"
                     + "Action 新点名、但首帧里还没有的人，必须按其 Identities 外貌入画；"
@@ -477,12 +480,23 @@ public final class DramaStoryboardCompiler {
         if (!StringUtils.hasText(dialogue)) {
             return "";
         }
+        List<SpokenUtterance> utterances = spokenUtterances(dialogue);
+        if (utterances.isEmpty()) {
+            return "";
+        }
         List<String> contracts = new ArrayList<>();
-        for (SpokenUtterance spoken : spokenUtterances(dialogue)) {
+        LinkedHashSet<String> performanceEmotions = new LinkedHashSet<>();
+        boolean hasNarration = false;
+        for (SpokenUtterance spoken : utterances) {
             String speaker = spoken.speaker();
             String words = spoken.words();
-            if ("旁白".equals(speaker) || "画外音".equals(speaker) || "解说".equals(speaker)) {
-                contracts.add("使用清晰自然的" + speaker + "逐字念出：“" + words + "”");
+            if (spoken.narration()) {
+                hasNarration = true;
+                contracts.add("使用清晰自然的旁白以正常语调逐字念出：“" + words + "”");
+            } else if (StringUtils.hasText(spoken.emotion())) {
+                performanceEmotions.add(spoken.emotion());
+                contracts.add("角色“" + speaker + "”以" + spoken.emotion()
+                        + "的语气逐字说出：“" + words + "”，口型与每个字严格同步");
             } else {
                 contracts.add("角色“" + speaker + "”逐字说出：“" + words + "”，口型与每个字严格同步");
             }
@@ -492,6 +506,14 @@ public final class DramaStoryboardCompiler {
             line.append(String.join("；", contracts)).append("。");
         }
         line.append(DIALOGUE_EXECUTION_TAIL);
+        if (hasNarration) {
+            line.append(NARRATION_MOUTH_CLOSED);
+        }
+        if (!performanceEmotions.isEmpty()) {
+            line.append('\n').append(DIALOGUE_PERFORMANCE_PREFIX)
+                    .append(String.join("、", performanceEmotions))
+                    .append(DIALOGUE_PERFORMANCE_SUFFIX);
+        }
         return line.toString();
     }
 
@@ -506,24 +528,61 @@ public final class DramaStoryboardCompiler {
                 continue;
             }
             int sep = speakerSeparator(line);
-            String speaker;
+            String speakerRaw;
             String words;
-            if (sep > 0 && sep <= 20) {
-                speaker = line.substring(0, sep).trim();
+            if (sep > 0 && sep <= 32) {
+                speakerRaw = line.substring(0, sep).trim();
                 words = line.substring(sep + 1).trim();
             } else {
-                speaker = "画面中的说话者";
+                speakerRaw = "画面中的说话者";
                 words = line;
             }
             if (!StringUtils.hasText(words)) {
                 continue;
             }
-            utterances.add(new SpokenUtterance(speaker, words));
+            SpeakerEmotion parsed = parseSpeakerEmotion(speakerRaw);
+            String speaker = DramaDialogueSpeakers.normalizeSpeaker(parsed.speaker());
+            String emotion = DramaDialogueSpeakers.isNarration(speaker)
+                    ? null
+                    : DramaDialogueSpeakers.sanitizeEmotion(parsed.emotion());
+            utterances.add(new SpokenUtterance(
+                    speaker,
+                    words,
+                    emotion,
+                    DramaDialogueSpeakers.isNarration(speaker)));
         }
         return utterances;
     }
 
-    record SpokenUtterance(String speaker, String words) {
+    private static SpeakerEmotion parseSpeakerEmotion(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return new SpeakerEmotion("", null);
+        }
+        String text = raw.trim();
+        int openCn = text.lastIndexOf('（');
+        int closeCn = text.lastIndexOf('）');
+        if (openCn > 0 && closeCn == text.length() - 1 && closeCn > openCn) {
+            return new SpeakerEmotion(
+                    text.substring(0, openCn).trim(),
+                    text.substring(openCn + 1, closeCn).trim());
+        }
+        int openEn = text.lastIndexOf('(');
+        int closeEn = text.lastIndexOf(')');
+        if (openEn > 0 && closeEn == text.length() - 1 && closeEn > openEn) {
+            return new SpeakerEmotion(
+                    text.substring(0, openEn).trim(),
+                    text.substring(openEn + 1, closeEn).trim());
+        }
+        return new SpeakerEmotion(text, null);
+    }
+
+    record SpokenUtterance(String speaker, String words, String emotion, boolean narration) {
+        SpokenUtterance(String speaker, String words) {
+            this(speaker, words, null, DramaDialogueSpeakers.isNarration(speaker));
+        }
+    }
+
+    private record SpeakerEmotion(String speaker, String emotion) {
     }
 
     private static List<String> unnamedLooks(

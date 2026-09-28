@@ -607,13 +607,20 @@ public final class DramaShotDrafts {
         if (line == null) {
             return null;
         }
-        String speaker = line.getSpeaker() == null ? "" : line.getSpeaker().trim();
+        String speaker = DramaDialogueSpeakers.normalizeSpeaker(line.getSpeaker());
         String text = line.getLine() == null ? "" : line.getLine().trim();
         if (!StringUtils.hasText(speaker) && !StringUtils.hasText(text)) {
             return null;
         }
         if (!StringUtils.hasText(speaker)) {
             return text;
+        }
+        if (DramaDialogueSpeakers.isNarration(speaker)) {
+            return DramaDialogueSpeakers.NARRATION + "：" + text;
+        }
+        String emotion = DramaDialogueSpeakers.sanitizeEmotion(line.getEmotion());
+        if (StringUtils.hasText(emotion)) {
+            return speaker + "（" + emotion + "）：" + text;
         }
         return speaker + "：" + text;
     }

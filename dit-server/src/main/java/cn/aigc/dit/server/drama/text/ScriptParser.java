@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaDialogueSpeakers;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
@@ -148,8 +149,9 @@ public final class ScriptParser {
                     applyMeta(scene, metaCharacters, metaProps, key, dialogue.group(2));
                 } else {
                     ScriptDoc.Dialogue bit = new ScriptDoc.Dialogue();
-                    bit.setSpeaker(key.strip());
+                    bit.setSpeaker(DramaDialogueSpeakers.normalizeSpeaker(key.strip()));
                     bit.setLine(stripActionMarker(dialogue.group(2)));
+                    bit.setEmotion(null);
                     scene.getDialogue().add(bit);
                 }
                 continue;
@@ -161,9 +163,16 @@ public final class ScriptParser {
         }
         scene.getProps().addAll(metaProps);
 
-        Set<String> characters = new LinkedHashSet<>(metaCharacters);
+        Set<String> characters = new LinkedHashSet<>();
+        for (String name : metaCharacters) {
+            if (DramaDialogueSpeakers.isRealCharacterName(name)) {
+                characters.add(name.strip());
+            }
+        }
         for (ScriptDoc.Dialogue bit : scene.getDialogue()) {
-            characters.add(bit.getSpeaker());
+            if (bit != null && DramaDialogueSpeakers.isRealCharacterName(bit.getSpeaker())) {
+                characters.add(bit.getSpeaker().strip());
+            }
         }
         scene.getCharacters().addAll(characters);
         scene.setSlug("scene-" + index);

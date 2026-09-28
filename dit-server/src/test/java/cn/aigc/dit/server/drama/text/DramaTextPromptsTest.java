@@ -9,6 +9,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DramaTextPromptsTest {
 
     @Test
+    void scriptSchemaRequiresEmotionClosedSetAndNarrationRules() {
+        String system = DramaTextPrompts.scriptSystem();
+        assertTrue(system.contains("\"emotion\": \"愤怒\""));
+        assertTrue(system.contains("characters 只收录本场真实出场人物"));
+        assertTrue(system.contains("旁白/画外音/解说/VO/OS"));
+        assertTrue(system.contains("dialogue.emotion 闭集"));
+        assertTrue(system.contains("旁白句 emotion 一律空字符串"));
+    }
+
+    @Test
+    void shotSchemaSerializesEmotionAndForbidsNarrationInCast() {
+        String system = DramaTextPrompts.shotSystem();
+        assertTrue(system.contains("局长（愤怒）：你给我站住！"));
+        assertTrue(system.contains("有 emotion 时格式「说话人（情绪）：原文」"));
+        assertTrue(system.contains("旁白一律「旁白：原文」"));
+        assertTrue(system.contains("禁止列入旁白/画外音/解说"));
+    }
+
+    @Test
     void shotSchemaPrefersLongerContinuousShotsAndKeepsDialogueTurnsTogether() {
         String system = DramaTextPrompts.shotSystem();
 

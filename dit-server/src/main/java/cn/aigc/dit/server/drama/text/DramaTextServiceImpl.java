@@ -3,6 +3,7 @@ package cn.aigc.dit.server.drama.text;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
+import cn.aigc.dit.server.drama.DramaDialogueSpeakers;
 import cn.aigc.dit.server.drama.DramaDurations;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
@@ -684,6 +685,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                 ScriptDoc.Dialogue bit = new ScriptDoc.Dialogue();
                 bit.setSpeaker(line.getSpeaker());
                 bit.setLine(line.getLine());
+                bit.setEmotion(line.getEmotion());
                 lines.add(bit);
             }
             copy.setDialogue(lines);
@@ -961,12 +963,19 @@ public class DramaTextServiceImpl implements DramaTextService {
                 continue;
             }
             scene.setIndex(kept.size() + 1);
-            scene.setCharacters(cleanNames(scene.getCharacters()));
+            scene.setCharacters(cleanCharacterNames(scene.getCharacters()));
             scene.setProps(cleanMainProps(scene.getProps()));
             List<ScriptDoc.Dialogue> dialogue = new ArrayList<>();
             for (ScriptDoc.Dialogue line : safe(scene.getDialogue())) {
                 if (line == null || !StringUtils.hasText(line.getLine())) {
                     continue;
+                }
+                String speaker = DramaDialogueSpeakers.normalizeSpeaker(line.getSpeaker());
+                line.setSpeaker(speaker);
+                if (DramaDialogueSpeakers.isNarration(speaker)) {
+                    line.setEmotion(null);
+                } else {
+                    line.setEmotion(DramaDialogueSpeakers.sanitizeEmotion(line.getEmotion()));
                 }
                 dialogue.add(line);
             }
@@ -980,11 +989,14 @@ public class DramaTextServiceImpl implements DramaTextService {
         return doc;
     }
 
-    private static List<String> cleanNames(List<String> names) {
+    private static List<String> cleanCharacterNames(List<String> names) {
         List<String> clean = new ArrayList<>();
         for (String name : safe(names)) {
-            if (StringUtils.hasText(name)) {
-                clean.add(name.strip());
+            if (DramaDialogueSpeakers.isRealCharacterName(name)) {
+                String value = name.strip();
+                if (!clean.contains(value)) {
+                    clean.add(value);
+                }
             }
         }
         return clean;
@@ -1024,6 +1036,10 @@ public class DramaTextServiceImpl implements DramaTextService {
                 continue;
             }
             String name = draft.getName().strip();
+            if (DramaContract.ASSET_TYPE_CHARACTER.equals(draft.getType().strip())
+                    && DramaDialogueSpeakers.isNarration(name)) {
+                continue;
+            }
             String tag = StringUtils.hasText(draft.getStateTag())
                     ? draft.getStateTag().strip()
                     : DramaAssetDrafts.inferStateTag(name);

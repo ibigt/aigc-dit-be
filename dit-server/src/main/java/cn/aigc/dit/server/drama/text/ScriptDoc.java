@@ -41,5 +41,7 @@ public class ScriptDoc {
     public static class Dialogue {
         private String speaker;
         private String line;
+        /** 闭集情绪：高兴/愤怒/悲伤/恐惧/惊讶/厌恶/紧张；不明显则空。旁白不得带情绪。 */
+        private String emotion;
     }
 }

@@ -39,14 +39,15 @@ public final class DramaTextPrompts {
                   "action": "风扇转动。夏安在白板贴照片。洛白用书盖脸。",
                   "sound": "风扇；档案摔桌；怀表咔哒",
                   "dialogue": [
-                    { "speaker": "局长", "line": "洛老弟，别睡了。" },
-                    { "speaker": "洛白", "line": "找猫抓狗去居委会。但这案子……" }
+                    { "speaker": "局长", "line": "你给我站住！", "emotion": "愤怒" },
+                    { "speaker": "洛白", "line": "找猫抓狗去居委会。但这案子……", "emotion": "" },
+                    { "speaker": "旁白", "line": "夜色渐深。", "emotion": "" }
                   ]
                 }
               ]
             }
             index 从 1 连续递增；interior 内景为 true、外景为 false；
-            characters 收录本场出场与说话的所有人物；
+            characters 只收录本场真实出场人物，禁止收录旁白/画外音/解说/VO/OS 等非人物说话人；
             props 只收录主要道具，并按剧情重要性从高到低排列，每场最多 3 个：
             - 保留推动情节、触发关键动作/冲突、承载线索，或能稳定识别角色身份的道具；
             - 普通家具、环境陈设、服装、餐具、文具、消耗品及仅在背景中一闪而过的物品不要收录；
@@ -55,6 +56,8 @@ public final class DramaTextPrompts {
             - action 控制在 80 字以内，只写可视动作与环境的最小集合。
             - sound 写 1~2 个关键声音关键词，总长不超过 20 字。
             - dialogue 严格保留剧本原文，不要扩写、解释或补全台词。
+            - dialogue.speaker 若是旁白/画外音/解说/VO/OS/旁白音 等，一律输出「旁白」；旁白只出现在 dialogue.speaker，不得进 characters。
+            - dialogue.emotion 闭集：高兴/愤怒/悲伤/恐惧/惊讶/厌恶/紧张；只标原文或舞台提示已能看出的情绪（如「怒道」「哭着说」），看不出则给空字符串；旁白句 emotion 一律空字符串；非法值不要输出。
             """;
 
     private static final String SCHEMA_ASSETS = """
@@ -102,7 +105,7 @@ public final class DramaTextPrompts {
                   "duration_sec": 12,
                   "narrative_goal": "中景。夏安贴照片，局长叫醒洛白，洛白拿开盖脸的书。",
                   "scene": "幻梦侦探社日戏，风扇与白板红线",
-                  "dialogue": "局长：洛老弟，别睡了。\\n洛白：科学解决不了的，就轮到我们。",
+                  "dialogue": "局长（愤怒）：你给我站住！\\n洛白：科学解决不了的，就轮到我们。\\n旁白：夜色渐深。",
                   "continuity_in": "风扇叶片入画",
                   "continuity_out": "洛白书拿开",
                   "character_names": ["夏安", "局长", "洛白"],
@@ -118,7 +121,7 @@ public final class DramaTextPrompts {
               时长只服务单镜，禁止为了凑总秒数而删戏或打乱时间线；不同场景不得并进一镜。
             - 必须按 scenes 的先后、场内 action 与 dialogue 的出现顺序拆镜；后一场的事件不得出现在前面的镜头里。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
-            - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜。
+            - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜；禁止列入旁白/画外音/解说。
             - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
             - 同场连续对谈里出现的说话人都应列入 character_names，不要只留当前开口的那一个人。
             - 谁做动作就写谁的名字，不要把 A 的动作写到 B 身上。
@@ -140,8 +143,9 @@ public final class DramaTextPrompts {
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
-            - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中
-             （格式「说话人：原文」；同镜多句用换行分隔）。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
+            - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中。
+              有 emotion 时格式「说话人（情绪）：原文」；无 emotion 时「说话人：原文」；旁白一律「旁白：原文」（不要写情绪括号）。
+              同镜多句用换行分隔。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
               纯动作镜可留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
             - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字，
               scene 不超过 30 字，continuity_in / continuity_out 各不超过 20 字；dialogue 不受上述字数上限约束。
