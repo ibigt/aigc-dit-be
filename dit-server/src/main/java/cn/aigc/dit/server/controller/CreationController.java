@@ -4,6 +4,7 @@ import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.model.req.CreationSessionCreateReq;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.CreationItemResp;
+import cn.aigc.dit.server.model.resp.CreationProjectResp;
 import cn.aigc.dit.server.model.resp.CreationSessionResp;
 import cn.aigc.dit.server.service.CreationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,9 +16,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 @Tag(name = "创作")
@@ -52,12 +55,21 @@ public class CreationController {
         return CommonResult.success();
     }
 
+    @Operation(summary = "我的创作所属项目")
+    @GetMapping("/api/creations/projects")
+    public CommonResult<List<CreationProjectResp>> projects() {
+        return CommonResult.success(creationService.listProjects());
+    }
+
     @Operation(summary = "我的创作")
     @GetMapping("/api/creations")
     public CommonResult<List<CreationItemResp>> creations(
             @RequestParam(required = false) String category,
-            @RequestParam(required = false) String q) {
-        return CommonResult.success(creationService.listMine(category, q));
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String project,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime to) {
+        return CommonResult.success(creationService.listMine(category, q, project, from, to));
     }
 
     @Operation(summary = "作品详情")

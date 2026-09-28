@@ -513,8 +513,10 @@ public class GenerateWorker {
             // }
             String firstPoster = null;
             String firstTail = null;
-            boolean recordCreation = GenerateRequests.bindsQuickCreate(latest.getParams());
-            Long sessionId = recordCreation ? sessionId(latest) : null;
+            boolean imageOrVideo = ModelCategory.IMAGE.equalsIgnoreCase(latest.getCategory())
+                    || ModelCategory.VIDEO.equalsIgnoreCase(latest.getCategory());
+            boolean recordCreation = imageOrVideo || GenerateRequests.bindsQuickCreate(latest.getParams());
+            Long sessionId = GenerateRequests.bindsQuickCreate(latest.getParams()) ? sessionId(latest) : null;
             CreationSession session = sessionId == null ? null : creationSessionMapper.selectById(sessionId);
             if (session == null) {
                 sessionId = null;
@@ -554,6 +556,13 @@ public class GenerateWorker {
                 creation.setDurationSec(request.getDurationSec());
                 creation.setCreditCost(perCopy);
                 creation.setCopyIndex(index++);
+                if (GenerateRequests.isDramaSource(latest.getParams())) {
+                    creation.setProjectKind("drama");
+                    creation.setProjectId(GenerateRequests.seriesIdFromParams(latest.getParams()));
+                } else if (sessionId != null) {
+                    creation.setProjectKind("quick");
+                    creation.setProjectId(sessionId);
+                }
                 creationMapper.insert(creation);
             }
             if (recordCreation && session != null) {

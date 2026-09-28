@@ -4,6 +4,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
@@ -47,6 +48,8 @@ class DramaFilmServiceTest {
     private DramaFilmConcat filmConcat;
     @Mock
     private DramaCaptionService captionService;
+    @Mock
+    private CreationService creationService;
 
     private LocalObjectStorage storage;
     private DramaFilmService service;
@@ -58,7 +61,7 @@ class DramaFilmServiceTest {
     @BeforeEach
     void setUp() {
         storage = new LocalObjectStorage(tempDir.resolve("obj"));
-        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat, captionService);
+        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat, captionService, creationService);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         concatPayloads.clear();
         org.mockito.Mockito.lenient().when(posterExtractor.extract(any())).thenReturn("users/7/drama/31/film-poster.webp");

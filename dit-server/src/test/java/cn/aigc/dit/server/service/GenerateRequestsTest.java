@@ -151,6 +151,7 @@ class GenerateRequestsTest {
         assertEquals(null, GenerateRequests.sessionIdFromParams(java.util.Map.of("source", GenerateRequests.SOURCE_DRAMA)));
         assertEquals(201L, GenerateRequests.shotIdFromParams(java.util.Map.of("shotId", 201)));
         assertEquals(201L, GenerateRequests.shotIdFromParams(java.util.Map.of("shotId", "201")));
+        assertEquals(18L, GenerateRequests.seriesIdFromParams(java.util.Map.of("seriesId", 18)));
     }
 
     @Test

@@ -30,4 +30,12 @@ public class CreationItemResp {
     private Long creditCost;
     private Integer copyIndex;
     private OffsetDateTime createdAt;
+    @Schema(description = "生成耗时，如 12秒、1分05秒")
+    private String elapsed;
+    @Schema(description = "quick 快速创作，drama 短剧")
+    private String projectKind;
+    private Long projectId;
+    @Schema(description = "筛选项，与项目列表的 key 一致")
+    private String projectKey;
+    private String projectName;
 }

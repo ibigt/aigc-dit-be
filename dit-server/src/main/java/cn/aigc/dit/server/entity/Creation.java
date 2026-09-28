@@ -30,6 +30,8 @@ public class Creation {
     private Integer durationSec;
     private Long creditCost;
     private Integer copyIndex;
+    private String projectKind;
+    private Long projectId;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

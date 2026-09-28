@@ -54,7 +54,7 @@ public final class GenerateRequests {
                 .setFrames(frames);
     }
 
-    /** 漫剧任务不挂快速创作会话，也不写入「我的创作」。 */
+    /** 漫剧任务不挂快速创作会话。图像和视频成功后仍写入「我的创作」。 */
     public static boolean isDramaSource(Map<String, Object> params) {
         return SOURCE_DRAMA.equals(sourceOf(params));
     }
@@ -98,6 +98,10 @@ public final class GenerateRequests {
 
     public static Long shotIdFromParams(Map<String, Object> params) {
         return longVal(params, "shotId");
+    }
+
+    public static Long seriesIdFromParams(Map<String, Object> params) {
+        return longVal(params, "seriesId");
     }
 
     private static Long longVal(Map<String, Object> params, String key) {
