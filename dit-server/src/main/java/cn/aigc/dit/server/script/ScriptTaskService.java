@@ -269,7 +269,7 @@ public class ScriptTaskService {
         task.setStatus("RUNNING");
         taskMapper.updateById(task);
         try {
-            saveMessage(task, "user", task.getInputText(), null);
+            saveMessage(task, "user", initialSubmissionMessage(task), null);
             String source = task.getInputText();
             if ("adapt".equals(task.getMode()) && source.length() > NOVEL_CHUNK_SIZE) {
                 source = summarizeNovelChunks(task, source);
@@ -409,6 +409,17 @@ public class ScriptTaskService {
             summaries.append("片段 ").append(index).append("：\n").append(result.getContent()).append("\n\n");
         }
         return summaries.toString();
+    }
+
+    private String initialSubmissionMessage(ScriptTask task) {
+        String attachments = task.getAttachments() == null || task.getAttachments().isEmpty()
+                ? ""
+                : " 已挂载附件：" + String.join("、", task.getAttachments()) + "。";
+        return switch (task.getMode()) {
+            case "adapt" -> "已提交小说改编任务，原文已作为任务素材保存。" + attachments;
+            case "review" -> "已提交剧本评估任务，待评估内容已作为任务素材保存。" + attachments;
+            default -> "已提交灵感起草任务：" + truncate(task.getInputText(), 240) + attachments;
+        };
     }
 
     private String systemPrompt(ScriptTask task) {
