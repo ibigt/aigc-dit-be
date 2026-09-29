@@ -61,6 +61,10 @@ public final class DramaVideoGenerateModes {
         return R2V;
     }
 
+    /**
+     * 本镜是否把上一镜落幅当作参考图。
+     * 单镜显式 true/false 优先；未写入时默认开启。场内第一镜由调用方排除。
+     */
     public static boolean effectiveChainPrevTail(DramaSeries series, DramaShot shot) {
         if (isI2v(effectiveMode(series, shot))) {
             return false;
@@ -68,7 +72,7 @@ public final class DramaVideoGenerateModes {
         if (shot != null && shot.getVideoChainPrevTail() != null) {
             return Boolean.TRUE.equals(shot.getVideoChainPrevTail());
         }
-        return series != null && Boolean.TRUE.equals(series.getVideoChainPrevTail());
+        return true;
     }
 
     public static boolean isI2v(String mode) {

@@ -1083,6 +1083,57 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void nonFirstShotDefaultsToChainingPrevTail() {
+        storedChapters.add(pendingChapter());
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        storedShots.add(first);
+        DramaShot second = pendingShot();
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setTitle("接下一段");
+        storedShots.add(second);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+        DramaSeries series = ownedSeries();
+        series.setVideoChainPrevTail(false);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertEquals(null, second.getVideoChainPrevTail());
+        assertEquals(Boolean.TRUE, resp.getEffectiveVideoChainPrevTail());
+        assertTrue(second.getCompiledPrompt().contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
+    }
+
+    @Test
+    void explicitUncheckKeepsNonFirstShotFromChainingPrevTail() {
+        storedChapters.add(pendingChapter());
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        storedShots.add(first);
+        DramaShot second = pendingShot();
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setVideoChainPrevTail(false);
+        storedShots.add(second);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+        DramaSeries series = ownedSeries();
+        series.setVideoChainPrevTail(true);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertEquals(Boolean.FALSE, resp.getEffectiveVideoChainPrevTail());
+        assertFalse(second.getCompiledPrompt().contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
+    }
+
+    @Test
     void generateI2vOpeningStillWithGptUsesAllShotReferencesAsI2i() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);

@@ -36,10 +36,10 @@ class DramaVideoGenerateModesTest {
     }
 
     @Test
-    void effectiveChainUsesShotThenSeriesAndIsOffForI2v() {
+    void effectiveChainDefaultsOnUnlessShotTurnsItOffOrModeIsI2v() {
         DramaSeries series = new DramaSeries();
         series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
-        series.setVideoChainPrevTail(true);
+        series.setVideoChainPrevTail(false);
         DramaShot shot = new DramaShot();
         assertTrue(DramaVideoGenerateModes.effectiveChainPrevTail(series, shot));
 

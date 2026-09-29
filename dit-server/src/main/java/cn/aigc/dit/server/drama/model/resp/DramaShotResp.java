@@ -81,13 +81,13 @@ public class DramaShotResp {
     @Schema(description = "本镜出片方式：r2v 参考图 / i2v 首尾帧")
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private String videoGenerateMode;
-    @Schema(description = "本镜参考图是否衔接上一镜落幅；未勾选为 false")
+    @Schema(description = "本镜参考图是否衔接上一镜落幅；未写入时场内非第一镜默认衔接，显式 false 为不衔接")
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private Boolean videoChainPrevTail;
     @Schema(description = "本镜生成方式是否未写入（按参考图）")
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private Boolean videoModeInherited;
-    @Schema(description = "本镜衔接落幅是否未写入（按不衔接）")
+    @Schema(description = "本镜衔接落幅是否未写入（场内非第一镜默认衔接）")
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private Boolean videoChainInherited;
     @Schema(description = "实际出片方式")

@@ -1236,8 +1236,6 @@ public class DramaStoryboardService {
                 shot.setVideoChainPrevTail(false);
             } else if (req.getVideoChainPrevTail() != null) {
                 shot.setVideoChainPrevTail(Boolean.TRUE.equals(req.getVideoChainPrevTail()));
-            } else if (shot.getVideoChainPrevTail() == null) {
-                shot.setVideoChainPrevTail(false);
             }
         } else if (req.getVideoChainPrevTail() != null) {
             shot.setVideoChainPrevTail(Boolean.TRUE.equals(req.getVideoChainPrevTail()));
@@ -2553,10 +2551,7 @@ public class DramaStoryboardService {
     }
 
     private static boolean resolveChainPrevTail(DramaSeries series, DramaShot shot) {
-        if (shot != null && shot.getVideoChainPrevTail() != null) {
-            return Boolean.TRUE.equals(shot.getVideoChainPrevTail());
-        }
-        return series != null && Boolean.TRUE.equals(series.getVideoChainPrevTail());
+        return DramaVideoGenerateModes.effectiveChainPrevTail(series, shot);
     }
 
     /** 同场无上一镜时不能接尾帧，首尾帧不可用。 */
