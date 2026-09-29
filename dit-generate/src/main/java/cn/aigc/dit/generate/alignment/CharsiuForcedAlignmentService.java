@@ -447,17 +447,11 @@ public class CharsiuForcedAlignmentService implements ForcedAlignmentService {
                     pronunciations.set(polyphonic.get(i), idx2class.get(predictions[i]));
                 }
             }
-            StringBuilder joined = new StringBuilder();
-            for (String pronunciation : pronunciations) {
-                if (pronunciation.codePointCount(0, pronunciation.length()) == 1) {
-                    joined.append(pronunciation);
-                } else {
-                    if (!joined.isEmpty() && joined.charAt(joined.length() - 1) != '|') joined.append('|');
-                    joined.append(pronunciation).append('|');
-                }
-            }
-            if (!joined.isEmpty() && joined.charAt(joined.length() - 1) == '|') joined.setLength(joined.length() - 1);
-            return Arrays.stream(joined.toString().split("\\|", -1)).toList();
+            // Keep one pronunciation entry per transcript code point. Joining
+            // one-character unknowns before splitting used to collapse values
+            // such as "IP" into one item and caused a misleading
+            // "G2P character count mismatch" failure.
+            return List.copyOf(pronunciations);
         }
 
         private int requiredIndex(String token) {

@@ -35,8 +35,7 @@ public class DramaShotCaptionPostProcessService {
     private final DramaShotCaptionMapper captionMapper;
     private final DramaShotMapper shotMapper;
     private final VoiceActivityDetector voiceActivityDetector;
-    private final ForcedAlignmentTimingProvider forcedAlignmentTimingProvider;
-    private final VadTimingProvider vadTimingProvider;
+    private final CaptionTimingResolver captionTimingResolver;
     private final AssVideoCaptionBurner assVideoCaptionBurner;
     private final DramaCaptionService dramaCaptionService;
     private final ObjectStorage storage;
@@ -87,13 +86,13 @@ public class DramaShotCaptionPostProcessService {
             List<SpeechSegment> speech = voiceActivityDetector.detect(wav);
             AlignmentTextNormalizer.NormalizedText normalizedText =
                     AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue());
-            TimingResult forced = forcedAlignmentTimingProvider.provide(wav, shot.getDialogue(), speech);
-            TimingResult timing = forced.usable() ? forced : vadTimingProvider.provide(wav, shot.getDialogue(), speech);
-            String fallbackReason = forced.usable()
-                    ? (speech.isEmpty() ? "VAD_EMPTY_FULL_AUDIO_ALIGNMENT" : null)
-                    : forced.failureReason();
-            if (!timing.usable() && !speech.isEmpty()) {
-                fallbackReason = fallbackReason == null ? "VAD_NO_CAPTIONS" : fallbackReason + ";VAD_NO_CAPTIONS";
+            CaptionTimingResolver.Resolution resolution =
+                    captionTimingResolver.resolve(wav, shot.getDialogue(), speech);
+            TimingResult timing = resolution.timing();
+            String fallbackReason = resolution.fallbackReason();
+            if ("ESTIMATED".equals(timing.sourceType()) && timing.usable()) {
+                log.warn("caption timing fell back to estimation shot={} source={} reason={}",
+                        task.getShotId(), task.getSourceVideoKey(), fallbackReason);
             }
             List<SubtitleCue> captions = timing.captions();
             long durationMs = durationMs(wav, speech);
@@ -108,7 +107,7 @@ public class DramaShotCaptionPostProcessService {
             task.setAudioKey(audioKey);
             task.setSubtitleJsonKey(subtitleKey);
             if (captions.isEmpty()) {
-                if (speech.isEmpty()) {
+                if (speech.isEmpty() && normalizedText.normalizedText().isBlank()) {
                     task.setStatus("NO_SPEECH");
                     task.setErrorMessage(null);
                     captionMapper.updateById(task);
