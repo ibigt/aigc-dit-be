@@ -196,7 +196,8 @@ class DramaAssetDraftsTest {
         String identity = "男性；青年；锐利眼神；冷峻气质；修长身形";
         String baseline = null;
         for (DramaStyles.Spec spec : DramaStyles.all()) {
-            if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+            if (DramaStyles.LIVE_REALISM.equals(spec.key())
+                    || DramaStyles.REALISTIC_3D.equals(spec.key())) {
                 continue;
             }
             String prompt = DramaAssetDrafts.buildPrompt(
@@ -303,6 +304,48 @@ class DramaAssetDraftsTest {
                 DramaContract.ASSET_TYPE_PROP, "古铜怀表", DramaStyles.require(DramaStyles.LIVE_REALISM));
         assertTrue(prop.contains("古铜怀表道具设定图"));
         assertTrue(prop.contains("不要出现人物"));
+    }
+
+    @Test
+    void guofeng3dKeepsComicSheetAndRealistic3dUsesPhotorealSheet() {
+        DramaStyles.Spec guofeng = DramaStyles.require(DramaStyles.GUOFENG_3D);
+        String guofengPrompt = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_CHARACTER,
+                "洛白",
+                DramaContract.STATE_TAG_BASE,
+                guofeng,
+                null,
+                "女性；青年");
+        assertTrue(guofengPrompt.contains("三维国风角色，汉服广袖与发冠发饰"));
+        assertTrue(guofengPrompt.contains("同一张图内三视图排列：正面全身、侧面半身、面部特写"));
+        assertTrue(guofengPrompt.contains(guofeng.prefix()));
+        assertTrue(!guofengPrompt.contains("固定四格设定拼版"));
+
+        DramaStyles.Spec realistic = DramaStyles.require(DramaStyles.REALISTIC_3D);
+        String realisticPrompt = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_CHARACTER,
+                "洛白",
+                DramaContract.STATE_TAG_BASE,
+                realistic,
+                null,
+                "男性；青年；当代常服");
+        assertTrue(realisticPrompt.contains("电影级三维角色设定，次世代数字人质感"));
+        assertTrue(realisticPrompt.contains("现代都市常服"));
+        assertTrue(realisticPrompt.contains("固定四格设定拼版"));
+        assertTrue(realisticPrompt.contains("禁止正面大头照"));
+        assertTrue(realisticPrompt.contains("外形与服装必须符合：男性；青年；当代常服"));
+        assertTrue(realisticPrompt.contains(realistic.prefix()));
+        assertTrue(!realisticPrompt.contains("面部特写"));
+
+        String threeView = "洛白角色设定图。同一张图内三视图排列：正面全身、侧面半身、面部特写。"
+                + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
+                + "古风3D，高精度三维国风渲染。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.GUOFENG_3D));
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
     }
 
     @Test

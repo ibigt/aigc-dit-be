@@ -13,7 +13,7 @@ import java.util.Map;
 /**
  * 资产页自动提示词模板。多数风格共用二次元漫画风的同一骨架，只替换风格句；
  * 其它风格可在服装句后追加一句服饰/材质。
- * {@link DramaStyles#LIVE_REALISM} 角色图单独弱化大脸设定表排版（降低 Seedance 真人拒审概率），
+ * {@link DramaStyles#LIVE_REALISM} 与 {@link DramaStyles#REALISTIC_3D} 角色图单独弱化大脸设定表排版（降低 Seedance 真人拒审概率），
  * 仅影响之后新生成的 {@code imagePrompt}；已锁定旧图需用户重抽才换像素。
  */
 public final class DramaAssetDrafts {
@@ -154,8 +154,8 @@ public final class DramaAssetDrafts {
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
         }
-        // LIVE_REALISM：强制统一设定表拼版（对齐常见国漫设定图），但半身用 3/4 侧脸，避免正面大头照触发 Seedance。
-        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+        // 写实/真人 3D：强制统一设定表拼版，半身用 3/4 侧脸，避免正面大头照触发 Seedance。
+        if (usesPhotorealCharacterSheet(spec.key())) {
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
             text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
@@ -166,7 +166,7 @@ public final class DramaAssetDrafts {
         text.append("浅灰或纯白干净背景。");
         text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
         // 写实风把设定摘要写入生图句，避免只留在 identity 字段时模型自由发挥成古装。
-        if (DramaStyles.LIVE_REALISM.equals(spec.key()) && StringUtils.hasText(identity)) {
+        if (usesPhotorealCharacterSheet(spec.key()) && StringUtils.hasText(identity)) {
             text.append("外形与服装必须符合：").append(identity.trim()).append("。");
         }
         text.append(spec.prefix()).append("。");
@@ -183,8 +183,10 @@ public final class DramaAssetDrafts {
         }
         return switch (spec.key()) {
             case DramaStyles.LIVE_REALISM -> "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
+            case DramaStyles.REALISTIC_3D -> "电影级三维角色设定，次世代数字人质感，皮肤毛发与布料清晰，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
+            case DramaStyles.GUOFENG_3D -> "三维国风角色，汉服广袖与发冠发饰，布料与金属质感清晰，不要现代西装夹克或运动鞋，不要卡通平涂线稿。";
             case DramaStyles.REPUBLICAN_ERA -> "民国人物，旗袍长衫或洋装礼帽，面料与纹样清晰，不要古装广袖。";
             case DramaStyles.CYBERPUNK -> "机能外套与科技面料，可有义体接口，不要古装汉服。";
             case DramaStyles.SCI_FI -> "科幻制服或轻型防护装，金属与合成面料清晰，不要古装。";
@@ -277,7 +279,7 @@ public final class DramaAssetDrafts {
 
     /**
      * @param type     资产类型；写实风仅对角色识别「三视图+面部特写」旧骨架
-     * @param styleKey 项目风格；非 {@link DramaStyles#LIVE_REALISM} 时不因面部特写句失效
+     * @param styleKey 项目风格；非写实/真人 3D 时不因面部特写句失效
      */
     public static boolean shouldReplaceImagePrompt(String prompt, String type, String styleKey) {
         if (!StringUtils.hasText(prompt)) {
@@ -320,7 +322,7 @@ public final class DramaAssetDrafts {
     }
 
     static boolean isObsoleteLiveRealismCharacterSheet(String prompt, String type, String styleKey) {
-        if (!DramaStyles.LIVE_REALISM.equals(styleKey) || !StringUtils.hasText(prompt)) {
+        if (!usesPhotorealCharacterSheet(styleKey) || !StringUtils.hasText(prompt)) {
             return false;
         }
         if (StringUtils.hasText(type) && !DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
@@ -337,6 +339,10 @@ public final class DramaAssetDrafts {
                 || prompt.contains("单人 3/4 或正面全身为主")
                 || prompt.contains("不要大脸特写拼版")
                 || (prompt.contains("固定四格设定拼版") && !prompt.contains("现代都市常服"));
+    }
+
+    private static boolean usesPhotorealCharacterSheet(String styleKey) {
+        return DramaStyles.LIVE_REALISM.equals(styleKey) || DramaStyles.REALISTIC_3D.equals(styleKey);
     }
 
     private static String specKey(DramaStyles.Spec style) {

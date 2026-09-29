@@ -21,6 +21,8 @@ public final class DramaStyles {
     public static final String CYBERPUNK = "cyberpunk";
     public static final String SCI_FI = "sci-fi";
     public static final String RURAL = "rural";
+    public static final String REALISTIC_3D = "realistic-3d";
+    public static final String GUOFENG_3D = "guofeng-3d";
 
     /** 只注入分镜视频编译，不写入主体设定图。 */
     public static final String VIDEO_SCENE_CLAUSE = "连续运动的电影场面，禁止设定表和白底静物";
@@ -68,6 +70,16 @@ public final class DramaStyles {
                 "乡土漫画风",
                 "乡土漫画风，朴实漫画作画，田野村庄与黄土老屋，烟火日常与朴素人物，温暖大地色系，清晰线稿，田园生活气息，电影分镜构图，不要真实人脸，不要古装，不要 3D 写实",
                 "/drama/styles/rural.jpg"));
+        register(new Spec(
+                REALISTIC_3D,
+                "真人3D风",
+                "真人3D风，电影级三维渲染，次世代数字人质感，皮肤次表面散射，电影布光与浅景深，当代都市常服，不要卡通平涂线稿，不要古装，不要武侠仙侠",
+                "/drama/styles/realistic-3d.jpg"));
+        register(new Spec(
+                GUOFENG_3D,
+                "古风3D风",
+                "古风3D风，高精度三维国风渲染，汉服广袖与发冠金饰，亭台楼阁与山水云雾，写实布料木质与金属质感，电影级光影，不要卡通平涂线稿，不要现代都市，不要真实人脸",
+                "/drama/styles/guofeng-3d.jpg"));
     }
 
     /**
