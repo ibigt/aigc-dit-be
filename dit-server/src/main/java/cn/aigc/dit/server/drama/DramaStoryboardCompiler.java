@@ -27,7 +27,7 @@ public final class DramaStoryboardCompiler {
     public static final String MOVIE_SCENE_MUST =
             "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
     public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号，不得增删或改写。";
-    public static final String NARRATION_MOUTH_CLOSED = "画面中角色保持闭嘴，不对旁白台词对口型。";
+    public static final String NARRATION_MOUTH_CLOSED = "画面中角色保持闭嘴，不对旁白与画外音台词对口型。";
     public static final String DIALOGUE_PERFORMANCE_PREFIX = "对白表演：表情与语气一致，呈现";
     public static final String DIALOGUE_PERFORMANCE_SUFFIX = "神态，动作自然克制，不夸张演过头。";
     public static final String I2V_MUST_START =
@@ -476,6 +476,23 @@ public final class DramaStoryboardCompiler {
         return lines;
     }
 
+    /**
+     * 口播字数：汉字、字母、数字各计 1；标点、省略号、引号与空白不发音，不计。
+     * 口播速率按可念字标定（约 4 字/秒），连标点一起数会虚增时长、多拆镜头。
+     */
+    public static int speakableChars(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.isLetterOrDigit(text.charAt(i))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     static String spokenDialogueConstraint(String dialogue) {
         if (!StringUtils.hasText(dialogue)) {
             return "";
@@ -492,7 +509,12 @@ public final class DramaStoryboardCompiler {
             String words = spoken.words();
             if (spoken.narration()) {
                 hasNarration = true;
-                contracts.add("使用清晰自然的旁白以正常语调逐字念出：“" + words + "”");
+                contracts.add("旁白解说员以全片统一的旁白音色逐字念出：“" + words + "”，该音色不与任何角色混淆");
+            } else if (spoken.voiceOver()) {
+                // 角色画外音：明确指定用该角色的声音，画面外传来，画面中人物不开口。
+                hasNarration = true;
+                contracts.add("角色“" + speaker + "”的画外音（使用" + speaker + "的音色，自画面外传来）逐字念出：“"
+                        + words + "”");
             } else if (StringUtils.hasText(spoken.emotion())) {
                 performanceEmotions.add(spoken.emotion());
                 contracts.add("角色“" + speaker + "”以" + spoken.emotion()
@@ -542,14 +564,18 @@ public final class DramaStoryboardCompiler {
             }
             SpeakerEmotion parsed = parseSpeakerEmotion(speakerRaw);
             String speaker = DramaDialogueSpeakers.normalizeSpeaker(parsed.speaker());
-            String emotion = DramaDialogueSpeakers.isNarration(speaker)
+            boolean narrationSpeaker = DramaDialogueSpeakers.isNarration(speaker);
+            // 「角色名（画外音）：原文」——说话人是真实角色，括号标记表示用该角色音色在画面外念出。
+            boolean voiceOver = !narrationSpeaker && DramaDialogueSpeakers.isVoiceOverMarker(parsed.emotion());
+            String emotion = narrationSpeaker || voiceOver
                     ? null
                     : DramaDialogueSpeakers.sanitizeEmotion(parsed.emotion());
             utterances.add(new SpokenUtterance(
                     speaker,
                     words,
                     emotion,
-                    DramaDialogueSpeakers.isNarration(speaker)));
+                    narrationSpeaker,
+                    voiceOver));
         }
         return utterances;
     }
@@ -576,9 +602,9 @@ public final class DramaStoryboardCompiler {
         return new SpeakerEmotion(text, null);
     }
 
-    record SpokenUtterance(String speaker, String words, String emotion, boolean narration) {
+    record SpokenUtterance(String speaker, String words, String emotion, boolean narration, boolean voiceOver) {
         SpokenUtterance(String speaker, String words) {
-            this(speaker, words, null, DramaDialogueSpeakers.isNarration(speaker));
+            this(speaker, words, null, DramaDialogueSpeakers.isNarration(speaker), false);
         }
     }
 

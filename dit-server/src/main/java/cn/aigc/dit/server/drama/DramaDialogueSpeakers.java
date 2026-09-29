@@ -20,6 +20,10 @@ public final class DramaDialogueSpeakers {
             "旁白", "画外音", "解说", "旁白音", "旁白声", "画外",
             "vo", "os", "v.o.", "o.s.", "v.o", "o.s");
 
+    /** 说话人括号内的画外音标记：「角色名（画外音）」表示用该角色音色、画面外念出。 */
+    private static final Set<String> VOICE_OVER_MARKERS = Set.of(
+            "画外音", "内心独白", "vo", "os", "v.o.", "o.s.", "v.o", "o.s");
+
     private DramaDialogueSpeakers() {
     }
 
@@ -28,6 +32,14 @@ public final class DramaDialogueSpeakers {
             return false;
         }
         return NARRATION_ALIASES.contains(speaker.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /** 括号内容是否为画外音标记（区别于情绪闭集词）。 */
+    public static boolean isVoiceOverMarker(String marker) {
+        if (!StringUtils.hasText(marker)) {
+            return false;
+        }
+        return VOICE_OVER_MARKERS.contains(marker.trim().toLowerCase(Locale.ROOT));
     }
 
     /** 旁白别名归一为「旁白」；其它原样 trim。 */
