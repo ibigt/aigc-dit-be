@@ -129,6 +129,42 @@ class ShotDraftMinimizerTest {
     }
 
     @Test
+    void keepsDialogueTurnsSeparateWhenMergedDialogueWouldNotFitCombinedDuration() {
+        ShotDraftList list = new ShotDraftList();
+        // 两镜单独都念得完（各 31 口播字→8s），但合计 62 口播字要 16s，超过合并后的 15s。
+        ShotDraftList.ShotDraft first = shot(
+                1, 1, 9, "质问", "局长走近。",
+                "局长：今天我们必须把这件事情查个水落石出，绝不能让任何人再逍遥法外跑了", List.of("局长"), List.of());
+        ShotDraftList.ShotDraft second = shot(
+                1, 2, 8, "回应", "洛白抬头。",
+                "洛白：放心，我已经锁定了那三条关键线索，今晚之前一定把全部证据都拿到手里", List.of("洛白"), List.of());
+        list.setShots(List.of(first, second));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(2, minimized.getShots().size(),
+                "合并后台词念不完的对谈不得并成一镜，否则台词会在 15 秒封顶处被切掉");
+    }
+
+    @Test
+    void mergesDialogueTurnsWhenPunctuationWasTheOnlyOverflow() {
+        ShotDraftList list = new ShotDraftList();
+        // 口播字 29 + 29 = 58，合并后 15 秒念得完；连标点一起数成 61 字会错判念不完而拒绝合并。
+        ShotDraftList.ShotDraft first = shot(
+                1, 1, 8, "质问", "局长走近。",
+                "局长：今天我们必须把这件事情查个水落石出，不能让任何人再逍遥法外了", List.of("局长"), List.of());
+        ShotDraftList.ShotDraft second = shot(
+                1, 2, 7, "回应", "洛白抬头。",
+                "洛白：放心，我已经锁定了那三条关键线索，今晚之前一定把全部证据拿到手", List.of("洛白"), List.of());
+        list.setShots(List.of(first, second));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(1, minimized.getShots().size(),
+                "标点不发音，不得因标点把口播字数顶过预算而拒绝本可合并的对谈");
+    }
+
+    @Test
     void mergedDraftUsesLastShotsBlankContinuityOut() {
         ShotDraftList list = new ShotDraftList();
         ShotDraftList.ShotDraft first = shot(1, 1, 5, "动作一", "洛白拿起照片。", "", List.of("洛白"), List.of("照片"));

@@ -241,6 +241,52 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void thinkingFieldOptionWritesTopLevelSwitch() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://api.minimax.cn/v1", "sk", "MiniMax-M3",
+                new TextChatRequest("sys", "user", true, 1024),
+                Map.of("thinkingField", "thinking"));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertEquals("disabled", sent.path("thinking").path("type").asText(),
+                "配置了 thinkingField 的模型必须收到对象形思考开关（MiniMax M3 不认布尔也不认 chat_template_kwargs）");
+    }
+
+    @Test
+    void chatStripsClosedThinkBlockBeforeReturningContent() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":"
+                        + "\"<think>Let me analyze... maybe {\\\"scenes\\\":[]} sketch</think>{\\\"scenes\\\":[{\\\"index\\\":1}]}\"},"
+                        + "\"finish_reason\":\"stop\"}]}"));
+        TextChatResult result = client.chat("https://api.minimax.cn/v1", "sk", "MiniMax-M3",
+                new TextChatRequest("sys", "user", true, 1024));
+        assertEquals("{\"scenes\":[{\"index\":1}]}", result.getContent(),
+                "思考段里的草稿 JSON 不能混进正式输出");
+    }
+
+    @Test
+    void chatStripsUnclosedThinkToEmptyForTruncationHandling() {
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
+                (target, apiKey, json, wait) -> new OpenAiCompatChatClient.Transport.Response(
+                        200, "{\"choices\":[{\"message\":{\"content\":"
+                        + "\"<think>reasoning truncated mid\"},\"finish_reason\":\"length\"}]}"));
+        TextChatResult result = client.chat("https://api.minimax.cn/v1", "sk", "MiniMax-M3",
+                new TextChatRequest("sys", "user", true, 1024));
+        assertEquals("", result.getContent(),
+                "未闭合思考说明正式回答尚未生成，交空串让上层按截断/空内容处理");
+        assertEquals("length", result.getFinishReason());
+    }
+
+    @Test
     void pingAllowsBlankApiKey() {
         AtomicReference<String> sentKey = new AtomicReference<>("unset");
         OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),

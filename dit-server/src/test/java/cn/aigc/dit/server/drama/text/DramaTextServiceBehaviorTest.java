@@ -245,7 +245,8 @@ class DramaTextServiceBehaviorTest {
         assertEquals(List.of(1, 2, 3, 4),
                 result.getShots().stream().map(ShotDraftList.ShotDraft::getChapterIndex).toList());
         assertTrue(gateway.users.stream().anyMatch(u -> u.contains("片段")));
-        assertEquals(2, gateway.users.size());
+        assertTrue(gateway.users.stream().anyMatch(u -> u.contains("待扩写分镜草稿")), "拆镜后应追加视觉扩写请求");
+        assertEquals(3, gateway.users.size(), "2 个拆镜分片 + 1 个扩写批次");
     }
 
     @Test
@@ -259,7 +260,7 @@ class DramaTextServiceBehaviorTest {
         assertEquals(2, result.getShots().size());
         assertEquals(List.of(1, 2),
                 result.getShots().stream().map(ShotDraftList.ShotDraft::getChapterIndex).toList());
-        assertEquals(1, gateway.users.size(), "不超过每片场数上限时应合并为单次请求");
+        assertEquals(2, gateway.users.size(), "不超过每片场数上限时拆镜合并为单次请求，外加一次扩写");
     }
 
     @Test
@@ -273,10 +274,11 @@ class DramaTextServiceBehaviorTest {
         ShotDraftList result = service.draftShots(SERIES_ID, script, List.of("洛白", "地点1"));
 
         assertEquals(1, result.getShots().size());
-        assertEquals(2, gateway.users.size());
+        assertEquals(3, gateway.users.size(), "截断重试 2 次 + 扩写 1 次");
         assertTrue(gateway.users.get(1).contains("为这份剧本出章节"), "截断后应重放原任务");
         assertTrue(!gateway.users.get(1).contains("上一次结构化输出"), "禁止把残缺 JSON 塞进 length-repair");
         assertTrue(!gateway.users.get(1).contains("残缺"));
+        assertTrue(gateway.users.get(2).contains("待扩写分镜草稿"), "拆镜成功后追加视觉扩写");
     }
 
     @Test

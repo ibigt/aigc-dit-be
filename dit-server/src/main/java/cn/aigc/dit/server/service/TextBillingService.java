@@ -53,6 +53,7 @@ public class TextBillingService {
             case "SCRIPT_PARSE" -> "剧本分场";
             case "ASSET_ENRICH" -> "素材增强";
             case "SHOT_DRAFT" -> "分镜草稿";
+            case "SHOT_ENRICH" -> "分镜扩写";
             default -> "文本任务";
         };
     }

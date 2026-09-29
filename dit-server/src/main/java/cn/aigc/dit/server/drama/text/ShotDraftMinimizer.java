@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaStoryboardCompiler;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
@@ -65,7 +66,26 @@ public final class ShotDraftMinimizer {
         }
         int leftDuration = left.getDurationSec() == null ? maxDurationSec : left.getDurationSec();
         int rightDuration = right.getDurationSec() == null ? maxDurationSec : right.getDurationSec();
-        return leftDuration + rightDuration <= maxDurationSec;
+        if (leftDuration + rightDuration > maxDurationSec) {
+            return false;
+        }
+        if (bothDialogue) {
+            // 合并后的台词也要在合计时长里念得完（4 字/秒），
+            // 否则对谈并进一镜只会制造 15 秒封顶、台词念一半就被切掉的超载镜。
+            int chars = spokenChars(left.getDialogue()) + spokenChars(right.getDialogue());
+            return (int) Math.ceil(chars / (double) DramaTextServiceImpl.SPOKEN_CHARS_PER_SECOND)
+                    <= leftDuration + rightDuration;
+        }
+        return true;
+    }
+
+    /** 与台词时长护栏同一口径：按字幕行统计口播字数（去说话人前缀，标点不发音不计）。 */
+    private static int spokenChars(String dialogue) {
+        int chars = 0;
+        for (String line : DramaStoryboardCompiler.captionLines(dialogue)) {
+            chars += DramaStoryboardCompiler.speakableChars(line);
+        }
+        return chars;
     }
 
     private static boolean sameCharacterSet(List<String> left, List<String> right) {

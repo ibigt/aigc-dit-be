@@ -56,7 +56,9 @@ public final class DramaTextPrompts {
             - action 控制在 80 字以内，只写可视动作与环境的最小集合。
             - sound 写 1~2 个关键声音关键词，总长不超过 20 字。
             - dialogue 严格保留剧本原文，不要扩写、解释或补全台词。
-            - dialogue.speaker 若是旁白/画外音/解说/VO/OS/旁白音 等，一律输出「旁白」；旁白只出现在 dialogue.speaker，不得进 characters。
+            - dialogue.speaker 若是旁白/画外音/解说/VO/OS/旁白音 等纯第三人称解说，一律输出「旁白」；旁白只出现在 dialogue.speaker，不得进 characters。
+            - 台词若是某个角色的画外音或内心独白（用该角色的声音说、画面中人物不开口），speaker 写「角色名（画外音）」，
+              不要归成「旁白」；该角色照常进 characters。
             - dialogue.emotion 闭集：高兴/愤怒/悲伤/恐惧/惊讶/厌恶/紧张；只标原文或舞台提示已能看出的情绪（如「怒道」「哭着说」），看不出则给空字符串；旁白句 emotion 一律空字符串；非法值不要输出。
             """;
 
@@ -117,9 +119,16 @@ public final class DramaTextPrompts {
             }
             规则：
             - duration_sec 只许 5–15 的整数秒；优先估在 10–15 秒。内容本身很短才用 5–9 秒。
+              中文台词按每秒 4 字折算口播时长（只数汉字等口播字，标点符号不发音、不计数）：
+              本镜 dialogue 总口播字数超过 duration_sec × 4 就念不完，
+              必须按对白句边界拆成多镜；动作镜按节拍估。
               按本镜对白长短、动作节拍估计，不要所有镜头填同一个秒数。
               时长只服务单镜，禁止为了凑总秒数而删戏或打乱时间线；不同场景不得并进一镜。
             - 必须按 scenes 的先后、场内 action 与 dialogue 的出现顺序拆镜；后一场的事件不得出现在前面的镜头里。
+            - 动作只归它发生的那一镜：narrative_goal 只写本镜时间点内发生的动作，
+              禁止把整场动作链复述进每一镜，也禁止后续镜头复演先前镜头已演过的动作
+              （拍桌、起身、拔U盘这类动作全场只演一次）。
+            - title 概括本镜节拍而非场名（如「张总问责」「决意赴机房」）；同一场内各镜标题不得雷同。
             - character_names / prop_names / location_name 只能原样引用给定资产名，不得发明新名。
             - character_names 只列本镜动作和对白里实际出现的人，不要把整场名单抄进每一镜；禁止列入旁白/画外音/解说。
             - character_names 必须按动作/对白里出场先后排序，不要按资产列表顺序。
@@ -132,7 +141,7 @@ public final class DramaTextPrompts {
               不要仅因景别、运镜、正反打偏好而拆镜。
               同场连续对谈（多人轮流说话）应落在同一镜，dialogue 用换行分隔多句；不要一句一镜。
               下列硬边界才拆开：地点或时间跳转；服装/身份状态突变；切到另一组无关人物或另一条动作线；
-              或完整内容超过 15 秒演不完（在对白句或动作句边界切开，不要为凑时长删戏）。
+              或完整内容超过 15 秒演不完（台词按每秒 4 字折算；在对白句或动作句边界切开，不要为凑时长删戏）。
             - 相邻镜头 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
               （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
             - 同一场内，相邻分镜里同一个人物在画面中的相对站位要保持稳定
@@ -140,11 +149,15 @@ public final class DramaTextPrompts {
               只能在动作或对白明确让人物位移时才改站位；禁止无理由地「忽左忽右」。
               如果一镜里写成「洛白在画面左侧」，下一镜再出现洛白时默认仍在左侧。
             - narrative_goal 写一个景别或主运镜，接着本镜主要可见动作；对谈镜可概括交谈双方动作，不要写成一句一镜。
+              同一场内相邻镜头的景别或机位必须有变化（如中景接近景、推近接横移、正面接侧面），
+              禁止每镜都写同一个景别。
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - scene 只写空间陈设与光线，不要写人物动作。
             - 不要写 compiled_prompt 或最终视频提示词，那是下游编译器的活。
             - dialogue（台词）优先完整保留：scenes[].dialogue 里的每一句，都要原样落到某条分镜的 dialogue 中。
               有 emotion 时格式「说话人（情绪）：原文」；无 emotion 时「说话人：原文」；旁白一律「旁白：原文」（不要写情绪括号）。
+              角色的画外音/内心独白写成「说话人（画外音）：原文」，括号固定写「画外音」，不再叠情绪括号；
+              speaker 为「角色名（画外音）」的照原样保留该标记，禁止改写成「旁白」，发声角色也应列入 character_names。
               同镜多句用换行分隔。禁止摘要、改写、删半句、只留「关键句」或把台词揉进 narrative_goal。
               纯动作镜可留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
             - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 60 字，
@@ -260,7 +273,10 @@ public final class DramaTextPrompts {
         text.append("可压缩 narrative_goal/scene/continuity 等非台词短句，有戏份的单场常见 1～3 镜，能一镜演完就不要多拆；");
         text.append("但 scenes 中的台词必须尽量原样保留到对应分镜 dialogue，禁止摘要或删句来省体积。");
         text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
+        text.append("\n动作只归它发生的那一镜：每镜只写本镜时间点内发生的动作，后续镜禁止复演先前镜已演过的动作；");
+        text.append("同场各镜 title 按节拍区分、不要共用一个场名；相邻镜头景别或机位要有变化。");
         text.append("\n每条分镜的 duration_sec 优先估在 10 到 15 秒；内容本身很短才用 5 到 9 秒。只能是 5 到 15 的整数秒。");
+        text.append("台词按每秒 4 字折算（只数口播字，标点符号不发音、不计数）：一镜 dialogue 总口播字数超过 duration_sec × 4 就念不完，要在对白句边界拆成多镜，不要把整场对谈塞进一镜。");
         text.append("不要所有镜头填同一个秒数。无法判断时再用 ").append(preferredFallback(fallbackSec)).append(" 秒。");
         text.append("单镜时长不要影响镜头顺序，也不要为了凑总时长删戏或把两场戏并进一镜。");
         if (episodeBudgetSec != null && episodeBudgetSec > 0) {
@@ -283,5 +299,46 @@ public final class DramaTextPrompts {
             return 10;
         }
         return Math.min(15, value);
+    }
+
+    /**
+     * 分镜视觉扩写：输入已拆好的草稿（含台词与人物名单），只把 narrative_goal / scene
+     * 两个字段扩成富画面描述。独立于 COMMON——扩写要的是丰富，不吃「尽量精简」那条。
+     */
+    private static final String SYSTEM_SHOT_ENRICH = """
+            你是漫剧流水线的「分镜视觉扩写层」。输入是拆好的分镜草稿（含场次上下文、台词与人物名单），
+            任务是把每条分镜的 narrative_goal 与 scene 扩写成可直接指导视频生成的画面描述，其余一律不做。
+            硬性要求：
+            1. 只输出一个 JSON 对象：{"shots":[{"chapter_index":N,"index":M,"scene":"…","narrative_goal":"…"}]}；
+               不要 Markdown 围栏、不要解释文字；shots 必须逐条覆盖输入的每一条分镜，
+               chapter_index 与 index 与输入完全一致，键名 snake_case 不得增删改名。
+            2. 三不动：
+               - 人物不能多、不能少、不能换人：原稿 narrative_goal 里出现的人物名必须原样保留；
+                 本镜没有的角色一律不得出现。
+               - 台词一个字不许动，也不许把台词、旁白、对白内容写进 narrative_goal 或 scene。
+               - 谁做什么动作不许变：动作的主语与内容保持原样，只允许补充画面细节。
+            3. 只补充镜头语言与画面质感：
+               - narrative_goal 以景别与主运镜开头（如「中景，缓慢推近」），按原动作顺序串联动作链，
+                 补充光线方向、环境氛围与人物站位朝向；60～150 字；不写心理独白与剧作术语。
+               - 相邻分镜的景别或机位要有变化（前一镜中景推近，下一镜可换近景、特写或侧面），
+                 不要每镜都以「中景」开头。
+               - scene 只写空间陈设、材质质感与光源氛围（如「日光从百叶窗斜切进来，浮尘漂浮，
+                 桌面堆着牛皮档案」），不写人物动作；40～90 字。
+            4. 光线氛围必须符合所在场次的 time（日/夜）与 interior（内/外）：
+               夜戏写夜景光源，外景写天光，不得把夜场写成白天。
+            5. 人物长相、五官、发型与服装款式不要描写（由角色设定图锚定），
+               可写姿态、位置与朝向。
+            6. 人名、道具名、地点名原样沿用输入写法，不得简称、改写或翻译。
+            """;
+
+    public static String shotEnrichSystem() {
+        return SYSTEM_SHOT_ENRICH;
+    }
+
+    public static String shotEnrichUser(String scenesJson, String shotsJson) {
+        return "场次上下文（chapter_index 对应的场次、日夜与内外景）：\n" + scenesJson
+                + "\n\n待扩写分镜草稿：\n" + shotsJson
+                + "\n\n逐条输出扩写后的 scene 与 narrative_goal；chapter_index 与 index 必须与输入一致，"
+                + "输入有几条就输出几条，不要合并或遗漏。";
     }
 }

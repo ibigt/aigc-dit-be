@@ -5,6 +5,7 @@ import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDialogueSpeakers;
 import cn.aigc.dit.server.drama.DramaDurations;
+import cn.aigc.dit.server.drama.DramaStoryboardCompiler;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -18,6 +19,7 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -60,6 +62,12 @@ public class DramaTextServiceImpl implements DramaTextService {
     private static final int ASSET_ENRICHMENT_CONCURRENCY = 2;
     /** 分镜分片有限并发，墙钟近似降为 ceil(packs)/concurrency。 */
     private static final int SHOT_DRAFT_CONCURRENCY = 2;
+    /** 单批扩写的分镜数：拆镜后每镜字段很小，批次可以比资产增强大。 */
+    private static final int SHOT_ENRICHMENT_BATCH_SIZE = 10;
+    /** 分镜扩写批次有限并发，与拆镜并发一致。 */
+    private static final int SHOT_ENRICHMENT_CONCURRENCY = 2;
+    /** 中文口播约 4 字/秒；台词超出时长承载时向上抬时长，上限仍是单镜 15 秒。 */
+    static final int SPOKEN_CHARS_PER_SECOND = 4;
     static final int MAX_JSON_TOKENS = 32768;
     /** 单场只保留模型按重要性排序后的前三个核心道具，防止偶发越过提示词。 */
     private static final int MAX_MAIN_PROPS_PER_SCENE = 3;
@@ -284,10 +292,16 @@ public class DramaTextServiceImpl implements DramaTextService {
             int before = drafts.getShots() == null ? 0 : drafts.getShots().size();
 
             ShotDraftList result = ShotDraftMinimizer.minimize(drafts, DramaContract.MAX_DURATION_SEC);
+            // 台词念不完的镜先抬时长，仍超单镜上限的按对白行拆开，最后扩写画面；
+            // 三者都是纯增强，失败不影响拆镜结果。
+            int extended = fitDurationsToDialogue(result);
+            int splitShots = splitOverloadedShots(result);
+            int enrichedFields = enrichShots(seriesId, script, result, safe(assetNames));
             gateway.settleBilling(billing);
 
-            log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} elapsedMs={}",
-                    seriesId, before, result.getShots() == null ? 0 : result.getShots().size(), elapsedMs(started));
+            log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} durationExtended={} overloadedSplit={} enrichedFields={} elapsedMs={}",
+                    seriesId, before, result.getShots() == null ? 0 : result.getShots().size(),
+                    extended, splitShots, enrichedFields, elapsedMs(started));
             return result;
         } catch (RuntimeException e) {
             log.warn("[drama-text] 分镜草稿失败 seriesId={} elapsedMs={} error={}",
@@ -569,6 +583,147 @@ public class DramaTextServiceImpl implements DramaTextService {
         return new ArrayList<>(picked);
     }
 
+    /**
+     * 分镜视觉扩写：把骨架 narrative_goal / scene 扩成含景别、运镜、光线与氛围的画面描述，
+     * 让分镜页最终编译出的视频提示词不再是干巴巴的事件梗概。
+     * 纯增强步骤——任何失败只打日志并保留原稿，绝不让拆镜结果变差。
+     */
+    private int enrichShots(long seriesId, ScriptDoc script, ShotDraftList result, List<String> assetNames) {
+        List<ShotDraftList.ShotDraft> shots = result == null || result.getShots() == null
+                ? List.of() : result.getShots();
+        if (shots.isEmpty() || script == null || script.getScenes() == null || script.getScenes().isEmpty()) {
+            return 0;
+        }
+        long started = System.nanoTime();
+        log.info("[drama-text] 分镜扩写开始 seriesId={} shots={} batches={}",
+                seriesId, shots.size(), (shots.size() + SHOT_ENRICHMENT_BATCH_SIZE - 1) / SHOT_ENRICHMENT_BATCH_SIZE);
+        TextBillingSession billing = openBilling(seriesId, "SHOT_ENRICH");
+        Set<String> names = new LinkedHashSet<>(safe(assetNames));
+        String scenesJson = toJson(enrichScenesContext(script, shots));
+        int applied = 0;
+        try {
+            List<int[]> ranges = new ArrayList<>();
+            for (int from = 0; from < shots.size(); from += SHOT_ENRICHMENT_BATCH_SIZE) {
+                ranges.add(new int[]{from, Math.min(from + SHOT_ENRICHMENT_BATCH_SIZE, shots.size())});
+            }
+            if (ranges.size() == 1) {
+                applied += enrichShotBatch(
+                        seriesId, shots, ranges.get(0)[0], ranges.get(0)[1], scenesJson, names, billing);
+            } else {
+                int workers = Math.min(SHOT_ENRICHMENT_CONCURRENCY, ranges.size());
+                ExecutorService pool = Executors.newFixedThreadPool(workers);
+                try {
+                    List<Future<Integer>> futures = new ArrayList<>(ranges.size());
+                    for (int[] range : ranges) {
+                        int from = range[0];
+                        int to = range[1];
+                        futures.add(pool.submit(() ->
+                                enrichShotBatch(seriesId, shots, from, to, scenesJson, names, billing)));
+                    }
+                    for (Future<Integer> future : futures) {
+                        try {
+                            applied += future.get();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            log.warn("[drama-text] 分镜扩写并发被中断 seriesId={}", seriesId);
+                            break;
+                        } catch (ExecutionException e) {
+                            log.warn("[drama-text] 分镜扩写并发任务异常 seriesId={} error={}",
+                                    seriesId, e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+                        }
+                    }
+                } finally {
+                    pool.shutdown();
+                    try {
+                        if (!pool.awaitTermination(10, TimeUnit.MINUTES)) {
+                            pool.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        pool.shutdownNow();
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+        } finally {
+            gateway.settleBilling(billing);
+        }
+        log.info("[drama-text] 分镜扩写完成 seriesId={} enrichedFields={}/{} elapsedMs={}",
+                seriesId, applied, shots.size() * 2, elapsedMs(started));
+        return applied;
+    }
+
+    private int enrichShotBatch(
+            long seriesId, List<ShotDraftList.ShotDraft> shots, int from, int to,
+            String scenesJson, Set<String> assetNames, TextBillingSession billing) {
+        ShotDraftList batch = new ShotDraftList();
+        batch.setShots(new ArrayList<>(shots.subList(from, to)));
+        try {
+            DramaShotEnrichment.ShotEnrichList enriched = attemptJson(seriesId, DramaTextPrompts.shotEnrichSystem(),
+                    DramaTextPrompts.shotEnrichUser(scenesJson, toJson(batch)),
+                    DramaTextServiceImpl::readShotEnrich, "ShotEnrichList", 16384, billing);
+            return DramaShotEnrichment.merge(batch, enriched, assetNames);
+        } catch (RuntimeException e) {
+            log.warn("[drama-text] 分镜扩写批次失败，保留原稿 seriesId={} from={} to={} error={}",
+                    seriesId, from, to, e.getMessage());
+            return 0;
+        }
+    }
+
+    /** 只带扩写需要的场次上下文（日夜与内外景），避免整份剧本塞进每次扩写请求。 */
+    private static List<Map<String, Object>> enrichScenesContext(
+            ScriptDoc script, List<ShotDraftList.ShotDraft> shots) {
+        Set<Integer> usedChapters = new LinkedHashSet<>();
+        for (ShotDraftList.ShotDraft shot : shots) {
+            if (shot != null && shot.getChapterIndex() != null) {
+                usedChapters.add(shot.getChapterIndex());
+            }
+        }
+        List<Map<String, Object>> context = new ArrayList<>();
+        int fallback = 0;
+        for (ScriptDoc.Scene scene : script.getScenes()) {
+            if (scene == null) {
+                continue;
+            }
+            fallback++;
+            int index = scene.getIndex() == null || scene.getIndex() < 1 ? fallback : scene.getIndex();
+            if (!usedChapters.contains(index)) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("chapter_index", index);
+            item.put("heading", scene.getHeading() == null ? "" : scene.getHeading());
+            item.put("time", scene.getTime() == null ? "" : scene.getTime());
+            item.put("interior", scene.getInterior() == null ? Boolean.TRUE : scene.getInterior());
+            context.add(item);
+        }
+        return context;
+    }
+
+    /**
+     * 读取扩写 JSON；外层 shots 为空但正文里另有 shots 数组时同样抢救，
+     * 解析不出或 shots 为空一律返回 null 交给 attemptJson 重试。
+     */
+    static DramaShotEnrichment.ShotEnrichList readShotEnrich(String content) {
+        DramaShotEnrichment.ShotEnrichList list =
+                parseJson(content, DramaShotEnrichment.ShotEnrichList.class);
+        if (hasEnrichedShots(list)) {
+            return list;
+        }
+        String array = extractJsonArrayAfterKey(content, "shots");
+        if (array != null) {
+            DramaShotEnrichment.ShotEnrichList salvaged =
+                    parseJson("{\"shots\":" + array + "}", DramaShotEnrichment.ShotEnrichList.class);
+            if (hasEnrichedShots(salvaged)) {
+                return salvaged;
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasEnrichedShots(DramaShotEnrichment.ShotEnrichList list) {
+        return list != null && list.getShots() != null && !list.getShots().isEmpty();
+    }
+
     private <T> T attemptJson(long seriesId, String system, String user,
                               java.util.function.Function<String, T> reader, String what, int maxTokens,
                               TextBillingSession billing) {
@@ -605,10 +760,10 @@ public class DramaTextServiceImpl implements DramaTextService {
                 reason = "输出被 max_tokens 截断（finish_reason=" + response.getFinishReason() + "）。" + reason;
             }
             lastReason = reason;
-            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={} nextMaxTokens={} truncationPolicy={}",
+            log.warn("[drama-text] {} 输出不符合合同 seriesId={} attempt={} reason={} model={} finishReason={} contentLength={} contentHead={} nextMaxTokens={} truncationPolicy={}",
                     what, seriesId, attempt, reason, response.getModel(),
                     response.getFinishReason(), content == null ? 0 : content.length(),
-                    truncated ? nextMaxTokens(tokens) : tokens, policy);
+                    headOf(content), truncated ? nextMaxTokens(tokens) : tokens, policy);
             if (truncated && policy == TruncationPolicy.BUMP_ONLY_NO_REPAIR) {
                 int bumped = nextMaxTokens(tokens);
                 if (bumped > tokens) {
@@ -755,6 +910,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             case "ScriptDoc" -> ScriptDoc.class;
             case "AssetDraftList" -> AssetDraftList.class;
             case "ShotDraftList" -> ShotDraftList.class;
+            case "ShotEnrichList" -> DramaShotEnrichment.ShotEnrichList.class;
             default -> null;
         };
         if (type == null) {
@@ -788,6 +944,12 @@ public class DramaTextServiceImpl implements DramaTextService {
                     return "shots 缺失或为空";
                 }
                 return "分镜经合同清洗后为空（章节引用、名称或字段无效）";
+            }
+            if (parsed instanceof DramaShotEnrichment.ShotEnrichList list) {
+                if (list.getShots() == null || list.getShots().isEmpty()) {
+                    return "shots 缺失或为空";
+                }
+                return "扩写条目经合同清洗后为空（chapter_index 或 index 缺失）";
             }
             return "输出未通过合同校验";
         } catch (JsonProcessingException e) {
@@ -837,6 +999,15 @@ public class DramaTextServiceImpl implements DramaTextService {
             return salvaged;
         }
         return list;
+    }
+
+    /** 合同失败时带一小段原始输出，便于现场排查模型到底回了什么（压成一行、限长）。 */
+    private static String headOf(String content) {
+        if (content == null) {
+            return "";
+        }
+        String flat = content.replace("\r", " ").replace("\n", " ");
+        return flat.length() <= 300 ? flat : flat.substring(0, 300);
     }
 
     /** 模型可能包代码围栏或前后带解释文字；取最外层花括号。 */
@@ -1066,6 +1237,7 @@ public class DramaTextServiceImpl implements DramaTextService {
         }
         int sceneCount = script == null || script.getScenes() == null ? 0 : script.getScenes().size();
         Set<String> allowed = new LinkedHashSet<>(assetNames);
+        Map<Integer, Set<String>> spokenChars = spokenCharsByScene(script);
         List<ShotDraftList.ShotDraft> raw = new ArrayList<>();
         int lastChapter = 1;
         for (ShotDraftList.ShotDraft shot : list.getShots()) {
@@ -1101,10 +1273,86 @@ public class DramaTextServiceImpl implements DramaTextService {
             kept.add(shot);
         }
         list.setShots(kept);
+        if (!spokenChars.isEmpty()) {
+            Set<String> covered = new HashSet<>();
+            for (ShotDraftList.ShotDraft shot : kept) {
+                if (shot == null) {
+                    continue;
+                }
+                for (String line : DramaStoryboardCompiler.captionLines(shot.getDialogue())) {
+                    String key = speakableKey(line);
+                    if (key.isEmpty()) {
+                        continue;
+                    }
+                    covered.add(key);
+                }
+            }
+            List<String> missing = new ArrayList<>();
+            for (Map.Entry<Integer, Set<String>> entry : spokenChars.entrySet()) {
+                for (String key : entry.getValue()) {
+                    if (!covered.contains(key)) {
+                        missing.add("scene" + entry.getKey() + ":" + key);
+                    }
+                }
+            }
+            if (!missing.isEmpty()) {
+                int sample = Math.min(3, missing.size());
+                log.warn("[drama-text] 分镜台词覆盖不全 droppedShots 合同不通过 missing={} sample={}",
+                        missing.size(), missing.subList(0, sample));
+                return null;
+            }
+        }
         if (list.getChapters() == null || list.getChapters().isEmpty()) {
             list.setChapters(chaptersFrom(script));
         }
         return list;
+    }
+
+    /**
+     * 台词完整性底料：把每个 scene 的台词按行归一成「口播字串」集合。
+     * 「旁白」也按字串计；纯动作剧本集合为空，由 normalizeShots 跳过该校验。
+     */
+    private static Map<Integer, Set<String>> spokenCharsByScene(ScriptDoc script) {
+        Map<Integer, Set<String>> map = new HashMap<>();
+        if (script == null || script.getScenes() == null) {
+            return map;
+        }
+        for (ScriptDoc.Scene scene : script.getScenes()) {
+            if (scene == null || scene.getDialogue() == null) {
+                continue;
+            }
+            Set<String> keys = new LinkedHashSet<>();
+            for (ScriptDoc.Dialogue dialogue : scene.getDialogue()) {
+                if (dialogue == null || !StringUtils.hasText(dialogue.getLine())) {
+                    continue;
+                }
+                String key = speakableKey(dialogue.getLine());
+                if (!key.isEmpty()) {
+                    keys.add(key);
+                }
+            }
+            int idx = scene.getIndex() == null || scene.getIndex() < 1
+                    ? map.size() + 1 : scene.getIndex();
+            map.put(idx, keys);
+        }
+        return map;
+    }
+
+    /** 口播字归一：标点、空白、说话人前缀都不算，剩余发音字串（10+ 取前 10）作为弱键。 */
+    private static String speakableKey(String text) {
+        if (text == null) {
+            return "";
+        }
+        int count = 0;
+        StringBuilder key = new StringBuilder();
+        for (int i = 0; i < text.length() && count < 10; i++) {
+            char ch = text.charAt(i);
+            if (Character.isLetterOrDigit(ch)) {
+                key.append(ch);
+                count++;
+            }
+        }
+        return key.toString();
     }
 
     private static int clampChapter(Integer chapterIndex, int sceneCount) {
@@ -1128,6 +1376,151 @@ public class DramaTextServiceImpl implements DramaTextService {
                     shot.getDurationSec() == null ? fallback : shot.getDurationSec()));
         }
         return list;
+    }
+
+    /**
+     * 台词时长护栏：中文口播约 4 字/秒，台词在当前秒数里念不完就把时长抬到够用，
+     * 上限仍是单镜上限。只抬不降；封顶后仍不够的镜保留在上限并计数打日志，
+     * 提示这镜台词过长、值得人工拆分。
+     */
+    static int fitDurationsToDialogue(ShotDraftList list) {
+        if (list == null || list.getShots() == null) {
+            return 0;
+        }
+        int extended = 0;
+        int capped = 0;
+        for (ShotDraftList.ShotDraft shot : list.getShots()) {
+            if (shot == null) {
+                continue;
+            }
+            int chars = 0;
+            for (String line : DramaStoryboardCompiler.captionLines(shot.getDialogue())) {
+                chars += DramaStoryboardCompiler.speakableChars(line);
+            }
+            if (chars == 0) {
+                continue;
+            }
+            int required = (int) Math.ceil(chars / (double) SPOKEN_CHARS_PER_SECOND);
+            int current = shot.getDurationSec() == null
+                    ? DramaContract.DEFAULT_DURATION_SEC : shot.getDurationSec();
+            if (required <= current) {
+                continue;
+            }
+            int bumped = DramaDurations.clamp(required);
+            if (bumped > current) {
+                shot.setDurationSec(bumped);
+                extended++;
+            }
+            if (required > bumped) {
+                capped++;
+            }
+        }
+        if (extended > 0 || capped > 0) {
+            log.info("[drama-text] 台词时长护栏 extended={} cappedAtMax={}", extended, capped);
+        }
+        return extended;
+    }
+
+    /**
+     * 台词在单镜上限内念不完的镜，按对白行边界拆成多镜。
+     * 提示词已给「每秒 4 字」折算，模型仍可能把整场对谈塞进一镜；
+     * 与其 15 秒封顶把台词切掉，不如拆成若干同画面的连续镜，让每句都念得完。
+     * 单行台词本身超上限的无法再拆，保留原样交人工处理。
+     */
+    static int splitOverloadedShots(ShotDraftList list) {
+        if (list == null || list.getShots() == null || list.getShots().isEmpty()) {
+            return 0;
+        }
+        List<ShotDraftList.ShotDraft> flattened = new ArrayList<>();
+        int splitCount = 0;
+        for (ShotDraftList.ShotDraft shot : list.getShots()) {
+            if (shot == null) {
+                continue;
+            }
+            List<List<String>> groups = groupDialogueBySpeakableBudget(shot.getDialogue());
+            if (groups.size() <= 1) {
+                flattened.add(shot);
+                continue;
+            }
+            splitCount++;
+            for (int i = 0; i < groups.size(); i++) {
+                flattened.add(copyWithDialogue(shot, groups.get(i), i == 0, i == groups.size() - 1));
+            }
+        }
+        if (splitCount == 0) {
+            return 0;
+        }
+        renumberShots(flattened);
+        list.setShots(flattened);
+        return splitCount;
+    }
+
+    /** 按口播预算（单镜上限 × 4 字/秒）把对白行贪心装箱；总量装得下时返回单组。 */
+    private static List<List<String>> groupDialogueBySpeakableBudget(String dialogue) {
+        List<List<String>> groups = new ArrayList<>();
+        if (!StringUtils.hasText(dialogue)) {
+            return groups;
+        }
+        int budget = DramaContract.MAX_DURATION_SEC * SPOKEN_CHARS_PER_SECOND;
+        List<String> current = new ArrayList<>();
+        int currentChars = 0;
+        for (String rawLine : dialogue.split("\r?\n")) {
+            if (!StringUtils.hasText(rawLine)) {
+                continue;
+            }
+            int lineChars = captionChars(rawLine);
+            if (!current.isEmpty() && currentChars + lineChars > budget) {
+                groups.add(current);
+                current = new ArrayList<>();
+                currentChars = 0;
+            }
+            current.add(rawLine.strip());
+            currentChars += lineChars;
+        }
+        if (!current.isEmpty()) {
+            groups.add(current);
+        }
+        return groups;
+    }
+
+    private static ShotDraftList.ShotDraft copyWithDialogue(
+            ShotDraftList.ShotDraft origin, List<String> lines, boolean first, boolean last) {
+        ShotDraftList.ShotDraft copy = new ShotDraftList.ShotDraft();
+        copy.setChapterIndex(origin.getChapterIndex());
+        copy.setIndex(origin.getIndex());
+        copy.setTitle(origin.getTitle());
+        copy.setDurationSec(DramaDurations.clamp((int) Math.ceil(
+                captionChars(String.join("\n", lines)) / (double) SPOKEN_CHARS_PER_SECOND)));
+        copy.setNarrativeGoal(origin.getNarrativeGoal());
+        copy.setScene(origin.getScene());
+        copy.setDialogue(String.join("\n", lines));
+        copy.setContinuityIn(first ? origin.getContinuityIn() : "");
+        copy.setContinuityOut(last ? origin.getContinuityOut() : "");
+        copy.setCharacterNames(new ArrayList<>(safe(origin.getCharacterNames())));
+        copy.setPropNames(new ArrayList<>(safe(origin.getPropNames())));
+        copy.setLocationName(origin.getLocationName());
+        copy.setCastCount(origin.getCastCount());
+        return copy;
+    }
+
+    private static void renumberShots(List<ShotDraftList.ShotDraft> shots) {
+        Integer chapter = null;
+        int index = 0;
+        for (ShotDraftList.ShotDraft shot : shots) {
+            if (!Objects.equals(chapter, shot.getChapterIndex())) {
+                chapter = shot.getChapterIndex();
+                index = 0;
+            }
+            shot.setIndex(++index);
+        }
+    }
+
+    private static int captionChars(String dialogue) {
+        int chars = 0;
+        for (String caption : DramaStoryboardCompiler.captionLines(dialogue)) {
+            chars += DramaStoryboardCompiler.speakableChars(caption);
+        }
+        return chars;
     }
 
     private static List<String> retain(List<String> names, Set<String> allowed) {

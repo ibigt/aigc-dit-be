@@ -73,6 +73,128 @@ class DramaTextServiceImplTest {
     }
 
     @Test
+    void durationGuardBumpsDurationToSpokenLength() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setDurationSec(5);
+        // 台词 25 字，4 字/秒需要 7 秒，5 秒念不完。
+        shot.setDialogue("局长（愤怒）：今天我们必须把这件事情查个水落石出不能让任何人跑了");
+        list.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        int extended = DramaTextServiceImpl.fitDurationsToDialogue(list);
+
+        assertEquals(1, extended);
+        assertEquals(7, shot.getDurationSec());
+    }
+
+    @Test
+    void durationGuardCapsAtFifteenSeconds() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setDurationSec(8);
+        // 台词 70 字需要 18 秒，单镜上限 15 秒，封顶保留。
+        shot.setDialogue("旁白：零一二三四五六七八九".repeat(7));
+        list.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        int extended = DramaTextServiceImpl.fitDurationsToDialogue(list);
+
+        assertEquals(1, extended);
+        assertEquals(15, shot.getDurationSec());
+    }
+
+    @Test
+    void durationGuardCountsOnlySpeakableCharsIgnoringPunctuation() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft lightPunct = new ShotDraftList.ShotDraft();
+        lightPunct.setDurationSec(5);
+        // 口播字仅 14（顿号/省略号/问号/感叹号共 9 个不发音）；连标点数成 23 字会错抬到 6 秒。
+        lightPunct.setDialogue("局长：你、你、你……到底想说什么？说、清、楚？马上！");
+        ShotDraftList.ShotDraft spokenHeavy = new ShotDraftList.ShotDraft();
+        spokenHeavy.setDurationSec(5);
+        // 无标点 22 口播字，5 秒念不完要抬到 6 秒。
+        spokenHeavy.setDialogue("局长：这件事必须查个水落石出一查到底绝不姑息马上办");
+        list.setShots(new java.util.ArrayList<>(List.of(lightPunct, spokenHeavy)));
+
+        int extended = DramaTextServiceImpl.fitDurationsToDialogue(list);
+
+        assertEquals(1, extended);
+        assertEquals(5, lightPunct.getDurationSec(),
+                "标点不发音，不得把标点算进口播字数而虚抬时长");
+        assertEquals(6, spokenHeavy.getDurationSec());
+    }
+
+    @Test
+    void durationGuardNeverDecreasesAndSkipsSilentShots() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft spoken = new ShotDraftList.ShotDraft();
+        spoken.setDurationSec(12);
+        spoken.setDialogue("局长（愤怒）：你给我站住！");
+        ShotDraftList.ShotDraft silent = new ShotDraftList.ShotDraft();
+        silent.setDurationSec(6);
+        silent.setDialogue("");
+        list.setShots(new java.util.ArrayList<>(List.of(spoken, silent)));
+
+        int extended = DramaTextServiceImpl.fitDurationsToDialogue(list);
+
+        assertEquals(0, extended);
+        assertEquals(12, spoken.getDurationSec());
+        assertEquals(6, silent.getDurationSec());
+    }
+
+    @Test
+    void overloadedDialogueShotSplitsIntoSpeakableShots() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setIndex(1);
+        shot.setDurationSec(15);
+        shot.setNarrativeGoal("中景。三人对峙。");
+        shot.setScene("研发部日戏");
+        // 三句各 40 字（去掉「旁白：」前缀后），合计 120 字需 30 秒，单镜 15 秒装不下。
+        String line = "旁白：" + "零一二三四五六七八九".repeat(4);
+        shot.setDialogue(String.join("\n", List.of(line, line, line)));
+        shot.setCharacterNames(List.of("张总"));
+        shot.setContinuityIn("风扇入画");
+        shot.setContinuityOut("张总转身");
+        list.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        int split = DramaTextServiceImpl.splitOverloadedShots(list);
+
+        assertEquals(1, split);
+        List<ShotDraftList.ShotDraft> shots = list.getShots();
+        assertEquals(3, shots.size());
+        for (int i = 0; i < shots.size(); i++) {
+            ShotDraftList.ShotDraft part = shots.get(i);
+            assertEquals(i + 1, part.getIndex());
+            assertEquals(1, part.getChapterIndex());
+            // 拆分必须按原对白行整行搬运，说话人前缀一个字不能丢。
+            assertEquals(line, part.getDialogue());
+            assertEquals(10, part.getDurationSec());
+            assertEquals("研发部日戏", part.getScene());
+            assertEquals(List.of("张总"), part.getCharacterNames());
+            assertEquals(i == 0 ? "风扇入画" : "", part.getContinuityIn());
+            assertEquals(i == 2 ? "张总转身" : "", part.getContinuityOut());
+        }
+    }
+
+    @Test
+    void speakableShotsAreNotSplit() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft speakable = new ShotDraftList.ShotDraft();
+        speakable.setChapterIndex(1);
+        speakable.setIndex(1);
+        speakable.setDurationSec(12);
+        speakable.setDialogue("局长：今天我们必须把这件事情查个水落石出不能让任何人跑了");
+        list.setShots(new java.util.ArrayList<>(List.of(speakable)));
+
+        int split = DramaTextServiceImpl.splitOverloadedShots(list);
+
+        assertEquals(0, split);
+        assertEquals(1, list.getShots().size());
+        assertEquals(speakable, list.getShots().get(0));
+    }
+
+    @Test
     void boundSeriesUsesLlmAndSendsJsonMode() {
         DramaTextServiceImpl service = boundService();
         when(gateway.chat(anyLong(), any())).thenReturn(reply(GOOD_JSON));
@@ -333,5 +455,128 @@ class DramaTextServiceImplTest {
         ScriptDoc back = ScriptDocs.fromMap(map);
         assertEquals("幻梦侦探社", back.getScenes().get(0).getLocation());
         assertEquals(List.of("洛白", "局长"), back.getScenes().get(0).getCharacters());
+    }
+
+    @Test
+    void normalizeShotsAcceptsWhenEveryScriptLineLandsInSomeShotDialogue() {
+        ScriptDoc script = scriptWith(
+                new String[][]{
+                        {"局长", "别睡了。"}
+                });
+        ShotDraftList in = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setIndex(1);
+        shot.setTitle("叫人");
+        shot.setDurationSec(5);
+        shot.setNarrativeGoal("局长推门。");
+        shot.setScene("办公室");
+        shot.setDialogue("局长：别睡了。");
+        shot.setCharacterNames(List.of("局长"));
+        shot.setLocationName("办公室");
+        shot.setCastCount(1);
+        in.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        ShotDraftList out = DramaTextServiceImpl.normalizeShots(in, script, List.of("局长", "办公室"));
+
+        assertNotNull(out, "剧本台词全部落到分镜 dialogue 时应当通过合同校验");
+        assertEquals(1, out.getShots().size());
+    }
+
+    @Test
+    void normalizeShotsRejectsWhenScriptLineIsDroppedFromShotDialogue() {
+        ScriptDoc script = scriptWith(
+                new String[][]{
+                        {"局长", "别睡了。"},
+                        {"洛白", "我马上起来，别催了。"}
+                });
+        ShotDraftList in = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setIndex(1);
+        shot.setTitle("叫人");
+        shot.setDurationSec(5);
+        shot.setNarrativeGoal("局长推门。");
+        shot.setScene("办公室");
+        // 模型把第二句台词整句丢掉——结构合法，应当被合同校验拦下。
+        shot.setDialogue("局长：别睡了。");
+        shot.setCharacterNames(List.of("局长"));
+        shot.setLocationName("办公室");
+        shot.setCastCount(1);
+        in.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        ShotDraftList out = DramaTextServiceImpl.normalizeShots(in, script, List.of("局长", "洛白", "办公室"));
+
+        assertNull(out, "台词整句丢失的分镜必须视为合同失败，由现有重试机制接管");
+    }
+
+    @Test
+    void normalizeShotsCountsNarrationLinesAsCoveredToo() {
+        ScriptDoc script = scriptWith(
+                new String[][]{
+                        {"局长", "加班费到底什么时候发？"},
+                        {"旁白", "夜色渐深。"}
+                });
+        ShotDraftList in = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setIndex(1);
+        shot.setTitle("质问");
+        shot.setDurationSec(5);
+        shot.setNarrativeGoal("局长质问。");
+        shot.setScene("办公室");
+        shot.setDialogue("局长：加班费到底什么时候发？\n旁白：夜色渐深。");
+        shot.setCharacterNames(List.of("局长"));
+        shot.setLocationName("办公室");
+        shot.setCastCount(1);
+        in.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        ShotDraftList out = DramaTextServiceImpl.normalizeShots(in, script, List.of("局长", "办公室"));
+
+        assertNotNull(out, "旁白句也按口播字串纳入覆盖校验，不能只数角色对白");
+    }
+
+    @Test
+    void normalizeShotsSkipsCoverageCheckForDialogueLessScripts() {
+        ScriptDoc script = scriptWith(new String[][]{});
+        ShotDraftList in = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
+        shot.setChapterIndex(1);
+        shot.setIndex(1);
+        shot.setTitle("动作");
+        shot.setDurationSec(8);
+        shot.setNarrativeGoal("洛白起身。");
+        shot.setScene("办公室");
+        shot.setDialogue("");
+        shot.setCharacterNames(List.of("洛白"));
+        shot.setLocationName("办公室");
+        shot.setCastCount(1);
+        in.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        ShotDraftList out = DramaTextServiceImpl.normalizeShots(in, script, List.of("洛白", "办公室"));
+
+        assertNotNull(out, "纯动作剧本（无台词）不得被台词覆盖校验误伤");
+    }
+
+    private static ScriptDoc scriptWith(String[][] lines) {
+        ScriptDoc doc = new ScriptDoc();
+        ScriptDoc.Scene scene = new ScriptDoc.Scene();
+        scene.setIndex(1);
+        scene.setSlug("office");
+        scene.setHeading("办公室 日 内");
+        scene.setLocation("办公室");
+        scene.setTime("日");
+        scene.setInterior(Boolean.TRUE);
+        java.util.List<ScriptDoc.Dialogue> dialogue = new java.util.ArrayList<>();
+        for (String[] pair : lines) {
+            ScriptDoc.Dialogue bit = new ScriptDoc.Dialogue();
+            bit.setSpeaker(pair[0]);
+            bit.setLine(pair[1]);
+            bit.setEmotion("");
+            dialogue.add(bit);
+        }
+        scene.setDialogue(dialogue);
+        doc.setScenes(new java.util.ArrayList<>(List.of(scene)));
+        return doc;
     }
 }

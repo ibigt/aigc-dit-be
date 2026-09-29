@@ -137,6 +137,15 @@ public class OpenAiCompatChatClient {
             // 会把耗时顶到分钟级，触发客户端超时且无 reasoning 价值。OpenAI 兼容的
             // 非 vLLM 后端收到未知字段会忽略，不会报错。
             body.putObject("chat_template_kwargs").put("enable_thinking", false);
+            // MiniMax M3 等思考模型不认 vLLM 的 chat_template_kwargs，思考照发且直接
+            // 挤占 max_tokens；这类模型在模型配置里指定顶层开关（thinkingField +
+            // thinkingType，如 thinking / disabled）才能真正关掉。官方亦不建议
+            // thinking 与 response_format 同开，本层全程 JSON mode，正好关死。
+            String thinkingField = option(adapterConfig, "thinkingField", "");
+            if (!thinkingField.isBlank()) {
+                body.putObject(thinkingField).put("type",
+                        option(adapterConfig, "thinkingType", "disabled"));
+            }
             Double temperature = numberOption(adapterConfig, "temperature");
             if (temperature != null && temperature >= 0 && temperature <= 2) {
                 body.put("temperature", temperature);
@@ -148,6 +157,7 @@ public class OpenAiCompatChatClient {
         if (!StringUtils.hasText(content)) {
             content = choice.path("text").asText("");
         }
+        content = stripReasoning(content);
         JsonNode usage = root.path("usage");
         long promptTokens = tokenCount(usage, "prompt_tokens", "input_tokens");
         long completionTokens = tokenCount(usage, "completion_tokens", "output_tokens");
@@ -157,6 +167,28 @@ public class OpenAiCompatChatClient {
         }
         return TextChatResult.of(content, root.path("model").asText(model),
                 choice.path("finish_reason").asText(null), promptTokens, completionTokens, cachedTokens);
+    }
+
+    /**
+     * 剥掉思考模型混在 content 里的 {@code <think>...</think>} 推理段。
+     * <p>
+     * MiniMax M 系列等把推理直接写进 content：轻则解析器从推理草稿里的第一个
+     * {@code {} 抓错对象，重则思考本身耗尽 max_tokens，正式 JSON 根本没写出来
+     * （未闭合的 {@code <think>} 即此情形，返回空串交给上层按截断处理）。
+     */
+    static String stripReasoning(String content) {
+        if (content == null) {
+            return null;
+        }
+        int opened = content.indexOf("<think>");
+        if (opened < 0) {
+            return content;
+        }
+        int closed = content.indexOf("</think>");
+        if (closed < 0) {
+            return content.substring(0, opened);
+        }
+        return stripReasoning(content.substring(0, opened) + content.substring(closed + "</think>".length()));
     }
 
     private static long tokenCount(JsonNode node, String... fields) {

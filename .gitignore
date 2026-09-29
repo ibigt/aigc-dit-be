@@ -24,3 +24,11 @@ Thumbs.db
 application-local.yml
 application-local.yaml
 deploy/dit-server.jar
+
+# 本地 Maven 仓库与分镜→视频提示词的 replay 验证产物
+.m2/
+sb_*.json
+preview_ep*.json
+replay_*_resp.json
+login_*.json
+token_*.txt
