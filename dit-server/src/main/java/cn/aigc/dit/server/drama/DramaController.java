@@ -314,7 +314,7 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.selectGeneration(id, gid));
     }
 
-    @Operation(summary = "删除资产生成记录；锁定时仅可删未选用")
+    @Operation(summary = "删除资产生成记录；删选用记录会自动切换到剩余图")
     @DeleteMapping("/assets/{id}/generations/{gid}")
     public CommonResult<Void> deleteAssetGeneration(
             @PathVariable Long id,
@@ -379,7 +379,7 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.compileShot(id));
     }
 
-    @Operation(summary = "确认分镜；未锁定资产不能进参考")
+    @Operation(summary = "确认分镜；还没有参考图的资产不能进分镜参考")
     @PostMapping("/shots/{id}/confirm")
     public CommonResult<DramaShotResp> confirmShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.confirmShot(id));

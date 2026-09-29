@@ -15,6 +15,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
+import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
@@ -174,6 +175,42 @@ class DramaAssetServiceTest {
         assertTrue(resp.getReferenceEligible());
         verify(assetMapper, org.mockito.Mockito.atLeastOnce()).updateById(asset);
         verify(storyboardService).invalidateByAsset(31L, 9L);
+    }
+
+    @Test
+    void lockRejectsAttachedRunningTask() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/assets/luobai.png");
+        asset.setGenTaskId(100L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        GenTask running = new GenTask();
+        running.setId(100L);
+        running.setStatus("RUNNING");
+        when(genTaskMapper.selectById(100L)).thenReturn(running);
+
+        BizException error = assertThrows(BizException.class, () -> service.lock(9L));
+        assertEquals("图片仍在生成中，请等待完成后再锁定", error.getMessage());
+        verify(assetMapper, never()).updateById(asset);
+    }
+
+    @Test
+    void lockClearsTerminalTaskAssociation() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/assets/luobai.png");
+        asset.setImagePrompt("中性背景全身参考图，洛白");
+        asset.setGenTaskId(100L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+        GenTask done = new GenTask();
+        done.setId(100L);
+        done.setStatus("SUCCEEDED");
+        when(genTaskMapper.selectById(100L)).thenReturn(done);
+
+        DramaAssetResp resp = service.lock(9L);
+
+        assertEquals(DramaContract.STATUS_LOCKED, resp.getStatus());
+        assertNull(asset.getGenTaskId());
+        verify(assetMapper, org.mockito.Mockito.atLeastOnce()).updateById(asset);
     }
 
     @Test

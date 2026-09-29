@@ -2747,13 +2747,13 @@ public class DramaStoryboardService {
             List<DramaAsset> refs,
             boolean continueToVideo) {
         if (refs == null || refs.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定角色/场景设定图，用于自动画开场静帧");
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先准备角色/场景设定图，用于自动画开场静帧");
         }
         AiModel image = requireBoundImageModel(series);
         boolean useI2i = imageSupportsI2i(image);
         String prevTailKey = useI2i ? resolveStillPrevTailKey(shot) : null;
         List<DramaStoryboardCompiler.ActiveReference> active = new ArrayList<>();
-        // i2i：本镜全部锁定参考图都作为图生图输入；t2i 降级时不写 Picture，避免无图却点名参考。
+        // i2i：本镜全部参考图都作为图生图输入；t2i 降级时不写 Picture，避免无图却点名参考。
         if (useI2i) {
             for (DramaAsset asset : refs) {
                 active.add(toActive(asset));
