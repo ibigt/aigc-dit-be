@@ -738,7 +738,7 @@ public class DramaStoryboardService {
         rebindAndCompile(shot, assets, prefix, false, true);
         List<String> unbound = unboundLockedRequired(shot, assets);
         if (!unbound.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "未锁定不能进分镜参考：" + String.join("、", unbound));
+            throw new BizException(ErrorCode.BAD_REQUEST, "还没有参考图，不能进分镜参考：" + String.join("、", unbound));
         }
         if (!StringUtils.hasText(effectivePrompt(shot)) || isStale(shot, assets, prefix)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再确认");
@@ -837,7 +837,7 @@ public class DramaStoryboardService {
             }
         }
         if (!i2v && refs.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先锁定资产参考图再出片");
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先准备资产参考图再出片");
         }
         DramaShot prev = previousSameChapterShot(shot);
         if (i2v) {
@@ -1307,7 +1307,7 @@ public class DramaStoryboardService {
                 }
                 if (!isReferenceEligible(asset)) {
                     if (requireLocked) {
-                        throw new BizException(ErrorCode.BAD_REQUEST, asset.getName() + "尚未锁定，不能进入分镜参考");
+                        throw new BizException(ErrorCode.BAD_REQUEST, asset.getName() + "还没有参考图，不能进入分镜参考");
                     }
                     continue;
                 }
@@ -1337,7 +1337,7 @@ public class DramaStoryboardService {
         }
         if (!isReferenceEligible(asset)) {
             if (requireLocked) {
-                throw new BizException(ErrorCode.BAD_REQUEST, asset.getName() + "尚未锁定，不能进入分镜参考");
+                throw new BizException(ErrorCode.BAD_REQUEST, asset.getName() + "还没有参考图，不能进入分镜参考");
             }
             return;
         }
@@ -1349,8 +1349,7 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 同名多条（基础 / 入梦 / 换装，或 state_tag 空与 base 并存）时，优先用已锁定且有图的那条。
-     * 否则分镜仍按未锁定基础态判定「未锁定」，资产页却显示另一条已锁定。
+     * 同名多条（基础 / 入梦 / 换装，或 state_tag 空与 base 并存）时，优先用已有参考图的那条。
      */
     static DramaAsset pickNamedAsset(Iterable<DramaAsset> assets, String name, String type, boolean preferDream) {
         if (assets == null || !StringUtils.hasText(name) || !StringUtils.hasText(type)) {
@@ -2316,10 +2315,9 @@ public class DramaStoryboardService {
         shot.setCompiledFingerprint(null);
     }
 
+    /** 有当前选用图即可作为分镜参考，不要求资产已锁定。 */
     private static boolean isReferenceEligible(DramaAsset asset) {
-        return asset != null
-                && DramaContract.STATUS_LOCKED.equals(asset.getStatus())
-                && StringUtils.hasText(asset.getImageStorageKey());
+        return asset != null && StringUtils.hasText(asset.getImageStorageKey());
     }
 
     private String overlayChapterName(ShotDraftList drafts, ScriptDoc.Scene scene, int index) {

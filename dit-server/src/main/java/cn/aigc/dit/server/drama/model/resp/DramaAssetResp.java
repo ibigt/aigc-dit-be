@@ -35,7 +35,7 @@ public class DramaAssetResp {
     private String genTaskStatus;
     private String genErrorMessage;
     private Boolean generating;
-    @Schema(description = "已锁定且有参考图，才可进入分镜参考")
+    @Schema(description = "已有当前选用图，即可进入分镜参考")
     private Boolean referenceEligible;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;

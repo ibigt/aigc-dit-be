@@ -373,12 +373,10 @@ public class DramaAssetService {
     @Transactional
     public DramaAssetResp selectGeneration(Long assetId, Long generationId) {
         DramaAsset asset = requireAsset(assetId);
-        if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "资产已锁定，无法切换最终资产");
-        }
         DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
         applySelectedGeneration(asset, generation);
         assetMapper.updateById(asset);
+        storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
@@ -388,9 +386,6 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
         boolean selected = generation.getId().equals(asset.getSelectedGenerationId());
-        if (selected && DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "资产已锁定，不能删除当前选用记录");
-        }
         assetGenerationMapper.deleteById(generation.getId());
         if (!selected) {
             touchSeries(asset.getSeriesId());
@@ -403,6 +398,7 @@ public class DramaAssetService {
             clearSelectedImage(asset);
         }
         assetMapper.updateById(asset);
+        storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
     }
 
@@ -855,8 +851,7 @@ public class DramaAssetService {
         } else {
             resp.setGenerating(false);
         }
-        resp.setReferenceEligible(DramaContract.STATUS_LOCKED.equals(asset.getStatus())
-                && StringUtils.hasText(asset.getImageStorageKey()));
+        resp.setReferenceEligible(StringUtils.hasText(asset.getImageStorageKey()));
         resp.setCreatedAt(asset.getCreatedAt());
         resp.setUpdatedAt(asset.getUpdatedAt());
         return resp;

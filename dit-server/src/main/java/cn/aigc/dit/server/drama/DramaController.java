@@ -294,7 +294,7 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.getGenerateTask(id, taskId));
     }
 
-    @Operation(summary = "确认锁定资产并升 identity_version；未锁定不能进分镜")
+    @Operation(summary = "确认锁定资产并升 identity_version；分镜参考只看当前选用图")
     @PostMapping("/assets/{id}/lock")
     public CommonResult<DramaAssetResp> lockAsset(@PathVariable Long id) {
         return CommonResult.success(dramaAssetService.lock(id));
@@ -306,7 +306,7 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.listGenerations(id));
     }
 
-    @Operation(summary = "选用一条资产生成记录为最终；已锁定拒绝")
+    @Operation(summary = "选用一条资产生成记录为最终；随时可切换，分镜使用当前图")
     @PostMapping("/assets/{id}/generations/{gid}/select")
     public CommonResult<DramaAssetResp> selectAssetGeneration(
             @PathVariable Long id,

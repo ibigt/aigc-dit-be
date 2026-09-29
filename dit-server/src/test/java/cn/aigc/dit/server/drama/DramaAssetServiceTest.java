@@ -229,7 +229,7 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void unlockedAssetIsNotReferenceEligible() {
+    void assetWithImageIsReferenceEligibleWithoutLock() {
         DramaAsset asset = ownedAsset();
         asset.setImageStorageKey("users/7/assets/a.png");
         asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -238,7 +238,7 @@ class DramaAssetServiceTest {
         when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
 
         List<DramaAssetResp> list = service.listByEpisode(31L);
-        assertFalse(list.get(0).getReferenceEligible());
+        assertTrue(list.get(0).getReferenceEligible());
     }
 
     @Test
@@ -419,14 +419,25 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void selectGenerationRejectedWhenLocked() {
+    void selectGenerationUsesChosenImageEvenWhenLocked() {
         DramaAsset asset = ownedAsset();
         asset.setStatus(DramaContract.STATUS_LOCKED);
         asset.setSelectedGenerationId(1L);
+        asset.setImageStorageKey("users/7/gen/old.png");
         when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaAssetGeneration chosen = new DramaAssetGeneration();
+        chosen.setId(2L);
+        chosen.setAssetId(9L);
+        chosen.setUserId(7L);
+        chosen.setStorageKey("users/7/gen/picked.png");
+        when(assetGenerationMapper.selectById(2L)).thenReturn(chosen);
 
-        BizException error = assertThrows(BizException.class, () -> service.selectGeneration(9L, 2L));
-        assertEquals("资产已锁定，无法切换最终资产", error.getMessage());
+        DramaAssetResp resp = service.selectGeneration(9L, 2L);
+
+        assertEquals(2L, asset.getSelectedGenerationId());
+        assertEquals("users/7/gen/picked.png", asset.getImageStorageKey());
+        assertEquals(Boolean.TRUE, resp.getReferenceEligible());
+        verify(storyboardService).invalidateByAsset(31L, 9L);
     }
 
     @Test
@@ -459,7 +470,7 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void lockedAssetCanDeleteUnselectedButNotSelectedGeneration() {
+    void lockedAssetCanDeleteSelectedGeneration() {
         DramaAsset asset = ownedAsset();
         asset.setStatus(DramaContract.STATUS_LOCKED);
         asset.setSelectedGenerationId(1L);
@@ -476,14 +487,14 @@ class DramaAssetServiceTest {
         other.setUserId(7L);
         other.setStorageKey("users/7/gen/other.png");
         when(assetGenerationMapper.selectById(1L)).thenReturn(selected);
-        when(assetGenerationMapper.selectById(2L)).thenReturn(other);
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of(other));
 
-        BizException error = assertThrows(BizException.class, () -> service.deleteGeneration(9L, 1L));
-        assertEquals("资产已锁定，不能删除当前选用记录", error.getMessage());
+        service.deleteGeneration(9L, 1L);
 
-        service.deleteGeneration(9L, 2L);
-        verify(assetGenerationMapper).deleteById(2L);
-        verify(assetMapper, never()).updateById(asset);
+        verify(assetGenerationMapper).deleteById(1L);
+        assertEquals(2L, asset.getSelectedGenerationId());
+        assertEquals("users/7/gen/other.png", asset.getImageStorageKey());
+        verify(storyboardService).invalidateByAsset(31L, 9L);
     }
 
     @Test
