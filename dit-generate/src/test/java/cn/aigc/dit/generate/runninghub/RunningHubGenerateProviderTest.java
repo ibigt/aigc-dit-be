@@ -293,6 +293,28 @@ class RunningHubGenerateProviderTest {
         assertTrue(error.getMessage().contains("apikey"));
     }
 
+    @Test
+    void submitSurfacesBalanceErrorInsteadOfMissingTaskId() {
+        // RunningHub 在余额不足时返回 HTTP 200 + errorCode=605 + 空 taskId + 文案。
+        // 必须把 errorMessage 暴露出来，否则只看到「未返回 taskId」会让运营误判为解析问题。
+        http.submitBody = "{\"taskId\":\"\",\"status\":\"\",\"errorCode\":\"605\","
+                + "\"errorMessage\":\"Your balance is insufficient. Please top up your account.\","
+                + "\"results\":null}";
+        BizException error = assertThrows(BizException.class, () -> provider.submit(t2i()));
+        assertTrue(error.getMessage().contains("balance is insufficient"),
+                "expected surfaced error message, got: " + error.getMessage());
+    }
+
+    @Test
+    void submitSurfacesExplicitErrorEvenWithTaskIdPresent() {
+        // 接口另一种——带 taskId 但 status=FAILED 也要把 errorMessage 抛出来。
+        http.submitBody = "{\"taskId\":\"rh-bad\",\"status\":\"FAILED\","
+                + "\"errorMessage\":\"prompt rejected by moderation\"}";
+        BizException error = assertThrows(BizException.class, () -> provider.submit(t2v()));
+        assertTrue(error.getMessage().contains("prompt rejected by moderation"),
+                "expected surfaced error message, got: " + error.getMessage());
+    }
+
     private static GenerateRequest t2i() {
         return new GenerateRequest()
                 .setUserId(8L)

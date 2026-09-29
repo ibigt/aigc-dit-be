@@ -8,9 +8,11 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class RunningHubTaskResponse {
 
+    @JsonAlias({"task_id", "taskID", "taskId", "id"})
     private String taskId;
     private String status;
     private String errorCode;
+    @JsonAlias({"error_msg", "msg", "message"})
     private String errorMessage;
     private List<ResultItem> results;
 

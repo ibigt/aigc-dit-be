@@ -435,11 +435,20 @@ public class RunningHubGenerateProvider implements GenerateProvider {
     }
 
     private static String requireJobId(RunningHubTaskResponse response) {
-        if (response == null || !StringUtils.hasText(response.getTaskId())) {
-            throw new BizException(ErrorCode.INTERNAL, "RunningHub 未返回 taskId");
+        if (response == null) {
+            throw new BizException(ErrorCode.INTERNAL, "RunningHub 应答为空");
         }
+        // 业务错误（如余额不足 605）返回的 taskId 通常为空字符串，要先把 errorMessage
+        // 抛出来，否则只看到「未返回 taskId」会让运营误判为解析问题。
         if (isFailed(response)) {
-            throw new BizException(ErrorCode.INTERNAL, firstNonBlank(response.getErrorMessage(), "RunningHub 提交失败"));
+            throw new BizException(ErrorCode.INTERNAL,
+                    firstNonBlank(response.getErrorMessage(), "RunningHub 提交失败"));
+        }
+        if (!StringUtils.hasText(response.getTaskId())) {
+            String detail = StringUtils.hasText(response.getErrorMessage())
+                    ? "RunningHub 返回错误：" + response.getErrorMessage().trim()
+                    : "RunningHub 未返回 taskId";
+            throw new BizException(ErrorCode.INTERNAL, detail);
         }
         return response.getTaskId().trim();
     }
