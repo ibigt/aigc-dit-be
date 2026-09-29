@@ -63,6 +63,8 @@ services:
 
 旧版服务器 Compose 只有日志挂载，没有模型挂载和上述环境变量。发布后端时必须同时更新 Compose；只替换 JAR，容器仍读不到模型。其余阈值和采样参数已有默认值，见仓库根目录 `.env.example`。
 
+`172.171.113.250` 的 Flyway 历史已到 `V30`，其中部分版本号曾被其他分支用于不同功能。后端仓库的 `V31__reconcile_caption_and_script_tables.sql` 会幂等补建字幕和剧本任务表；部署时应使用包含该迁移的 clean 构建 JAR，不要手工修改 `flyway_schema_history`。
+
 如果需要覆盖默认值，把 `.env` 放在 `/opt/aigc-dit/aigc-dit-be/.env`，先核对现有 PostgreSQL、MinIO、JWT 等配置再添加字幕变量。没有 `.env` 且目录为 `/mnt/ai-gc` 时，当前 Compose 默认启用两套模型。`DIT_DATA_ROOT` 指服务器目录；模型在容器内仍挂载到 `/mnt/ai-gc/models`，改服务器目录时无需把容器内模型路径一起改掉。
 
 `FFMPEG_CAPTION_BURN_ENABLED` 控制旧的同步字幕烧录路径；当前分镜字幕使用独立的异步后处理流程，不需要为了本功能把它设为 `true`。
