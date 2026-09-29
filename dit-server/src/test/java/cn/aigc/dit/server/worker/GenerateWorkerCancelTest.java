@@ -23,6 +23,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
@@ -126,6 +128,43 @@ class GenerateWorkerCancelTest {
         worker.cancelProviderJob(cancelledTask());
         verify(aiModelMapper, never()).selectById(any());
         verify(providerRegistry, never()).resolveByAdapter(any(), any(), any(), any());
+    }
+
+    @Test
+    void resumeHealsFrozenRunningTaskWhoseCreationAlreadyLanded() {
+        // 进程死在「creation 入库 → 任务写终态」之间：任务停在 RUNNING，但成品已存在。
+        // 恢复扫描必须把它补成 SUCCEEDED，否则资产列表永远把已出图资产标成「生成中」。
+        GenTask frozen = new GenTask();
+        frozen.setId(909L);
+        frozen.setUserId(2L);
+        frozen.setCategory("image");
+        frozen.setStatus(TaskStatus.RUNNING);
+        frozen.setProviderJobId("seedream-679f8d93");
+        frozen.setProgress(55);
+        frozen.setCreatedAt(java.time.OffsetDateTime.now().minusHours(2));
+        frozen.setUpdatedAt(java.time.OffsetDateTime.now().minusMinutes(30));
+        when(genTaskMapper.selectList(any())).thenReturn(java.util.List.of(frozen));
+        when(genTaskMapper.selectById(909L)).thenReturn(frozen);
+        when(creationMapper.selectCount(any())).thenReturn(1L);
+        Creation landed = new Creation();
+        landed.setTaskId(909L);
+        landed.setStorageKey("users/7/assets/1683.png");
+        landed.setPosterKey("users/7/assets/1683_poster.png");
+        landed.setCopyIndex(1);
+        when(creationMapper.selectList(any())).thenReturn(java.util.List.of(landed));
+
+        worker.resumeStaleJobs();
+
+        org.mockito.ArgumentCaptor<GenTask> captor = org.mockito.ArgumentCaptor.forClass(GenTask.class);
+        verify(genTaskMapper).updateById(captor.capture());
+        GenTask healed = captor.getValue();
+        assertEquals(TaskStatus.SUCCEEDED, healed.getStatus());
+        assertEquals(100, healed.getProgress());
+        assertEquals(java.util.List.of("users/7/assets/1683.png"), healed.getOutputKeys());
+        assertEquals("users/7/assets/1683.png", healed.getOutputStorageKey());
+        assertNotNull(healed.getFinishedAt());
+        // 成品已在库，绝不再走厂商轮询。
+        verify(providerRegistry, never()).resolve(any());
     }
 
     private static GenTask cancelledTask() {

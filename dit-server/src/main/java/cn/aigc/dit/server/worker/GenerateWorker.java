@@ -392,6 +392,10 @@ public class GenerateWorker {
                 return;
             }
             if (hasCreations(latest.getId())) {
+                // 成片已下载入库、creation 已落行，只是进程死在「入库 → 写终态」之间。
+                // 此时直接跳过会让任务永远停在 RUNNING，资产列表把已出图的资产一直标成「生成中」；
+                // 按已有 creation 补写 SUCCEEDED 终态。
+                healSucceededFromCreations(latest);
                 return;
             }
             boolean recoverableFail = TaskStatus.FAILED.equals(latest.getStatus());
@@ -743,6 +747,34 @@ public class GenerateWorker {
 
     private boolean hasCreations(Long taskId) {
         return creationMapper.selectCount(new LambdaQueryWrapper<Creation>().eq(Creation::getTaskId, taskId)) > 0;
+    }
+
+    /** 进程死在「creation 入库 → 任务写终态」之间的补偿：按已有成品补 SUCCEEDED。 */
+    private void healSucceededFromCreations(GenTask latest) {
+        List<Creation> creations = creationMapper.selectList(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getTaskId, latest.getId())
+                .orderByAsc(Creation::getCopyIndex));
+        if (creations.isEmpty()) {
+            return;
+        }
+        if (latest.getOutputKeys() == null || latest.getOutputKeys().isEmpty()) {
+            latest.setOutputKeys(creations.stream()
+                    .map(Creation::getStorageKey)
+                    .filter(StringUtils::hasText)
+                    .collect(java.util.stream.Collectors.toList()));
+        }
+        if (!StringUtils.hasText(latest.getOutputStorageKey())) {
+            latest.setOutputStorageKey(creations.get(0).getStorageKey());
+        }
+        if (!StringUtils.hasText(latest.getPosterKey())) {
+            latest.setPosterKey(creations.get(0).getPosterKey());
+        }
+        latest.setStatus(TaskStatus.SUCCEEDED);
+        latest.setProgress(100);
+        latest.setFinishedAt(latest.getFinishedAt() == null ? OffsetDateTime.now() : latest.getFinishedAt());
+        latest.setErrorMessage(null);
+        genTaskMapper.updateById(latest);
+        log.warn("healed generate task {} to SUCCEEDED from {} existing creation(s)", latest.getId(), creations.size());
     }
 
     private static Long taskIdOf(Map<Object, Object> payload) {
