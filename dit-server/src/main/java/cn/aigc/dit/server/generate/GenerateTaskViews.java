@@ -16,6 +16,8 @@ public final class GenerateTaskViews {
     public static final String OFFICIAL_ERROR_KEY = "officialError";
     public static final String QUOTA_MESSAGE =
             "官方 Seedance 额度繁忙或请求过密。请等一两分钟再点生成，不要连续点多镜。";
+    public static final String QUOTA_EXHAUSTED_MESSAGE =
+            "官方 Seedance 套餐额度已用完，请检查 token plan 额度或更换通道后再生成。";
 
     private GenerateTaskViews() {
     }
@@ -84,7 +86,11 @@ public final class GenerateTaskViews {
             return message;
         }
         String lower = message.toLowerCase(Locale.ROOT);
-        if (lower.contains("http 429") || lower.contains("exceeded the quota") || lower.contains("rate limit")) {
+        if (lower.contains("exceeded the quota") || lower.contains("quota exceeded")
+                || lower.contains("insufficient quota")) {
+            return QUOTA_EXHAUSTED_MESSAGE;
+        }
+        if (lower.contains("http 429") || lower.contains("rate limit")) {
             return QUOTA_MESSAGE;
         }
         return message;

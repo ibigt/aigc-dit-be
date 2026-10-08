@@ -1067,7 +1067,7 @@ public class DramaStoryboardService {
                 .filter(StringUtils::hasText)
                 .toList();
         ShotDraftList drafts = resolveDrafts(
-                episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec);
+                episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec, visualStyleOf(series));
 
         for (DramaShot shot : listShots(episode.getId())) {
             shotMapper.deleteById(shot.getId());
@@ -1139,6 +1139,8 @@ public class DramaStoryboardService {
             shot.setTitle(StringUtils.hasText(draft.getTitle()) ? draft.getTitle().trim() : "分镜 " + shotIndex);
             shot.setDurationSec(resolveDraftDuration(series, draft.getDurationSec() == null ? fallback : draft.getDurationSec()));
             shot.setNarrativeGoal(blankToNull(draft.getNarrativeGoal()));
+            shot.setCameraMotion(blankToNull(draft.getCamera()));
+            shot.setAmbianceAudio(blankToNull(draft.getAmbiance()));
             shot.setScene(blankToNull(draft.getScene()));
             shot.setDialogue(blankToNull(draft.getDialogue()));
             shot.setContinuityIn(blankToNull(draft.getContinuityIn()));
@@ -1176,12 +1178,13 @@ public class DramaStoryboardService {
             ScriptDoc doc,
             List<String> assetNames,
             int duration,
-            Integer episodeBudgetSec) {
+            Integer episodeBudgetSec,
+            String visualStyle) {
         DramaTextService svc = textService.getIfAvailable();
         if (svc == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
         }
-        ShotDraftList drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec);
+        ShotDraftList drafts = svc.draftShots(seriesId, doc, assetNames, duration, episodeBudgetSec, visualStyle);
         if (drafts == null || drafts.getShots() == null || drafts.getShots().isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能生成分镜草稿");
         }
@@ -1197,6 +1200,12 @@ public class DramaStoryboardService {
         }
         if (req.getNarrativeGoal() != null) {
             shot.setNarrativeGoal(blankToNull(req.getNarrativeGoal()));
+        }
+        if (req.getCameraMotion() != null) {
+            shot.setCameraMotion(blankToNull(req.getCameraMotion()));
+        }
+        if (req.getAmbianceAudio() != null) {
+            shot.setAmbianceAudio(blankToNull(req.getAmbianceAudio()));
         }
         if (req.getScene() != null) {
             shot.setScene(blankToNull(req.getScene()));
@@ -1674,6 +1683,8 @@ public class DramaStoryboardService {
         resp.setTitle(shot.getTitle());
         resp.setDurationSec(shot.getDurationSec());
         resp.setNarrativeGoal(shot.getNarrativeGoal());
+        resp.setCameraMotion(shot.getCameraMotion());
+        resp.setAmbianceAudio(shot.getAmbianceAudio());
         resp.setScene(shot.getScene());
         resp.setDialogue(shot.getDialogue());
         resp.setContinuityIn(shot.getContinuityIn());
@@ -2222,7 +2233,9 @@ public class DramaStoryboardService {
                 shot.getDurationSec() == null ? DramaContract.DEFAULT_DURATION_SEC : shot.getDurationSec(),
                 characterOrder,
                 characterOrder.size(),
-                unnamedAppearances(characterOrder, assets, pictured, isDreamContext(shot)));
+                unnamedAppearances(characterOrder, assets, pictured, isDreamContext(shot)),
+                shot.getCameraMotion(),
+                shot.getAmbianceAudio());
     }
 
     /**
@@ -2423,6 +2436,18 @@ public class DramaStoryboardService {
         return DramaStoryboardCompiler.compile(
                 stylePrefix, active, audioRefs,
                 toShotContent(shot, assets, opts.i2v() ? List.of() : pictured), opts).prompt();
+    }
+
+    /** 扩写用的风格句，不含视频场面约束。陈设必须贴这句，不要另长出别的时代。 */
+    private static String visualStyleOf(DramaSeries series) {
+        DramaStyles.Spec spec = DramaStyles.require(
+                series == null || !StringUtils.hasText(series.getStyleKey())
+                        ? DramaStyles.ANIME_COMIC
+                        : series.getStyleKey());
+        String prefix = series != null && StringUtils.hasText(series.getStylePrefix())
+                ? series.getStylePrefix().trim()
+                : spec.prefix();
+        return spec.name() + "。" + prefix;
     }
 
     private static String stylePrefixOf(DramaSeries series) {

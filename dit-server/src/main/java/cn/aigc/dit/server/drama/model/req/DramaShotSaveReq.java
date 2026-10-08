@@ -17,6 +17,13 @@ public class DramaShotSaveReq {
     private Integer durationSec;
 
     private String narrativeGoal;
+
+    @Schema(description = "景别与运镜，如「特写，静止」")
+    private String cameraMotion;
+
+    @Schema(description = "画内环境声，不要 BGM 和台词")
+    private String ambianceAudio;
+
     private String scene;
     private String dialogue;
 

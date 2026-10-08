@@ -320,7 +320,7 @@ class DramaStoryboardServiceTest {
         DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
         when(textService.getIfAvailable()).thenReturn(llm);
         when(llm.draftShots(org.mockito.ArgumentMatchers.anyLong(), any(ScriptDoc.class), any(),
-                org.mockito.ArgumentMatchers.anyInt(), any()))
+                org.mockito.ArgumentMatchers.anyInt(), any(), any()))
                 .thenReturn(DramaShotDrafts.fromScript(
                         detectiveDoc(), List.of("洛白", "幻梦侦探社"), 5));
 
@@ -2430,7 +2430,7 @@ class DramaStoryboardServiceTest {
         DramaTextService llm = org.mockito.Mockito.mock(DramaTextService.class);
         when(textService.getIfAvailable()).thenReturn(llm);
         when(llm.draftShots(org.mockito.ArgumentMatchers.anyLong(), any(ScriptDoc.class), any(),
-                org.mockito.ArgumentMatchers.anyInt(), any()))
+                org.mockito.ArgumentMatchers.anyInt(), any(), any()))
                 .thenAnswer(invocation -> DramaShotDrafts.fromScript(
                         invocation.getArgument(1),
                         invocation.getArgument(2),

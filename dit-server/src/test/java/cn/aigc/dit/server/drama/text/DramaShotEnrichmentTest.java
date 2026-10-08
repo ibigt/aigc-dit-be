@@ -196,6 +196,40 @@ class DramaShotEnrichmentTest {
         assertEquals("特写。古铜怀表停在三点。", second.getNarrativeGoal());
     }
 
+    @Test
+    void storesCameraAndAmbianceSeparatelyFromAction() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = shot();
+        list.setShots(new ArrayList<>(List.of(shot)));
+
+        DramaShotEnrichment.ShotEnrichList enriched = enrich(
+                1, 2,
+                "洛白推开档案室的门，停步回身望向办公桌。",
+                "档案室一隅，铁柜森然，灯管嗡鸣。");
+        enriched.getShots().get(0).setCamera("中景，手持跟拍");
+        enriched.getShots().get(0).setAmbiance("灯管低频嗡鸣");
+
+        assertEquals(4, DramaShotEnrichment.merge(list, enriched, ASSETS));
+        assertEquals("洛白推开档案室的门，停步回身望向办公桌。", shot.getNarrativeGoal());
+        assertEquals("中景，手持跟拍", shot.getCamera());
+        assertEquals("灯管低频嗡鸣", shot.getAmbiance());
+    }
+
+    @Test
+    void rejectsEditVerbsThatLookLikeAVideoEditTask() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = shot();
+        list.setShots(new ArrayList<>(List.of(shot)));
+
+        DramaShotEnrichment.ShotEnrichList enriched = enrich(
+                1, 2,
+                "把洛白脸上的书改成盖严。",
+                "档案室一隅，铁柜森然，灯管嗡鸣。");
+
+        assertEquals(0, DramaShotEnrichment.merge(list, enriched, ASSETS));
+        assertEquals("中景。洛白推开档案室的门。", shot.getNarrativeGoal());
+    }
+
     private static ShotDraftList.ShotDraft shot() {
         ShotDraftList.ShotDraft shot = new ShotDraftList.ShotDraft();
         shot.setChapterIndex(1);

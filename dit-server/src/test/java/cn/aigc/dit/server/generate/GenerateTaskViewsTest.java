@@ -64,9 +64,12 @@ class GenerateTaskViewsTest {
 
     @Test
     void mapsQuotaExceededToChinese() {
-        assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
+        assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
                 GenerateTaskViews.friendlySeedanceError(
                         "Seedance HTTP 429: The request has exceeded the quota."));
+        assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
+                GenerateTaskViews.friendlySeedanceError(
+                        "Seedance HTTP 429: too many requests, rate limit"));
     }
 
     private static GenTask seedanceTask() {

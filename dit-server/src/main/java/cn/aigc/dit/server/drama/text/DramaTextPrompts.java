@@ -302,33 +302,47 @@ public final class DramaTextPrompts {
     }
 
     /**
-     * 分镜视觉扩写：输入已拆好的草稿（含台词与人物名单），只把 narrative_goal / scene
-     * 两个字段扩成富画面描述。独立于 COMMON——扩写要的是丰富，不吃「尽量精简」那条。
+     * 分镜视觉扩写：输入已拆好的草稿，把画面拆成 scene / camera / narrative_goal / ambiance。
+     * narrative_goal 只留动作。独立于 COMMON——扩写要的是可拍摄的细节，不吃「尽量精简」那条。
      */
     private static final String SYSTEM_SHOT_ENRICH = """
-            你是漫剧流水线的「分镜视觉扩写层」。输入是拆好的分镜草稿（含场次上下文、台词与人物名单），
-            任务是把每条分镜的 narrative_goal 与 scene 扩写成可直接指导视频生成的画面描述，其余一律不做。
+            你是漫剧流水线的「分镜视觉扩写层」。输入是拆好的分镜草稿（含场次上下文、台词、时长与人物名单），
+            任务是把每条分镜扩写成可直接指导视频生成的画面，其余一律不做。
             硬性要求：
-            1. 只输出一个 JSON 对象：{"shots":[{"chapter_index":N,"index":M,"scene":"…","narrative_goal":"…"}]}；
+            1. 只输出一个 JSON 对象：
+               {"shots":[{"chapter_index":N,"index":M,"scene":"…","camera":"…","narrative_goal":"…","ambiance":"…"}]}；
                不要 Markdown 围栏、不要解释文字；shots 必须逐条覆盖输入的每一条分镜，
                chapter_index 与 index 与输入完全一致，键名 snake_case 不得增删改名。
             2. 三不动：
-               - 人物不能多、不能少、不能换人：原稿 narrative_goal 里出现的人物名必须原样保留；
+               - 人物不能多、不能少、不能换人：原稿 narrative_goal 里出现的人物名必须原样写进新的 narrative_goal；
                  本镜没有的角色一律不得出现。
-               - 台词一个字不许动，也不许把台词、旁白、对白内容写进 narrative_goal 或 scene。
-               - 谁做什么动作不许变：动作的主语与内容保持原样，只允许补充画面细节。
-            3. 只补充镜头语言与画面质感：
-               - narrative_goal 以景别与主运镜开头（如「中景，缓慢推近」），按原动作顺序串联动作链，
-                 补充光线方向、环境氛围与人物站位朝向；60～150 字；不写心理独白与剧作术语。
-               - 相邻分镜的景别或机位要有变化（前一镜中景推近，下一镜可换近景、特写或侧面），
+               - 台词一个字不许动，也不许把台词、旁白、对白内容写进 scene、camera、narrative_goal 或 ambiance。
+               - 谁做什么动作不许变：动作的主语与内容保持原样，只允许补充可拍摄的动作细节。
+            3. 四个字段分开写，不要互相复述：
+               - camera：只写景别和运镜，如「特写，静止」「中景，缓慢推近」。8～24 字。
+                 相邻分镜的景别或机位要有变化（前一镜中景推近，下一镜可换近景、特写或侧面），
                  不要每镜都以「中景」开头。
-               - scene 只写空间陈设、材质质感与光源氛围（如「日光从百叶窗斜切进来，浮尘漂浮，
-                 桌面堆着牛皮档案」），不写人物动作；40～90 字。
-            4. 光线氛围必须符合所在场次的 time（日/夜）与 interior（内/外）：
+               - narrative_goal：只写该时长内的运动。不写景别、不写运镜、不写光线、不写空间陈设、不写服装长相。
+                 按主体动作、物件互动、环境动态写成连贯叙述；60～150 字。
+                 动作量跟本镜 duration_sec：5～7 秒完成一个连贯动作加一个细节；
+                 8～11 秒可完成一次前后相接的过渡（如抬头、对视、开口前的停顿）；
+                 12～15 秒保持一条先后相接的动作链（如起身、走到窗前、驻足），不要同时做多件无关的事。
+               - ambiance：只写画内能听到的声音，如风扇低鸣、纸页轻响、脚步。不要 BGM、配乐、旁白、台词。8～40 字。没有明显环境声就留空字符串。
+               - scene：只写空间陈设、材质质感与光源氛围（如「日光从百叶窗斜切进来，浮尘漂浮，桌面堆着牛皮档案」），
+                 不写人物动作；40～90 字。
+            4. 一帧只有一个时空。原稿若是回忆、闪回或内心活动，改写成此刻看得见的神态、手里的物件和环境痕迹，不要切到另一段时空。
+               正例：原稿「她想起亡母临终的嘱托」→ narrative_goal「她跪坐在灵位前，指尖抵着一串磨亮的佛珠，眼睑低垂」；
+               scene「案上白烛烧过半，烛泪堆在烛台边，侧脸有一块摇晃的暖橙光」。
+               反例：「她陷入多年前那个绝望的雨夜，画面基调忧郁」——另一个时空，而且「忧郁」不是看得见的东西。
+               反例：「她坐着发呆」——没有环境、光线和可拍摄的动作。
+            5. 光线氛围必须符合所在场次的 time（日/夜）与 interior（内/外）：
                夜戏写夜景光源，外景写天光，不得把夜场写成白天。
-            5. 人物长相、五官、发型与服装款式不要描写（由角色设定图锚定），
-               可写姿态、位置与朝向。
-            6. 人名、道具名、地点名原样沿用输入写法，不得简称、改写或翻译。
+               若用户消息给了项目视觉风格，陈设、器物和年代必须贴合这句风格，
+               不得引入另一种时代的东西（赛博朋克镜里不要榻榻米和古装窗棂，民国镜里不要霓虹屏和义体）。
+            6. 人物长相、五官、发型与服装款式不要描写（由角色设定图锚定），可写姿态、位置与朝向。
+            7. 人名、道具名、地点名原样沿用输入写法，不得简称、改写或翻译。
+            8. 四个字段都不要使用这些祈使：增加、删除、去掉、修改、替换、改成、延长、续写。
+               直接写画面里正在发生的动作。不写「把书改成盖在脸上」，写「双手把书压在脸上」。
             """;
 
     public static String shotEnrichSystem() {
@@ -336,9 +350,20 @@ public final class DramaTextPrompts {
     }
 
     public static String shotEnrichUser(String scenesJson, String shotsJson) {
-        return "场次上下文（chapter_index 对应的场次、日夜与内外景）：\n" + scenesJson
-                + "\n\n待扩写分镜草稿：\n" + shotsJson
-                + "\n\n逐条输出扩写后的 scene 与 narrative_goal；chapter_index 与 index 必须与输入一致，"
-                + "输入有几条就输出几条，不要合并或遗漏。";
+        return shotEnrichUser(scenesJson, shotsJson, null);
+    }
+
+    public static String shotEnrichUser(String scenesJson, String shotsJson, String visualStyle) {
+        StringBuilder text = new StringBuilder();
+        if (visualStyle != null && !visualStyle.isBlank()) {
+            text.append("项目视觉风格：").append(visualStyle.strip()).append('\n');
+            text.append("补环境、器物和年代时必须贴合这句风格，不得引入另一种时代的陈设。\n\n");
+        }
+        text.append("场次上下文（chapter_index 对应的场次、日夜与内外景）：\n").append(scenesJson);
+        text.append("\n\n待扩写分镜草稿：\n").append(shotsJson);
+        text.append("\n\n逐条输出扩写后的 scene、camera、narrative_goal 与 ambiance；");
+        text.append("chapter_index 与 index 必须与输入一致，输入有几条就输出几条，不要合并或遗漏。");
+        text.append("narrative_goal 只写动作，景别和运镜写进 camera，画内声写进 ambiance。");
+        return text.toString();
     }
 }

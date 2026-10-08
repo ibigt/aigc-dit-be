@@ -43,6 +43,9 @@ public class ShotDraftList {
         @JsonAlias("narrativeGoal")
         private String narrativeGoal;
 
+        private String camera;
+        private String ambiance;
+
         private String scene;
         private String dialogue;
 

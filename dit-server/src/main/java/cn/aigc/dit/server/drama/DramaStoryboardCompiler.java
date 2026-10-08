@@ -102,7 +102,9 @@ public final class DramaStoryboardCompiler {
             int durationSec,
             List<String> characterNames,
             int castCount,
-            List<NamedAppearance> unnamedAppearances
+            List<NamedAppearance> unnamedAppearances,
+            String camera,
+            String ambiance
     ) {
         public ShotContent(
                 String scene,
@@ -114,7 +116,21 @@ public final class DramaStoryboardCompiler {
                 List<String> characterNames,
                 int castCount) {
             this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
-                    characterNames, castCount, List.of());
+                    characterNames, castCount, List.of(), null, null);
+        }
+
+        public ShotContent(
+                String scene,
+                String narrativeGoal,
+                String dialogue,
+                String continuityIn,
+                String continuityOut,
+                int durationSec,
+                List<String> characterNames,
+                int castCount,
+                List<NamedAppearance> unnamedAppearances) {
+            this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
+                    characterNames, castCount, unnamedAppearances, null, null);
         }
     }
 
@@ -158,6 +174,7 @@ public final class DramaStoryboardCompiler {
             prompt.append('。');
         }
         prompt.append('\n');
+        appendReferenceDeclaration(prompt, pictureRefs);
 
         if (!pictureRefs.isEmpty()) {
             prompt.append('\n').append("Active References:\n");
@@ -200,8 +217,7 @@ public final class DramaStoryboardCompiler {
             prompt.append(R2V_CHAIN_HINT).append('\n');
         }
         Map<String, Integer> pictures = pictureIndexByName(pictureRefs);
-        appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
-        appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
+        appendVisualLines(prompt, content, pictures);
         appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
         appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
@@ -245,6 +261,7 @@ public final class DramaStoryboardCompiler {
             prompt.append('。');
         }
         prompt.append('\n');
+        appendReferenceDeclaration(prompt, refs);
         if (!refs.isEmpty()) {
             prompt.append('\n').append("Active References:\n");
             for (int i = 0; i < refs.size(); i++) {
@@ -269,8 +286,7 @@ public final class DramaStoryboardCompiler {
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
         prompt.append(STILL_MUST).append('\n');
         Map<String, Integer> pictures = pictureIndexByName(refs);
-        appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
-        appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
+        appendVisualLines(prompt, content, pictures);
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
         prompt.append(castConstraint(content, refs));
         return new Result(prompt.toString().trim(), fingerprint(prefix, refs, List.of(), content, CompileOptions.r2v()));
@@ -306,7 +322,9 @@ public final class DramaStoryboardCompiler {
         if (shot != null) {
             raw.append(shot.durationSec()).append('\n');
             raw.append(blank(shot.scene())).append('\n');
+            raw.append(blank(shot.camera())).append('\n');
             raw.append(blank(shot.narrativeGoal())).append('\n');
+            raw.append(blank(shot.ambiance())).append('\n');
             raw.append(blank(shot.dialogue())).append('\n');
             raw.append(blank(shot.continuityIn())).append('\n');
             raw.append(blank(shot.continuityOut())).append('\n');
@@ -717,6 +735,57 @@ public final class DramaStoryboardCompiler {
             }
             prompt.append('\n');
         }
+    }
+
+    private static void appendVisualLines(StringBuilder prompt, ShotContent content, Map<String, Integer> pictures) {
+        appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
+        appendLine(prompt, "Camera", bindPictureNames(content.camera(), pictures));
+        appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
+        appendLine(prompt, "Ambiance", bindPictureNames(content.ambiance(), pictures));
+    }
+
+    /** 风格句后按参考图类型分组，编号沿用已发出的 Picture 序号。没有参考图时不写。 */
+    private static void appendReferenceDeclaration(StringBuilder prompt, List<ActiveReference> refs) {
+        if (refs == null || refs.isEmpty()) {
+            return;
+        }
+        Map<String, List<Integer>> groups = new LinkedHashMap<>();
+        for (int i = 0; i < refs.size(); i++) {
+            groups.computeIfAbsent(referenceKind(refs.get(i)), key -> new ArrayList<>()).add(i + 1);
+        }
+        prompt.append("参考图：");
+        boolean first = true;
+        for (Map.Entry<String, List<Integer>> group : groups.entrySet()) {
+            if (!first) {
+                prompt.append('；');
+            }
+            first = false;
+            List<Integer> indexes = group.getValue();
+            for (int i = 0; i < indexes.size(); i++) {
+                if (i > 0) {
+                    prompt.append('、');
+                }
+                prompt.append("<Picture ").append(indexes.get(i)).append('>');
+            }
+            prompt.append(" 为").append(group.getKey());
+        }
+        prompt.append("。\n");
+    }
+
+    private static String referenceKind(ActiveReference ref) {
+        if (ref == null) {
+            return "角色参考图";
+        }
+        if (PREV_TAIL_NAME.equals(blank(ref.name()))) {
+            return "上一镜落幅参考图";
+        }
+        if (DramaContract.ASSET_TYPE_SCENE.equals(ref.type())) {
+            return "场景参考图";
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(ref.type())) {
+            return "道具参考图";
+        }
+        return "角色参考图";
     }
 
     private static void appendLine(StringBuilder prompt, String label, String value) {

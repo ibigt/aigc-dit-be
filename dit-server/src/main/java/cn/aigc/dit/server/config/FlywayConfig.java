@@ -323,6 +323,8 @@ public class FlywayConfig {
                     title                   VARCHAR(128),
                     duration_sec            INTEGER      NOT NULL DEFAULT 5,
                     narrative_goal          TEXT,
+                    camera_motion           TEXT,
+                    ambiance_audio          TEXT,
                     scene                   TEXT,
                     dialogue                TEXT,
                     continuity_in           VARCHAR(256),
@@ -464,6 +466,16 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_shot.chained_from_tail_key
                 IS '首尾帧出片时使用的上一镜落幅 key，用于判断上一镜是否已更新'
+                """);
+        statement.execute("ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS camera_motion TEXT");
+        statement.execute("ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS ambiance_audio TEXT");
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.camera_motion
+                IS '景别与运镜，编译进视频提示词的 Camera 行'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.ambiance_audio
+                IS '画内环境声，编译进视频提示词的 Ambiance 行'
                 """);
         statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_duration");
         statement.execute("""

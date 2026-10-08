@@ -77,6 +77,70 @@ public final class DramaAssetDrafts {
         }
     }
 
+    /**
+     * 换装 / 入梦走图生图时的提示词：版式和未写到的外观锁在本体图上，只描述变化。
+     */
+    public static String derivativePrompt(String change) {
+        String delta = StringUtils.hasText(change) ? change.trim() : "外观按该状态变化，脸与发型不变";
+        if (!delta.endsWith("。") && !delta.endsWith(".")) {
+            delta = delta + "。";
+        }
+        return "保持原图的版式、构图、比例和背景不变。"
+                + "除下列变化外，面部、发型、体型及其余外观与原图一致。"
+                + "变化：" + delta;
+    }
+
+    /**
+     * 从衍生资产里取出相对本体的变化。整张设定图长句不能当变化，否则会把人重画一遍。
+     */
+    public static String derivativeChange(String name, String stateTag, String description, String identity) {
+        if (isAppearanceFact(description)) {
+            return description.trim();
+        }
+        if (isAppearanceFact(identity) && !identity.contains("同一张脸")) {
+            return identity.trim();
+        }
+        String state = StringUtils.hasText(stateTag) ? stateTag : inferStateTag(name);
+        String label = name == null ? "" : name;
+        if (DramaContract.STATE_TAG_DREAM.equals(state) || label.contains("入梦") || label.contains("梦境")) {
+            return "光影抽离、略微漂浮，仍是同一个人";
+        }
+        if (label.contains("湿身")) {
+            return "外衣与发尾湿透，贴在身上";
+        }
+        if (DramaContract.STATE_TAG_COSTUME.equals(state)) {
+            return "服装换成这一状态下的另一套，脸与发型不变";
+        }
+        return "外观按该状态变化，脸与发型不变";
+    }
+
+    /** 「洛白·入梦」取本体名「洛白」。没有间隔号时返回原名。 */
+    public static String baseCharacterName(String name) {
+        if (!StringUtils.hasText(name)) {
+            return "";
+        }
+        String trimmed = name.trim();
+        int dot = trimmed.indexOf('·');
+        if (dot < 0) {
+            dot = trimmed.indexOf('・');
+        }
+        if (dot <= 0) {
+            return trimmed;
+        }
+        return trimmed.substring(0, dot).trim();
+    }
+
+    private static boolean isAppearanceFact(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        return value.length() <= 200
+                && !value.contains("角色设定图")
+                && !value.contains("三视图")
+                && !value.contains("设定拼版");
+    }
+
     public static String buildPrompt(String type, String name, DramaStyles.Spec style) {
         return buildPrompt(type, name, inferStateTag(name), style, null, null);
     }

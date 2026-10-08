@@ -15,14 +15,16 @@ import java.util.Set;
 
 /**
  * 分镜视觉扩写的输出合同与合并校验。
- * 只允许改写 narrative_goal / scene 两个字段；任何破坏人物锚点、引入本镜之外的名字、
- * 塞进台词或长度失控的条目整镜回退原稿——扩写永远不让拆镜结果变差。
+ * 允许改写 scene / camera / narrative_goal / ambiance；任何破坏人物锚点、引入本镜之外的名字、
+ * 塞进台词、写入编辑祈使或长度失控的条目整镜回退原稿——扩写永远不让拆镜结果变差。
  */
 public final class DramaShotEnrichment {
 
-    /** 硬上限；提示词目标 narrative_goal 60~150 / scene 40~90，超限说明模型失控，整镜回退。 */
+    /** 硬上限；提示词目标 narrative_goal 60~150 / scene 40~90 / camera 8~24 / ambiance 8~40，超限说明模型失控，整镜回退。 */
     static final int MAX_NARRATIVE_GOAL_LENGTH = 200;
     static final int MAX_SCENE_LENGTH = 120;
+    static final int MAX_CAMERA_LENGTH = 48;
+    static final int MAX_AMBIANCE_LENGTH = 80;
 
     private DramaShotEnrichment() {
     }
@@ -45,10 +47,16 @@ public final class DramaShotEnrichment {
         @JsonProperty("narrative_goal")
         @JsonAlias("narrativeGoal")
         private String narrativeGoal;
+
+        @JsonAlias("camera_motion")
+        private String camera;
+
+        @JsonAlias("ambiance_audio")
+        private String ambiance;
     }
 
     /**
-     * 把扩写结果合并回草稿，返回成功替换的字段数（一镜全成 = 2）。
+     * 把扩写结果合并回草稿，返回成功写入的字段数（scene + narrative_goal 必有，camera / ambiance 有文本才计）。
      * 键对不上或校验不过的条目直接丢弃，保留原稿。
      */
     public static int merge(ShotDraftList target, ShotEnrichList enriched, Set<String> assetNames) {
@@ -74,7 +82,15 @@ public final class DramaShotEnrichment {
             }
             shot.setNarrativeGoal(item.getNarrativeGoal().strip());
             shot.setScene(item.getScene().strip());
+            shot.setCamera(blankToNull(item.getCamera()));
+            shot.setAmbiance(blankToNull(item.getAmbiance()));
             applied += 2;
+            if (StringUtils.hasText(item.getCamera())) {
+                applied++;
+            }
+            if (StringUtils.hasText(item.getAmbiance())) {
+                applied++;
+            }
         }
         return applied;
     }
@@ -87,13 +103,24 @@ public final class DramaShotEnrichment {
         }
         narrative = narrative.strip();
         scene = scene.strip();
+        String camera = blankToNull(item.getCamera());
+        String ambiance = blankToNull(item.getAmbiance());
         if (narrative.length() > MAX_NARRATIVE_GOAL_LENGTH || scene.length() > MAX_SCENE_LENGTH) {
             return false;
         }
-        String combined = narrative + '\n' + scene;
-        // 原稿正文点过名的角色必须存活：编译器靠名字出现处挂 <Picture N> 锚点，丢了锚点参考图就白绑。
+        if (camera != null && camera.length() > MAX_CAMERA_LENGTH) {
+            return false;
+        }
+        if (ambiance != null && ambiance.length() > MAX_AMBIANCE_LENGTH) {
+            return false;
+        }
+        String combined = narrative + '\n' + scene + '\n' + nullToEmpty(camera) + '\n' + nullToEmpty(ambiance);
+        if (containsEditVerb(combined)) {
+            return false;
+        }
+        // 动作句必须留下原稿点过名的角色：编译器靠 Action 里的名字挂 <Picture N>。
         for (String name : namesIn(knownNames, shot.getNarrativeGoal())) {
-            if (!combined.contains(name)) {
+            if (!narrative.contains(name)) {
                 return false;
             }
         }
@@ -129,6 +156,30 @@ public final class DramaShotEnrichment {
     private static final List<String> INSERT_ACTION_TOKENS = List.of(
             "插入", "接上", "插进", "插进主机", "插进接口", "插进电脑", "接入"
     );
+
+    /**
+     * 视频模型会把这些祈使当成「编辑 / 延长」任务。只拦不会出现在正常动作里的写法，
+     * 「删除档案」这类剧情动词留给提示词约束，不在这里误杀。
+     */
+    private static final List<String> EDIT_VERBS = List.of(
+            "改成", "替换", "去掉", "续写", "修改成", "删掉"
+    );
+
+    private static boolean containsEditVerb(String text) {
+        for (String verb : EDIT_VERBS) {
+            if (text.contains(verb)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String blankToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.strip();
+    }
 
     private static Set<String> namesIn(Set<String> names, String text) {
         Set<String> found = new LinkedHashSet<>();

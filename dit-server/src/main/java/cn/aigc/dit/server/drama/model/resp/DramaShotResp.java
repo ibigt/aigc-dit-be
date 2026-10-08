@@ -23,6 +23,10 @@ public class DramaShotResp {
     private String title;
     private Integer durationSec;
     private String narrativeGoal;
+    @Schema(description = "景别与运镜")
+    private String cameraMotion;
+    @Schema(description = "画内环境声")
+    private String ambianceAudio;
     private String scene;
     private String dialogue;
     private String continuityIn;

@@ -274,6 +274,17 @@ public class DramaTextServiceImpl implements DramaTextService {
             List<String> assetNames,
             int durationSec,
             Integer episodeBudgetSec) {
+        return draftShots(seriesId, script, assetNames, durationSec, episodeBudgetSec, null);
+    }
+
+    @Override
+    public ShotDraftList draftShots(
+            long seriesId,
+            ScriptDoc script,
+            List<String> assetNames,
+            int durationSec,
+            Integer episodeBudgetSec,
+            String visualStyle) {
         int duration = DramaDurations.clamp(durationSec);
         if (script == null || script.getScenes().isEmpty()) {
             throw new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "剧本场景为空，无法生成分镜");
@@ -296,7 +307,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             // 三者都是纯增强，失败不影响拆镜结果。
             int extended = fitDurationsToDialogue(result);
             int splitShots = splitOverloadedShots(result);
-            int enrichedFields = enrichShots(seriesId, script, result, safe(assetNames));
+            int enrichedFields = enrichShots(seriesId, script, result, safe(assetNames), visualStyle);
             gateway.settleBilling(billing);
 
             log.info("[drama-text] 分镜草稿完成 seriesId={} shotsBefore={} shotsAfter={} durationExtended={} overloadedSplit={} enrichedFields={} elapsedMs={}",
@@ -584,11 +595,12 @@ public class DramaTextServiceImpl implements DramaTextService {
     }
 
     /**
-     * 分镜视觉扩写：把骨架 narrative_goal / scene 扩成含景别、运镜、光线与氛围的画面描述，
+     * 分镜视觉扩写：把骨架拆成空间、运镜、动作和画内声，
      * 让分镜页最终编译出的视频提示词不再是干巴巴的事件梗概。
      * 纯增强步骤——任何失败只打日志并保留原稿，绝不让拆镜结果变差。
      */
-    private int enrichShots(long seriesId, ScriptDoc script, ShotDraftList result, List<String> assetNames) {
+    private int enrichShots(
+            long seriesId, ScriptDoc script, ShotDraftList result, List<String> assetNames, String visualStyle) {
         List<ShotDraftList.ShotDraft> shots = result == null || result.getShots() == null
                 ? List.of() : result.getShots();
         if (shots.isEmpty() || script == null || script.getScenes() == null || script.getScenes().isEmpty()) {
@@ -608,7 +620,7 @@ public class DramaTextServiceImpl implements DramaTextService {
             }
             if (ranges.size() == 1) {
                 applied += enrichShotBatch(
-                        seriesId, shots, ranges.get(0)[0], ranges.get(0)[1], scenesJson, names, billing);
+                        seriesId, shots, ranges.get(0)[0], ranges.get(0)[1], scenesJson, names, visualStyle, billing);
             } else {
                 int workers = Math.min(SHOT_ENRICHMENT_CONCURRENCY, ranges.size());
                 ExecutorService pool = Executors.newFixedThreadPool(workers);
@@ -618,7 +630,7 @@ public class DramaTextServiceImpl implements DramaTextService {
                         int from = range[0];
                         int to = range[1];
                         futures.add(pool.submit(() ->
-                                enrichShotBatch(seriesId, shots, from, to, scenesJson, names, billing)));
+                                enrichShotBatch(seriesId, shots, from, to, scenesJson, names, visualStyle, billing)));
                     }
                     for (Future<Integer> future : futures) {
                         try {
@@ -654,12 +666,12 @@ public class DramaTextServiceImpl implements DramaTextService {
 
     private int enrichShotBatch(
             long seriesId, List<ShotDraftList.ShotDraft> shots, int from, int to,
-            String scenesJson, Set<String> assetNames, TextBillingSession billing) {
+            String scenesJson, Set<String> assetNames, String visualStyle, TextBillingSession billing) {
         ShotDraftList batch = new ShotDraftList();
         batch.setShots(new ArrayList<>(shots.subList(from, to)));
         try {
             DramaShotEnrichment.ShotEnrichList enriched = attemptJson(seriesId, DramaTextPrompts.shotEnrichSystem(),
-                    DramaTextPrompts.shotEnrichUser(scenesJson, toJson(batch)),
+                    DramaTextPrompts.shotEnrichUser(scenesJson, toJson(batch), visualStyle),
                     DramaTextServiceImpl::readShotEnrich, "ShotEnrichList", 16384, billing);
             return DramaShotEnrichment.merge(batch, enriched, assetNames);
         } catch (RuntimeException e) {

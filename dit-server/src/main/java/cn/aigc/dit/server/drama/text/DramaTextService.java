@@ -65,6 +65,19 @@ public interface DramaTextService {
             java.util.List<String> assetNames,
             int durationSec,
             Integer episodeBudgetSec) {
+        return draftShots(seriesId, script, assetNames, durationSec, episodeBudgetSec, null);
+    }
+
+    /**
+     * {@code visualStyle} 是项目风格名加风格句，供扩写约束陈设年代；为空则不注入。
+     */
+    default ShotDraftList draftShots(
+            long seriesId,
+            ScriptDoc script,
+            java.util.List<String> assetNames,
+            int durationSec,
+            Integer episodeBudgetSec,
+            String visualStyle) {
         return cn.aigc.dit.server.drama.DramaShotDrafts.fromScript(script, assetNames, durationSec);
     }
 

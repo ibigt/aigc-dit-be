@@ -300,7 +300,11 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         AiModel model = requireBoundImageModel(series);
-        String prompt = withIdentityConstraint(completeImagePrompt(asset, series), asset.getIdentityInvariants());
+        DramaAsset baseSheet = findBaseCharacterSheet(asset);
+        String prompt = baseSheet == null
+                ? withIdentityConstraint(completeImagePrompt(asset, series), asset.getIdentityInvariants())
+                : DramaAssetDrafts.derivativePrompt(DramaAssetDrafts.derivativeChange(
+                        asset.getName(), asset.getStateTag(), asset.getDescription(), asset.getIdentityInvariants()));
         if (!StringUtils.hasText(prompt)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先填写提示词");
         }
@@ -312,6 +316,16 @@ public class DramaAssetService {
         req.setRatio(series.getAspectRatio());
         req.setResolution(normalizeImageResolution(resolution));
         req.setCopies(1);
+        if (baseSheet != null) {
+            GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
+            input.setType(AssetKind.IMAGE);
+            if (StringUtils.hasText(baseSheet.getImageStorageKey())) {
+                input.setStorageKey(baseSheet.getImageStorageKey());
+            } else {
+                input.setAssetId(baseSheet.getImageAssetId());
+            }
+            req.setReferences(List.of(input));
+        }
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("source", GenerateRequests.SOURCE_DRAMA);
         extra.put("seriesId", series.getId());
@@ -959,6 +973,46 @@ public class DramaAssetService {
             assetMapper.updateById(asset);
         }
         return rebuilt;
+    }
+
+    /**
+     * 换装 / 入梦且本体已有设定图时，返回那张图，生图改为在原图上改。没有可用本体图时返回 null，仍走整张设定图。
+     */
+    private DramaAsset findBaseCharacterSheet(DramaAsset asset) {
+        if (asset == null
+                || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
+                || asset.getEpisodeId() == null) {
+            return null;
+        }
+        String state = StringUtils.hasText(asset.getStateTag())
+                ? asset.getStateTag().trim()
+                : DramaAssetDrafts.inferStateTag(asset.getName());
+        if (DramaContract.STATE_TAG_BASE.equals(state)) {
+            return null;
+        }
+        String baseName = DramaAssetDrafts.baseCharacterName(asset.getName());
+        if (!StringUtils.hasText(baseName)) {
+            return null;
+        }
+        List<DramaAsset> mates = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getEpisodeId, asset.getEpisodeId())
+                .eq(DramaAsset::getType, DramaContract.ASSET_TYPE_CHARACTER)
+                .eq(DramaAsset::getName, baseName));
+        for (DramaAsset mate : mates) {
+            if (mate == null || mate.getId() != null && mate.getId().equals(asset.getId())) {
+                continue;
+            }
+            String mateState = StringUtils.hasText(mate.getStateTag())
+                    ? mate.getStateTag().trim()
+                    : DramaContract.STATE_TAG_BASE;
+            if (!DramaContract.STATE_TAG_BASE.equals(mateState)) {
+                continue;
+            }
+            if (StringUtils.hasText(mate.getImageStorageKey()) || mate.getImageAssetId() != null) {
+                return mate;
+            }
+        }
+        return null;
     }
 
     static String resolveImagePrompt(DramaAsset asset) {

@@ -263,6 +263,49 @@ class DramaAssetServiceTest {
         assertEquals(100L, asset.getGenTaskId());
         assertTrue(reqCaptor.getValue().getPrompt().contains("洛白角色设定图"));
         assertTrue(reqCaptor.getValue().getPrompt().contains("同一张图内三视图排列"));
+        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
+    }
+
+    @Test
+    void costumeGenerateUsesBaseSheetAsReferenceAndOnlyDescribesTheChange() {
+        DramaAsset wet = ownedAsset();
+        wet.setId(10L);
+        wet.setName("洛白·湿身");
+        wet.setStateTag(DramaContract.STATE_TAG_COSTUME);
+        wet.setDescription("外衣与发尾湿透，贴在身上");
+        wet.setIdentityInvariants("与主身份同一张脸和发型；禁止写成另一个人");
+        wet.setImagePrompt("洛白·湿身角色设定图。换装独立成图。");
+        when(assetMapper.selectById(10L)).thenReturn(wet);
+        DramaAsset base = ownedAsset();
+        base.setImageStorageKey("users/7/assets/luobai.png");
+        when(assetMapper.selectList(any())).thenReturn(List.of(base));
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        series.setImageAdapterKey("gpt-image-2");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
+        model.setId(12L);
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setCapabilities(List.of("image", "t2i", "i2i"));
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(101L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateImage(10L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        String prompt = reqCaptor.getValue().getPrompt();
+        assertTrue(prompt.contains("保持原图的版式、构图、比例和背景不变"));
+        assertTrue(prompt.contains("变化：外衣与发尾湿透，贴在身上。"));
+        assertFalse(prompt.contains("三视图"));
+        assertEquals(1, reqCaptor.getValue().getReferences().size());
+        assertEquals("users/7/assets/luobai.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
+        assertEquals("image", reqCaptor.getValue().getReferences().get(0).getType());
     }
 
     @Test

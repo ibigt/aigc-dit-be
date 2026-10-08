@@ -17,14 +17,28 @@ class GenerateWorkerRetryTest {
                 "Agnes HTTP 503: video queue is full, please retry later"));
         assertTrue(GenerateWorker.isRetryableSubmitError(
                 "Agnes HTTP 429: video status query rate limit exceeded"));
+        assertTrue(GenerateWorker.isRetryableSubmitError(
+                "Seedance HTTP 429: too many requests, rate limit"));
         assertFalse(GenerateWorker.isRetryableSubmitError("Agnes HTTP 400: size must be 720P"));
+    }
+
+    @Test
+    void accountQuotaAndBalanceFailWithoutRetry() {
+        assertFalse(GenerateWorker.isRetryableSubmitError(
+                "Seedance HTTP 429: The request has exceeded the quota. Request id: 0217"));
+        assertFalse(GenerateWorker.isRetryableSubmitError(
+                "RunningHub 返回错误：Your balance is insufficient. Please top up your account. 请稍后"));
+        assertFalse(GenerateWorker.isRetryableSubmitError(
+                "Seedance HTTP 400: Your account does not have a valid AgentPlan subscription, "
+                        + "or your subscription has expired. 请稍后重试"));
+        assertFalse(GenerateWorker.isRetryableSubmitError("额度已用完，请稍后重试"));
     }
 
     @Test
     void mapsQueueFullToFriendlyMessage() {
         assertEquals("Agnes 视频队列繁忙，请稍后重试",
                 GenerateWorker.friendlyBusyMessage("Agnes HTTP 503: video queue is full, please retry later"));
-        assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
+        assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
                 GenerateWorker.friendlyBusyMessage(
                         "Seedance HTTP 429: The request has exceeded the quota."));
     }

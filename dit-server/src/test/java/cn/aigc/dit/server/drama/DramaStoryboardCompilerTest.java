@@ -58,6 +58,7 @@ class DramaStoryboardCompilerTest {
         assertTrue(prompt.contains("出场：洛白=<Picture 1>、夏安=<Picture 2>。"));
         assertTrue(prompt.contains("未出图角色按外貌出演：中年男性；浓眉；灰西装。"));
         assertFalse(prompt.contains("出场：洛白、夏安、局长"));
+        assertTrue(prompt.contains("参考图：<Picture 1>、<Picture 2> 为角色参考图；<Picture 3> 为道具参考图；<Picture 4> 为场景参考图。"));
         assertTrue(prompt.contains("Duration: 5 seconds"));
         assertTrue(prompt.contains("对白执行："));
         assertTrue(prompt.contains("只念台词正文，不念角色名和冒号"));
@@ -88,9 +89,38 @@ class DramaStoryboardCompilerTest {
                 1);
         String prompt = DramaStoryboardCompiler.compile(prefix, refs, shot).prompt();
         assertTrue(prompt.contains("Action: 特写。洛白（<Picture 1>）在桌后用书盖脸装睡。"));
+        assertFalse(prompt.contains("Camera:"));
+        assertFalse(prompt.contains("Ambiance:"));
         assertTrue(prompt.contains("出场：洛白=<Picture 1>。"));
         assertFalse(prompt.contains("出场：夏安"));
         assertFalse(prompt.contains("Identity lock"));
+    }
+
+    @Test
+    void splitsCameraActionAndAmbiance() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "百叶窗日光斜切进来，浮尘漂浮",
+                "洛白双手把书压在脸上，胸腔随呼吸轻轻起伏。",
+                "",
+                "",
+                "",
+                5,
+                List.of("洛白"),
+                1,
+                List.of(),
+                "特写，静止",
+                "风扇低鸣，纸页轻响");
+        String prompt = DramaStoryboardCompiler.compile(prefix, refs, shot).prompt();
+        assertTrue(prompt.contains("Camera: 特写，静止"));
+        assertTrue(prompt.contains("Action: 洛白（<Picture 1>）双手把书压在脸上，胸腔随呼吸轻轻起伏。"));
+        assertTrue(prompt.contains("Ambiance: 风扇低鸣，纸页轻响"));
+        assertTrue(prompt.contains("Scene: 百叶窗日光斜切进来，浮尘漂浮"));
+        assertTrue(prompt.indexOf("Scene:") < prompt.indexOf("Camera:"));
+        assertTrue(prompt.indexOf("Camera:") < prompt.indexOf("Action:"));
+        assertTrue(prompt.indexOf("Action:") < prompt.indexOf("Ambiance:"));
     }
 
     @Test
@@ -245,6 +275,7 @@ class DramaStoryboardCompilerTest {
         assertFalse(r2v.contains("禁止用首帧里已有的人顶替新角色"));
 
         assertFalse(i2v.contains("<Picture"));
+        assertFalse(i2v.contains("参考图："));
         assertTrue(i2v.contains(DramaStoryboardCompiler.I2V_MUST_START));
         assertTrue(i2v.contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
         assertTrue(i2v.contains("局长：中年男性；浓眉；灰西装"));

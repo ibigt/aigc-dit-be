@@ -880,7 +880,7 @@ public class GenerateWorker {
     }
 
     static boolean isRetryableSubmitError(String message) {
-        if (message == null || message.isBlank()) {
+        if (message == null || message.isBlank() || isAccountQuotaRejection(message)) {
             return false;
         }
         String lower = message.toLowerCase();
@@ -890,6 +890,33 @@ public class GenerateWorker {
                 || lower.contains("rate limit")
                 || message.contains("请稍后")
                 || lower.contains("retry later");
+    }
+
+    /**
+     * 账号额度、余额或订阅被拒后等待不会恢复。即使文案里带 429 /「请稍后」，也不要重试。
+     * 瞬时队列满和请求过密仍由 {@link #isRetryableSubmitError} 放行。
+     */
+    static boolean isAccountQuotaRejection(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("exceeded the quota")
+                || lower.contains("quota exceeded")
+                || lower.contains("insufficient quota")
+                || lower.contains("insufficient balance")
+                || lower.contains("balance is insufficient")
+                || lower.contains("subscription has expired")
+                || lower.contains("does not have a valid agentplan")
+                || lower.contains("agentplan subscription")
+                || message.contains("余额不足")
+                || message.contains("额度不足")
+                || message.contains("额度已用完")
+                || message.contains("额度用尽")
+                || message.contains("套餐到期")
+                || message.contains("订阅过期")
+                || message.contains("订阅无效")
+                || message.contains("欠费");
     }
 
     private void deferSubmit(GenTask task, String message) {
@@ -926,6 +953,9 @@ public class GenerateWorker {
     }
 
     static String friendlyBusyMessage(String message) {
+        if (isAccountQuotaRejection(message)) {
+            return GenerateTaskViews.friendlySeedanceError(message);
+        }
         if (isQuotaMessage(message)) {
             return GenerateTaskViews.QUOTA_MESSAGE;
         }

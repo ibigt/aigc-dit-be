@@ -167,11 +167,21 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("60～150 字"));
         assertTrue(system.contains("40～90 字"));
         assertTrue(system.contains("不要描写"));
-        assertTrue(system.contains("narrative_goal 与 scene"));
+        assertTrue(system.contains("narrative_goal"));
+        assertTrue(system.contains("一个时空"));
+        assertTrue(system.contains("改成"));
+        assertTrue(system.contains("duration_sec"));
+        assertTrue(system.contains("另一种时代"));
 
         String user = DramaTextPrompts.shotEnrichUser("[{\"chapter_index\":1}]", "{\"shots\":[]}");
         assertTrue(user.contains("场次上下文"));
         assertTrue(user.contains("待扩写分镜草稿"));
         assertTrue(user.contains("chapter_index 与 index 必须与输入一致"));
+        assertTrue(user.contains("景别和运镜写进 camera"));
+        assertFalse(user.contains("项目视觉风格"));
+
+        String styled = DramaTextPrompts.shotEnrichUser("[{\"chapter_index\":1}]", "{\"shots\":[]}", "赛博朋克风。霓虹都市");
+        assertTrue(styled.contains("项目视觉风格：赛博朋克风。霓虹都市"));
+        assertTrue(styled.contains("不得引入另一种时代的陈设"));
     }
 }

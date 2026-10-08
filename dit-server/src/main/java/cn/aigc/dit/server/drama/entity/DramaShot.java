@@ -29,6 +29,13 @@ public class DramaShot {
     private String title;
     private Integer durationSec;
     private String narrativeGoal;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String cameraMotion;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String ambianceAudio;
+
     private String scene;
     private String dialogue;
     private String continuityIn;
