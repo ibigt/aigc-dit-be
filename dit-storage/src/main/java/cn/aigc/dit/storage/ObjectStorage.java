@@ -46,6 +46,18 @@ public interface ObjectStorage {
         return new ByteArrayInputStream(all, (int) startInclusive, length);
     }
 
+    /**
+     * 对象是否存在。不存在时返回 false，不把缺失记成错误。
+     */
+    default boolean exists(String storageKey) {
+        try {
+            size(storageKey);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     void delete(String storageKey);
 
     /**

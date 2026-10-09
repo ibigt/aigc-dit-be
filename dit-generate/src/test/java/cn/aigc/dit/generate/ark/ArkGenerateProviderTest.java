@@ -10,6 +10,7 @@ import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.ReferenceAsset;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.audio.AudioReferenceProcessor;
+import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.storage.LocalObjectStorage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.ArrayList;
 import java.util.List;
@@ -90,6 +92,36 @@ class ArkGenerateProviderTest {
         JsonNode body = mapper.readTree(http.lastJson);
         String url = body.get("content").get(1).get("image_url").get("url").asText();
         assertEquals("reference_image", body.get("content").get(1).get("role").asText());
+        assertTrue(url.startsWith("data:image/png;base64,"));
+    }
+
+    @Test
+    void submitR2vUsesFreshSeedreamLiteOriginUrl() throws Exception {
+        http.postBody = """
+                {"id":"cgt-origin","status":"queued"}
+                """;
+        String key = "users/8/outputs/101/1.png";
+        storage.put(key, TINY_PNG, "image/png");
+        String origin = "https://cdn.example/lite.png";
+        SeedreamOriginUrls.save(storage, mapper, key, origin, Instant.now());
+
+        provider.submit(video("r2v").setReferences(List.of(new ReferenceAsset("image", key))));
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals(origin, body.get("content").get(1).get("image_url").get("url").asText());
+    }
+
+    @Test
+    void submitR2vFallsBackToBase64WhenOriginExpired() throws Exception {
+        http.postBody = """
+                {"id":"cgt-expired","status":"queued"}
+                """;
+        String key = "users/8/outputs/102/1.png";
+        storage.put(key, TINY_PNG, "image/png");
+        SeedreamOriginUrls.save(storage, mapper, key, "https://cdn.example/lite.png", Instant.parse("2020-01-01T00:00:00Z"));
+
+        provider.submit(video("r2v").setReferences(List.of(new ReferenceAsset("image", key))));
+        JsonNode body = mapper.readTree(http.lastJson);
+        String url = body.get("content").get(1).get("image_url").get("url").asText();
         assertTrue(url.startsWith("data:image/png;base64,"));
     }
 

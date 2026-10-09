@@ -13,6 +13,7 @@ import cn.aigc.dit.generate.PollResult;
 import cn.aigc.dit.generate.ReferenceAsset;
 import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.audio.AudioReferenceProcessor;
+import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -422,6 +424,13 @@ public class ArkGenerateProvider implements GenerateProvider {
     private String mediaUri(String storageKey, String kind, long maxDurationMillis) {
         if (!StringUtils.hasText(storageKey)) {
             return null;
+        }
+        if (!"audio".equals(kind) && !"video".equals(kind)) {
+            String origin = SeedreamOriginUrls.resolve(objectStorage, objectMapper, storageKey, Instant.now());
+            if (origin != null) {
+                log.info("Seedance uses Seedream 5.0 origin url, key={}", storageKey);
+                return origin;
+            }
         }
         byte[] bytes = objectStorage.getBytes(storageKey);
         if (bytes == null || bytes.length == 0) {

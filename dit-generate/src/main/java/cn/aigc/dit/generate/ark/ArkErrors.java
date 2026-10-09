@@ -11,7 +11,7 @@ import java.util.Locale;
 final class ArkErrors {
 
     static final String REAL_PERSON_MESSAGE =
-            "官方 Seedance 把参考图判成了真人脸。二次元设定图也常被误伤，请再试一次或改用 MiniMax。";
+            "官方 Seedance 把本镜参考图判成了真人脸，已停止出片。请使用seedream-5.0系列生成角色资产图，或使用其他模型";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 

@@ -9,7 +9,9 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
@@ -51,6 +53,28 @@ public class S3ObjectStorage implements ObjectStorage {
         } catch (Exception e) {
             log.error("S3 get failed, key={}", storageKey, e);
             throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
+        }
+    }
+
+    @Override
+    public boolean exists(String storageKey) {
+        try {
+            s3Client.headObject(HeadObjectRequest.builder()
+                    .bucket(properties.getBucket())
+                    .key(storageKey)
+                    .build());
+            return true;
+        } catch (NoSuchKeyException e) {
+            return false;
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                return false;
+            }
+            log.warn("S3 head exists failed, key={}", storageKey);
+            return false;
+        } catch (RuntimeException e) {
+            log.warn("S3 head exists failed, key={}", storageKey);
+            return false;
         }
     }
 

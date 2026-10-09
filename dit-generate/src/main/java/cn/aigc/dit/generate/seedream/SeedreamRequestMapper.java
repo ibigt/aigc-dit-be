@@ -10,7 +10,7 @@ import java.util.Map;
 
 /**
  * Canonical {@link GenerateRequest} → 方舟 Seedream {@code /images/generations} 字段。
- * 4.0 / 4.5 / 5.0 共用同一请求形状，仅 model 不同；模型标识以配置为准（如 5.0-lite → 5.0-pro）。
+ * 4.0 / 4.5 / 5.0 lite 支持组图与流式；5.0 pro / flash 只出单图，这两个参数传了会被拒绝。
  */
 public final class SeedreamRequestMapper {
 
@@ -35,14 +35,17 @@ public final class SeedreamRequestMapper {
     }
 
     public static Map<String, Object> toBody(GenerateRequest request, List<String> images) {
+        String model = modelName(request);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("model", modelName(request));
+        body.put("model", model);
         body.put("prompt", safePrompt(request.getPrompt()));
         body.put("size", imageSize(request.getResolution(), request.getRatio()));
-        body.put("sequential_image_generation", "disabled");
+        if (supportsGroupAndStream(model)) {
+            body.put("sequential_image_generation", "disabled");
+            body.put("stream", false);
+        }
         body.put("response_format", "url");
         body.put("watermark", false);
-        body.put("stream", false);
         if (images != null && !images.isEmpty()) {
             if (images.size() == 1) {
                 body.put("image", images.get(0));
@@ -51,6 +54,17 @@ public final class SeedreamRequestMapper {
             }
         }
         return body;
+    }
+
+    /**
+     * 5.0 pro / flash 不支持组图和流式。带上 {@code sequential_image_generation} 或 {@code stream}
+     * 时，方舟会 400：parameter is not supported by the current model。
+     */
+    static boolean supportsGroupAndStream(String model) {
+        String key = model == null ? "" : model.toLowerCase(Locale.ROOT);
+        boolean seedream5 = key.contains("seedream-5");
+        boolean singleImageOnly = key.contains("pro") || key.contains("flash");
+        return !(seedream5 && singleImageOnly);
     }
 
     static String imageSize(String resolution, String ratio) {

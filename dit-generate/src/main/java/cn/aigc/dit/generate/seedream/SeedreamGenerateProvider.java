@@ -21,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -78,8 +79,13 @@ public class SeedreamGenerateProvider implements GenerateProvider {
             throw new BizException(ErrorCode.INTERNAL, "组装 Seedream 请求失败");
         }
         String raw = http.postJson(SeedreamUrls.toUri(SeedreamUrls.imagesGenerations(v3Base)), apiKey, json);
-        byte[] image = decodeImage(readTree(raw));
+        JsonNode response = readTree(raw);
+        String originUrl = response.path("data").path(0).path("url").asText("");
+        byte[] image = decodeImage(response);
         String key = ingestBytes(request, image);
+        if (SeedreamOriginUrls.qualifies(request)) {
+            SeedreamOriginUrls.save(objectStorage, objectMapper, key, originUrl, Instant.now());
+        }
         String jobId = "seedream-" + UUID.randomUUID();
         completed.put(jobId, key);
         log.info("Seedream submit jobId={}, taskId={}, model={}, mode={}, base={}",

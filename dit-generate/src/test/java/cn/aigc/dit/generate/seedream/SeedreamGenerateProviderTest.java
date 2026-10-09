@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -69,6 +70,33 @@ class SeedreamGenerateProviderTest {
         assertTrue(bodyCaptor.getValue().contains("\"model\":\"doubao-seedream-4-0-250828\""));
         assertTrue(bodyCaptor.getValue().contains("\"watermark\":false"));
         verify(storage).put(eq("users/7/outputs/99/1.png"), any(byte[].class), eq("image/png"));
+        verify(storage, never()).put(eq("users/7/outputs/99/1.png.origin.json"), any(byte[].class), anyString());
+    }
+
+    @Test
+    void submitLiteT2iKeepsOriginHttps() {
+        when(http.postJson(any(), anyString(), anyString()))
+                .thenReturn("{\"data\":[{\"url\":\"https://cdn.example/lite.png?X-Tos-Date=20261009T030000Z&X-Tos-Expires=86400\"}]}");
+        when(http.getBytes(any())).thenReturn("png-bytes".getBytes(StandardCharsets.UTF_8));
+
+        GenerateRequest request = new GenerateRequest();
+        request.setCategory(ModelCategory.IMAGE);
+        request.setMode(GenerateMode.T2I);
+        request.setAdapterKey(AdapterCatalog.SEEDREAM_5_0);
+        request.setModelKey("doubao-seedream-5.0-lite");
+        request.setPrompt("character sheet");
+        request.setApiKey("plan-key");
+        request.setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
+        request.setUserId(7L);
+        request.setTaskId(101L);
+
+        provider.submit(request);
+
+        ArgumentCaptor<byte[]> bodyCaptor = ArgumentCaptor.forClass(byte[].class);
+        verify(storage).put(eq("users/7/outputs/101/1.png.origin.json"), bodyCaptor.capture(), eq("application/json"));
+        String json = new String(bodyCaptor.getValue(), StandardCharsets.UTF_8);
+        assertTrue(json.contains("https://cdn.example/lite.png"));
+        assertTrue(json.contains("savedAt"));
     }
 
     @Test
@@ -102,5 +130,30 @@ class SeedreamGenerateProviderTest {
                 bodyCaptor.capture());
         assertTrue(bodyCaptor.getValue().contains("\"model\":\"doubao-seedream-5.0-pro\""));
         assertTrue(bodyCaptor.getValue().contains("data:image/png;base64,"));
+        verify(storage, never()).put(eq("users/7/outputs/100/1.png.origin.json"), any(byte[].class), anyString());
+    }
+
+    @Test
+    void submitProT2iKeepsOriginHttps() {
+        when(http.postJson(any(), anyString(), anyString()))
+                .thenReturn("{\"data\":[{\"url\":\"https://cdn.example/pro.png\"}]}");
+        when(http.getBytes(any())).thenReturn("png-bytes".getBytes(StandardCharsets.UTF_8));
+
+        GenerateRequest request = new GenerateRequest();
+        request.setCategory(ModelCategory.IMAGE);
+        request.setMode(GenerateMode.T2I);
+        request.setAdapterKey(AdapterCatalog.SEEDREAM_5_0);
+        request.setModelKey("doubao-seedream-5-0-pro");
+        request.setPrompt("character sheet");
+        request.setApiKey("plan-key");
+        request.setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
+        request.setUserId(7L);
+        request.setTaskId(102L);
+
+        provider.submit(request);
+
+        ArgumentCaptor<byte[]> bodyCaptor = ArgumentCaptor.forClass(byte[].class);
+        verify(storage).put(eq("users/7/outputs/102/1.png.origin.json"), bodyCaptor.capture(), eq("application/json"));
+        assertTrue(new String(bodyCaptor.getValue(), StandardCharsets.UTF_8).contains("https://cdn.example/pro.png"));
     }
 }

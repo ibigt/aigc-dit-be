@@ -55,6 +55,36 @@ class SeedreamRequestMapperTest {
     }
 
     @Test
+    void proOmitsGroupAndStreamFields() {
+        GenerateRequest request = new GenerateRequest();
+        request.setModelKey("doubao-seedream-5-0-pro");
+        request.setPrompt("日照金山");
+        request.setResolution("2K");
+        request.setRatio("16:9");
+
+        Map<String, Object> body = SeedreamRequestMapper.toBody(request, List.of());
+        assertEquals("doubao-seedream-5-0-pro", body.get("model"));
+        assertFalse(body.containsKey("sequential_image_generation"));
+        assertFalse(body.containsKey("stream"));
+        assertEquals("url", body.get("response_format"));
+        assertEquals(false, body.get("watermark"));
+    }
+
+    @Test
+    void liteKeepsGroupAndStreamFields() {
+        GenerateRequest request = new GenerateRequest();
+        request.setModelKey("doubao-seedream-5.0-lite");
+        request.setPrompt("一只小猫");
+
+        Map<String, Object> body = SeedreamRequestMapper.toBody(request, List.of());
+        assertEquals("disabled", body.get("sequential_image_generation"));
+        assertEquals(false, body.get("stream"));
+        assertFalse(SeedreamRequestMapper.supportsGroupAndStream("doubao-seedream-5.0-pro"));
+        assertFalse(SeedreamRequestMapper.supportsGroupAndStream("Doubao-Seedream-5-0-flash"));
+        assertTrue(SeedreamRequestMapper.supportsGroupAndStream("doubao-seedream-4-5-251128"));
+    }
+
+    @Test
     void imageSizeFallsBackToTier() {
         assertEquals("2K", SeedreamRequestMapper.imageSize("2K", null));
         assertEquals("4K", SeedreamRequestMapper.imageSize("4K", ""));

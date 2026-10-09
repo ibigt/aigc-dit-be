@@ -13,7 +13,9 @@ import java.util.Map;
 /**
  * 资产页自动提示词模板。多数风格共用二次元漫画风的同一骨架，只替换风格句；
  * 其它风格可在服装句后追加一句服饰/材质。
- * {@link DramaStyles#LIVE_REALISM} 与 {@link DramaStyles#REALISTIC_3D} 角色图单独弱化大脸设定表排版（降低 Seedance 真人拒审概率），
+ * {@link DramaStyles#LIVE_REALISM} 角色图用四格设定表，半身取 3/4 侧脸，避免正面大头照。
+ * {@link DramaStyles#REALISTIC_3D} 角色图用影视级仿真人转面：旁边一张正脸特写，加正面、严格 90 度侧面、背面三个全身，
+ * 只换风格与构图，不写死某一个人的年龄、发型和服装。
  * 仅影响之后新生成的 {@code imagePrompt}；已锁定旧图需用户重抽才换像素。
  */
 public final class DramaAssetDrafts {
@@ -218,16 +220,28 @@ public final class DramaAssetDrafts {
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
         }
-        // 写实/真人 3D：强制统一设定表拼版，半身用 3/4 侧脸，避免正面大头照触发 Seedance。
-        if (usesPhotorealCharacterSheet(spec.key())) {
+        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+            text.append("同一张图必须做成影视级虚拟角色设定板：左侧旁边一张正脸特写，右侧是严格属于同一个角色的正面、严格 90 度侧面、背面三个全身视图。");
+            text.append("正脸特写只取头部和肩部，面部正对镜头，看清眼睛、眉毛、鼻唇、肤色和发型，与三个全身是同一张脸。");
+            text.append("不得只出单人单帧，不得把不同人物拼在一起，不得用证件照替代全身视图。");
+            text.append("正面：身体与面部正对镜头，自然站立，双臂轻微离开身体，完整显示全身。");
+            text.append("侧面：严格 90 度侧视，鼻尖、下巴、胸部、髋部和脚尖方向一致，展示真实侧脸轮廓，禁止用四分之三侧脸代替正侧面。");
+            text.append("背面：身体背对镜头，清楚展示发型后部、发饰与服装背面。");
+            text.append("三个全身视图采用相同的摄影机高度、人物比例、焦距感和地面位置，人物之间留出间隔，头顶、手部、衣摆和双脚均完整显示。");
+            text.append("纯净的中性灰色摄影棚背景，柔和均匀的影视棚灯光。");
+            text.append("禁止动漫、卡通、塑料玩偶皮肤、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
+            text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景、水印、标志和画面文字。");
+        } else if (usesPhotorealCharacterSheet(spec.key())) {
+            // 半写实：四格设定表，半身用 3/4 侧脸，避免正面大头照。
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
             text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
             text.append("禁止正面大头照、禁止正脸证件照特写、禁止摄影棚大脸特写拼版。");
+            text.append("浅灰或纯白干净背景。");
         } else {
             text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
+            text.append("浅灰或纯白干净背景。");
         }
-        text.append("浅灰或纯白干净背景。");
         text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
         // 写实风把设定摘要写入生图句，避免只留在 identity 字段时模型自由发挥成古装。
         if (usesPhotorealCharacterSheet(spec.key()) && StringUtils.hasText(identity)) {
@@ -247,7 +261,7 @@ public final class DramaAssetDrafts {
         }
         return switch (spec.key()) {
             case DramaStyles.LIVE_REALISM -> "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
-            case DramaStyles.REALISTIC_3D -> "电影级三维角色设定，次世代数字人质感，皮肤毛发与布料清晰，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
+            case DramaStyles.REALISTIC_3D -> "影视级仿真人数字人，photorealistic CGI digital human，真实人体解剖比例，细腻自然的皮肤纹理与次表面散射，真实眼球反射，精细独立发丝，自然布料褶皱与清晰材质。完全虚构的原创 CG 角色，高预算真人影视质感，不要粗糙动画，不要塑料皮肤。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
             case DramaStyles.GUOFENG_3D -> "三维国风角色，汉服广袖与发冠发饰，布料与金属质感清晰，不要现代西装夹克或运动鞋，不要卡通平涂线稿。";
@@ -391,6 +405,21 @@ public final class DramaAssetDrafts {
         }
         if (StringUtils.hasText(type) && !DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
             return false;
+        }
+        if (DramaStyles.REALISTIC_3D.equals(styleKey)) {
+            if (prompt.contains("影视级虚拟角色设定板")
+                    && prompt.contains("严格 90 度")
+                    && prompt.contains("旁边一张正脸特写")) {
+                return false;
+            }
+            return prompt.contains("固定四格设定拼版")
+                    || prompt.contains("次世代数字人质感")
+                    || prompt.contains("非真人照片质感")
+                    || prompt.contains("禁止正面大头照")
+                    || prompt.contains("同一张图内三视图排列：正面全身、侧面半身、面部特写")
+                    || prompt.contains("单人 3/4 或正面全身为主")
+                    || prompt.contains("不要大脸特写拼版")
+                    || (prompt.contains("影视级虚拟角色设定板") && !prompt.contains("旁边一张正脸特写"));
         }
         // 已是含现代都市时代锁的新版固定四格则保留。
         if (prompt.contains("固定四格设定拼版")

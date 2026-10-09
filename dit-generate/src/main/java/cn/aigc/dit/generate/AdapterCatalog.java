@@ -64,8 +64,8 @@ public final class AdapterCatalog {
     public static final String GPT_IMAGE_2_5_MODEL = "gpt-image-2.5-sunburst";
     public static final String SEEDREAM_4_0_MODEL = "doubao-seedream-4-0-250828";
     public static final String SEEDREAM_4_5_MODEL = "doubao-seedream-4-5-251128";
-    /** Token Plan 默认 Lite；管理端可改成 {@code doubao-seedream-5.0-pro} 等控制台标识。 */
-    public static final String SEEDREAM_5_0_MODEL = "doubao-seedream-5.0-lite";
+    /** Token Plan 图片模型。Lite 已对新用户关闭，默认用控制台里的 Pro。 */
+    public static final String SEEDREAM_5_0_MODEL = "doubao-seedream-5-0-pro";
 
     private static final List<Spec> ALL = List.of(
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",

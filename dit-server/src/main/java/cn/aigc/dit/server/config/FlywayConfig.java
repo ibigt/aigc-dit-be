@@ -601,5 +601,26 @@ public class FlywayConfig {
                 WHERE COALESCE(image_prompt, '') LIKE '%当代都市写实常服与日常面料%'
                    OR COALESCE(description, '') LIKE '%当代都市写实常服与日常面料%'
                 """);
+        statement.execute("""
+                UPDATE drama_series
+                SET style_prefix = '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠',
+                    updated_at = NOW()
+                WHERE style_key = 'realistic-3d'
+                  AND COALESCE(style_prefix, '') NOT LIKE '%电影级仿真人数字人%'
+                """);
+        statement.execute("""
+                UPDATE drama_asset
+                SET image_prompt = REPLACE(
+                        image_prompt,
+                        '真人3D风，电影级三维渲染，次世代数字人质感，皮肤次表面散射，电影布光与浅景深，当代都市常服，不要卡通平涂线稿，不要古装，不要武侠仙侠',
+                        '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠'),
+                    description = REPLACE(
+                        description,
+                        '真人3D风，电影级三维渲染，次世代数字人质感，皮肤次表面散射，电影布光与浅景深，当代都市常服，不要卡通平涂线稿，不要古装，不要武侠仙侠',
+                        '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠'),
+                    updated_at = NOW()
+                WHERE COALESCE(image_prompt, '') LIKE '%次世代数字人质感，皮肤次表面散射，电影布光与浅景深%'
+                   OR COALESCE(description, '') LIKE '%次世代数字人质感，皮肤次表面散射，电影布光与浅景深%'
+                """);
     }
 }

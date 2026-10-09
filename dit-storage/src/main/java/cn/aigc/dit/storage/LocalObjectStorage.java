@@ -60,6 +60,11 @@ public class LocalObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public boolean exists(String storageKey) {
+        return Files.exists(resolve(storageKey));
+    }
+
+    @Override
     public long size(String storageKey) {
         try {
             return Files.size(resolve(storageKey));

@@ -329,13 +329,34 @@ class DramaAssetDraftsTest {
                 realistic,
                 null,
                 "男性；青年；当代常服");
-        assertTrue(realisticPrompt.contains("电影级三维角色设定，次世代数字人质感"));
-        assertTrue(realisticPrompt.contains("现代都市常服"));
-        assertTrue(realisticPrompt.contains("固定四格设定拼版"));
-        assertTrue(realisticPrompt.contains("禁止正面大头照"));
+        assertTrue(realisticPrompt.contains("影视级仿真人数字人"));
+        assertTrue(realisticPrompt.contains("photorealistic CGI digital human"));
+        assertTrue(realisticPrompt.contains("影视级虚拟角色设定板"));
+        assertTrue(realisticPrompt.contains("旁边一张正脸特写"));
+        assertTrue(realisticPrompt.contains("严格 90 度侧面"));
+        assertTrue(realisticPrompt.contains("中性灰色摄影棚背景"));
+        assertTrue(!realisticPrompt.contains("禁止正面大头照"));
+        assertTrue(realisticPrompt.contains("禁止塑料玩偶皮肤") || realisticPrompt.contains("不要塑料皮肤"));
         assertTrue(realisticPrompt.contains("外形与服装必须符合：男性；青年；当代常服"));
         assertTrue(realisticPrompt.contains(realistic.prefix()));
+        assertTrue(!realisticPrompt.contains("次世代数字人质感"));
+        assertTrue(!realisticPrompt.contains("非真人照片质感"));
+        assertTrue(!realisticPrompt.contains("固定四格设定拼版"));
         assertTrue(!realisticPrompt.contains("面部特写"));
+
+        String turnaroundWithoutCloseup = realisticPrompt.replace("左侧旁边一张正脸特写，右侧是", "");
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                turnaroundWithoutCloseup, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+        assertTrue(!realisticPrompt.contains("25 岁"));
+        assertTrue(!realisticPrompt.contains("浅蓝白色中国古典长裙"));
+
+        String oldRealistic = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧。"
+                + "禁止正面大头照。现代都市常服。电影级三维角色设定，次世代数字人质感，非真人照片质感。"
+                + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldRealistic, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
 
         String threeView = "洛白角色设定图。同一张图内三视图排列：正面全身、侧面半身、面部特写。"
                 + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
