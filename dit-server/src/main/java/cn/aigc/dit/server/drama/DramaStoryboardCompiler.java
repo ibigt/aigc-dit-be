@@ -30,6 +30,8 @@ public final class DramaStoryboardCompiler {
     public static final String NARRATION_MOUTH_CLOSED = "画面中角色保持闭嘴，不对旁白与画外音台词对口型。";
     public static final String DIALOGUE_PERFORMANCE_PREFIX = "对白表演：表情与语气一致，呈现";
     public static final String DIALOGUE_PERFORMANCE_SUFFIX = "神态，动作自然克制，不夸张演过头。";
+    /** 有镜头序列时力度由镜头动作自己写，对白表演只约束表情和口型。 */
+    public static final String DIALOGUE_PERFORMANCE_SUFFIX_BEATS = "神态与口型。";
     public static final String I2V_MUST_START =
             "Must start: 以提供的首帧为起幅（空间、已在画面中人物的服装与站位）。严格按 Action 的主语演出，禁止改写谁做了什么。"
                     + "Action 新点名、但首帧里还没有的人，必须按其 Identities 外貌入画；"
@@ -104,7 +106,8 @@ public final class DramaStoryboardCompiler {
             int castCount,
             List<NamedAppearance> unnamedAppearances,
             String camera,
-            String ambiance
+            String ambiance,
+            DramaShotBeats shotBeats
     ) {
         public ShotContent(
                 String scene,
@@ -116,7 +119,7 @@ public final class DramaStoryboardCompiler {
                 List<String> characterNames,
                 int castCount) {
             this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
-                    characterNames, castCount, List.of(), null, null);
+                    characterNames, castCount, List.of(), null, null, null);
         }
 
         public ShotContent(
@@ -130,7 +133,23 @@ public final class DramaStoryboardCompiler {
                 int castCount,
                 List<NamedAppearance> unnamedAppearances) {
             this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
-                    characterNames, castCount, unnamedAppearances, null, null);
+                    characterNames, castCount, unnamedAppearances, null, null, null);
+        }
+
+        public ShotContent(
+                String scene,
+                String narrativeGoal,
+                String dialogue,
+                String continuityIn,
+                String continuityOut,
+                int durationSec,
+                List<String> characterNames,
+                int castCount,
+                List<NamedAppearance> unnamedAppearances,
+                String camera,
+                String ambiance) {
+            this(scene, narrativeGoal, dialogue, continuityIn, continuityOut, durationSec,
+                    characterNames, castCount, unnamedAppearances, camera, ambiance, null);
         }
     }
 
@@ -217,13 +236,16 @@ public final class DramaStoryboardCompiler {
             prompt.append(R2V_CHAIN_HINT).append('\n');
         }
         Map<String, Integer> pictures = pictureIndexByName(pictureRefs);
+        boolean beats = DramaShotBeats.hasBeats(content.shotBeats());
         appendVisualLines(prompt, content, pictures);
-        appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
+        if (!beats) {
+            appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
+        }
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
         appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
-        prompt.append(castConstraint(content, pictureRefs, opts.i2v())).append('\n');
+        prompt.append(castConstraint(content, pictureRefs, opts.i2v(), beats)).append('\n');
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
-        String spoken = spokenDialogueConstraint(content.dialogue());
+        String spoken = spokenDialogueConstraint(content.dialogue(), beats);
         if (StringUtils.hasText(spoken)) {
             String voices = voiceConstraint(audioRefs);
             if (StringUtils.hasText(voices)) {
@@ -288,7 +310,7 @@ public final class DramaStoryboardCompiler {
         Map<String, Integer> pictures = pictureIndexByName(refs);
         appendVisualLines(prompt, content, pictures);
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
-        prompt.append(castConstraint(content, refs));
+        prompt.append(castConstraint(content, refs, false, DramaShotBeats.hasBeats(content.shotBeats())));
         return new Result(prompt.toString().trim(), fingerprint(prefix, refs, List.of(), content, CompileOptions.r2v()));
     }
 
@@ -337,6 +359,18 @@ public final class DramaStoryboardCompiler {
                     }
                     raw.append('\n').append(blank(appearance.name())).append(':')
                             .append(blank(appearance.identityInvariants()));
+                }
+            }
+            if (shot.shotBeats() != null && shot.shotBeats().getBeats() != null) {
+                raw.append('\n').append(blank(shot.shotBeats().getBlocking()));
+                for (DramaShotBeats.Beat beat : shot.shotBeats().getBeats()) {
+                    if (beat == null) {
+                        continue;
+                    }
+                    raw.append('\n').append(blank(beat.getCamera()))
+                            .append('|').append(blank(beat.getAction()))
+                            .append('|').append(blank(beat.getContinuity()))
+                            .append('|').append(blank(beat.getDialogue()));
                 }
             }
         }
@@ -438,10 +472,14 @@ public final class DramaStoryboardCompiler {
     }
 
     static String castConstraint(ShotContent shot, List<ActiveReference> references) {
-        return castConstraint(shot, references, false);
+        return castConstraint(shot, references, false, false);
     }
 
     static String castConstraint(ShotContent shot, List<ActiveReference> references, boolean i2v) {
+        return castConstraint(shot, references, i2v, false);
+    }
+
+    static String castConstraint(ShotContent shot, List<ActiveReference> references, boolean i2v, boolean beats) {
         List<String> names = shot.characterNames() == null ? List.of() : shot.characterNames().stream()
                 .filter(StringUtils::hasText)
                 .map(String::trim)
@@ -466,21 +504,30 @@ public final class DramaStoryboardCompiler {
         List<String> unnamedLooks = unnamedLooks(names, pictured, shot.unnamedAppearances(), i2v);
 
         StringBuilder line = new StringBuilder();
-        line.append("Cast: 本镜恰好 ").append(count).append(" 人，不得增删角色。");
-        if (!picturedNames.isEmpty()) {
-            line.append("出场：");
-            List<String> labeled = new ArrayList<>();
-            Map<String, Integer> pictures = pictureIndexByName(references);
-            for (String name : picturedNames) {
-                Integer picture = pictures.get(name);
-                labeled.add(picture == null ? name : name + "=<Picture " + picture + ">");
+        if (beats) {
+            line.append("Cast: 本镜出场人物为");
+            line.append(castNameList(names, pictureIndexByName(references))).append("。");
+            line.append("某一镜头没点名的人保持起始站位或留在画外，禁止突然入画。");
+        } else {
+            line.append("Cast: 本镜恰好 ").append(count).append(" 人，不得增删角色。");
+            if (!picturedNames.isEmpty()) {
+                line.append("出场：");
+                line.append(castNameList(picturedNames, pictureIndexByName(references))).append("。");
             }
-            line.append(String.join("、", labeled)).append("。");
         }
         if (!unnamedLooks.isEmpty()) {
             line.append("未出图角色按外貌出演：").append(String.join("；", unnamedLooks)).append("。");
         }
         return line.toString();
+    }
+
+    private static String castNameList(List<String> names, Map<String, Integer> pictures) {
+        List<String> labeled = new ArrayList<>();
+        for (String name : names) {
+            Integer picture = pictures == null ? null : pictures.get(name);
+            labeled.add(picture == null ? name : name + "=<Picture " + picture + ">");
+        }
+        return String.join("、", labeled);
     }
 
     /**
@@ -512,6 +559,10 @@ public final class DramaStoryboardCompiler {
     }
 
     static String spokenDialogueConstraint(String dialogue) {
+        return spokenDialogueConstraint(dialogue, false);
+    }
+
+    static String spokenDialogueConstraint(String dialogue, boolean beats) {
         if (!StringUtils.hasText(dialogue)) {
             return "";
         }
@@ -552,7 +603,7 @@ public final class DramaStoryboardCompiler {
         if (!performanceEmotions.isEmpty()) {
             line.append('\n').append(DIALOGUE_PERFORMANCE_PREFIX)
                     .append(String.join("、", performanceEmotions))
-                    .append(DIALOGUE_PERFORMANCE_SUFFIX);
+                    .append(beats ? DIALOGUE_PERFORMANCE_SUFFIX_BEATS : DIALOGUE_PERFORMANCE_SUFFIX);
         }
         return line.toString();
     }
@@ -739,9 +790,40 @@ public final class DramaStoryboardCompiler {
 
     private static void appendVisualLines(StringBuilder prompt, ShotContent content, Map<String, Integer> pictures) {
         appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
+        if (DramaShotBeats.hasBeats(content.shotBeats())) {
+            appendLine(prompt, "站位", bindPictureNames(content.shotBeats().getBlocking(), pictures));
+            int index = 1;
+            for (DramaShotBeats.Beat beat : content.shotBeats().getBeats()) {
+                if (beat == null) {
+                    continue;
+                }
+                StringBuilder block = new StringBuilder();
+                appendBeatClause(block, "景别", beat.getCamera(), pictures);
+                appendBeatClause(block, "动作", beat.getAction(), pictures);
+                appendBeatClause(block, "接续", beat.getContinuity(), pictures);
+                appendBeatClause(block, "台词", beat.getDialogue(), pictures);
+                if (!block.isEmpty()) {
+                    prompt.append("镜头").append(index).append(": ").append(block).append('\n');
+                }
+                index++;
+            }
+            appendLine(prompt, "Ambiance", bindPictureNames(content.ambiance(), pictures));
+            return;
+        }
         appendLine(prompt, "Camera", bindPictureNames(content.camera(), pictures));
         appendLine(prompt, "Action", bindPictureNames(content.narrativeGoal(), pictures));
         appendLine(prompt, "Ambiance", bindPictureNames(content.ambiance(), pictures));
+    }
+
+    private static void appendBeatClause(
+            StringBuilder block, String label, String value, Map<String, Integer> pictures) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        if (!block.isEmpty()) {
+            block.append(' ');
+        }
+        block.append(label).append('：').append(bindPictureNames(value.trim(), pictures)).append('。');
     }
 
     /** 风格句后按参考图类型分组，编号沿用已发出的 Picture 序号。没有参考图时不写。 */

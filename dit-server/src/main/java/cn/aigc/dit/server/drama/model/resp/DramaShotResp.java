@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.model.resp;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -27,6 +28,8 @@ public class DramaShotResp {
     private String cameraMotion;
     @Schema(description = "画内环境声")
     private String ambianceAudio;
+    @Schema(description = "分镜内部镜头序列；空则页面仍展示 narrativeGoal")
+    private DramaShotBeats shotBeats;
     private String scene;
     private String dialogue;
     private String continuityIn;

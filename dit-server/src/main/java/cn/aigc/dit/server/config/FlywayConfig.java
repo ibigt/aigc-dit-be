@@ -325,6 +325,7 @@ public class FlywayConfig {
                     narrative_goal          TEXT,
                     camera_motion           TEXT,
                     ambiance_audio          TEXT,
+                    shot_beats              JSONB,
                     scene                   TEXT,
                     dialogue                TEXT,
                     continuity_in           VARCHAR(256),
@@ -469,6 +470,11 @@ public class FlywayConfig {
                 """);
         statement.execute("ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS camera_motion TEXT");
         statement.execute("ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS ambiance_audio TEXT");
+        statement.execute("ALTER TABLE drama_shot ADD COLUMN IF NOT EXISTS shot_beats JSONB");
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.shot_beats
+                IS '分镜内部镜头序列：起始站位 blocking，以及 1–3 个镜头 beats（景别、动作、连续性、本镜头台词）；空则仍按单句编译'
+                """);
         statement.execute("""
                 COMMENT ON COLUMN drama_shot.camera_motion
                 IS '景别与运镜，编译进视频提示词的 Camera 行'

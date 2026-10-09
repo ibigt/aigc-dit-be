@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -7,6 +8,8 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DramaShotEnrichmentTest {
 
@@ -228,6 +231,108 @@ class DramaShotEnrichmentTest {
 
         assertEquals(0, DramaShotEnrichment.merge(list, enriched, ASSETS));
         assertEquals("中景。洛白推开档案室的门。", shot.getNarrativeGoal());
+    }
+
+    @Test
+    void keepsEachBeatInsteadOfCollapsingThemIntoNarrativeGoal() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = shot();
+        shot.setNarrativeGoal("局长进门摔档案并问责。");
+        shot.setShotBeats(beats("局长在门口。",
+                beat("中景，跟拍", "局长推门进入。", "门开", ""),
+                beat("近景，下摇", "局长把档案摔在桌上。", "接推门进入", ""),
+                beat("特写，静止", "局长盯着洛白。", "接档案落桌", "局长（愤怒）：你给我站住！")));
+        list.setShots(new ArrayList<>(List.of(shot)));
+
+        DramaShotEnrichment.ShotEnrichList enriched = new DramaShotEnrichment.ShotEnrichList();
+        DramaShotEnrichment.ShotEnrich item = new DramaShotEnrichment.ShotEnrich();
+        item.setChapterIndex(1);
+        item.setIndex(2);
+        item.setNarrativeGoal("局长推门、摔档案、盯着洛白，三拍收成一句长动作。");
+        item.setScene("日光斜切进局长办公室，桌案堆着牛皮档案。");
+        item.setBlocking("局长停在门口，洛白坐在画面左侧。");
+        item.setBeats(List.of(
+                beatEnrich("中景，跟拍", "局长推门进入，门扇撞上墙。", "门开"),
+                beatEnrich("近景，下摇", "局长把档案摔在桌上，纸页散开。", "接推门进入"),
+                beatEnrich("特写，静止", "局长盯着洛白，下颌绷紧。", "接档案落桌")));
+        enriched.setShots(new ArrayList<>(List.of(item)));
+
+        assertTrue(DramaShotEnrichment.merge(list, enriched, ASSETS) > 0);
+        assertEquals("局长进门摔档案并问责。", shot.getNarrativeGoal());
+        assertEquals("局长推门进入，门扇撞上墙。", shot.getShotBeats().getBeats().get(0).getAction());
+        assertEquals("局长把档案摔在桌上，纸页散开。", shot.getShotBeats().getBeats().get(1).getAction());
+        assertEquals("局长盯着洛白，下颌绷紧。", shot.getShotBeats().getBeats().get(2).getAction());
+        assertEquals("局长（愤怒）：你给我站住！", shot.getShotBeats().getBeats().get(2).getDialogue());
+        assertEquals("局长（愤怒）：你给我站住！", shot.getDialogue());
+        assertFalse(shot.getNarrativeGoal().contains("门扇撞上墙"));
+    }
+
+    @Test
+    void rollsBackWholeShotWhenBeatDropsNameOrMixesDialogueIntoAction() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = beatShot();
+        list.setShots(new ArrayList<>(List.of(shot)));
+
+        DramaShotEnrichment.ShotEnrichList dropped = beatEnrichment(
+                beatEnrich("中景", "门被推开。", "门开"),
+                beatEnrich("近景", "档案摔在桌上。", "接推门"),
+                beatEnrich("特写", "盯着对面。", "接落桌"));
+        assertEquals(0, DramaShotEnrichment.merge(list, dropped, ASSETS));
+        assertEquals("局长推门进入。", shot.getShotBeats().getBeats().get(0).getAction());
+
+        DramaShotEnrichment.ShotEnrichList leaked = beatEnrichment(
+                beatEnrich("中景，跟拍", "局长推门进入。", "门开"),
+                beatEnrich("近景，下摇", "局长把档案摔在桌上。", "接推门进入"),
+                beatEnrich("特写，静止", "局长盯着洛白，吼你给我站住！", "接档案落桌"));
+        assertEquals(0, DramaShotEnrichment.merge(list, leaked, ASSETS));
+        assertEquals("局长盯着洛白。", shot.getShotBeats().getBeats().get(2).getAction());
+        assertEquals("局长进门摔档案并问责。", shot.getNarrativeGoal());
+    }
+
+    private static ShotDraftList.ShotDraft beatShot() {
+        ShotDraftList.ShotDraft shot = shot();
+        shot.setNarrativeGoal("局长进门摔档案并问责。");
+        shot.setDialogue("局长（愤怒）：你给我站住！");
+        shot.setShotBeats(beats("局长在门口。",
+                beat("中景，跟拍", "局长推门进入。", "门开", ""),
+                beat("近景，下摇", "局长把档案摔在桌上。", "接推门进入", ""),
+                beat("特写，静止", "局长盯着洛白。", "接档案落桌", "局长（愤怒）：你给我站住！")));
+        return shot;
+    }
+
+    private static DramaShotBeats beats(String blocking, DramaShotBeats.Beat... items) {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking(blocking);
+        beats.setBeats(new ArrayList<>(List.of(items)));
+        return beats;
+    }
+
+    private static DramaShotBeats.Beat beat(String camera, String action, String continuity, String dialogue) {
+        DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
+        beat.setCamera(camera);
+        beat.setAction(action);
+        beat.setContinuity(continuity);
+        beat.setDialogue(dialogue);
+        return beat;
+    }
+
+    private static DramaShotEnrichment.BeatEnrich beatEnrich(String camera, String action, String continuity) {
+        DramaShotEnrichment.BeatEnrich beat = new DramaShotEnrichment.BeatEnrich();
+        beat.setCamera(camera);
+        beat.setAction(action);
+        beat.setContinuity(continuity);
+        return beat;
+    }
+
+    private static DramaShotEnrichment.ShotEnrichList beatEnrichment(DramaShotEnrichment.BeatEnrich... items) {
+        DramaShotEnrichment.ShotEnrichList enriched = new DramaShotEnrichment.ShotEnrichList();
+        DramaShotEnrichment.ShotEnrich item = new DramaShotEnrichment.ShotEnrich();
+        item.setChapterIndex(1);
+        item.setIndex(2);
+        item.setScene("日光斜切进局长办公室，桌案堆着牛皮档案。");
+        item.setBeats(new ArrayList<>(List.of(items)));
+        enriched.setShots(new ArrayList<>(List.of(item)));
+        return enriched;
     }
 
     private static ShotDraftList.ShotDraft shot() {

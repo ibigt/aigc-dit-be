@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.model.req;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -23,6 +24,9 @@ public class DramaShotSaveReq {
 
     @Schema(description = "画内环境声，不要 BGM 和台词")
     private String ambianceAudio;
+
+    @Schema(description = "分镜内部镜头序列。有镜头时 dialogue 会按各镜头台词顺序重拼")
+    private DramaShotBeats shotBeats;
 
     private String scene;
     private String dialogue;

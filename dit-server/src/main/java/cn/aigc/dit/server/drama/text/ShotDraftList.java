@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
@@ -45,6 +46,10 @@ public class ShotDraftList {
 
         private String camera;
         private String ambiance;
+
+        @JsonProperty("shot_beats")
+        @JsonAlias("shotBeats")
+        private DramaShotBeats shotBeats;
 
         private String scene;
         private String dialogue;

@@ -1,10 +1,12 @@
 package cn.aigc.dit.server.drama.text;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ShotDraftMinimizerTest {
 
@@ -177,6 +179,69 @@ class ShotDraftMinimizerTest {
 
         assertEquals(1, minimized.getShots().size());
         assertEquals("", minimized.getShots().get(0).getContinuityOut());
+    }
+
+    @Test
+    void mergesBeatShotsWithoutJoiningActionsIntoOneSentence() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft first = shot(1, 1, 5, "进门", "进门问责。", "", List.of("局长"), List.of("档案"));
+        ShotDraftList.ShotDraft second = shot(1, 2, 5, "摔档案", "摔下档案。", "", List.of("局长"), List.of("档案"));
+        first.setShotBeats(beats("局长在门口。", beat("中景，跟拍", "局长推门进入。", "门开", "")));
+        second.setShotBeats(beats("局长已进门。", beat("近景，下摇", "局长把档案摔在桌上。", "接推门进入", "")));
+        second.setContinuityIn(first.getContinuityOut());
+        list.setShots(List.of(first, second));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(1, minimized.getShots().size());
+        ShotDraftList.ShotDraft merged = minimized.getShots().get(0);
+        assertEquals("进门问责。", merged.getNarrativeGoal());
+        assertEquals(2, merged.getShotBeats().getBeats().size());
+        assertEquals("局长推门进入。", merged.getShotBeats().getBeats().get(0).getAction());
+        assertEquals("局长把档案摔在桌上。", merged.getShotBeats().getBeats().get(1).getAction());
+        assertFalse(merged.getNarrativeGoal().contains("局长把档案摔在桌上"));
+    }
+
+    @Test
+    void splitsOverlongDialogueAtBeatBoundaries() {
+        String line = "局长：" + "零一二三四五六七八九".repeat(3);
+        ShotDraftList.ShotDraft shot = shot(1, 1, 15, "问责", "局长问责。", "", List.of("局长"), List.of());
+        shot.setShotBeats(beats("局长在门口。",
+                beat("中景，跟拍", "局长推门进入。", "门开", line),
+                beat("近景，下摇", "局长把档案摔在桌上。", "接推门进入", line),
+                beat("特写，静止", "局长盯着洛白。", "接档案落桌", line)));
+        shot.setDialogue(String.join("\n", List.of(line, line, line)));
+        ShotDraftList list = new ShotDraftList();
+        list.setShots(new java.util.ArrayList<>(List.of(shot)));
+
+        ShotDraftList minimized = ShotDraftMinimizer.minimize(list, 15);
+
+        assertEquals(2, minimized.getShots().size());
+        ShotDraftList.ShotDraft first = minimized.getShots().get(0);
+        ShotDraftList.ShotDraft second = minimized.getShots().get(1);
+        assertEquals(2, first.getShotBeats().getBeats().size());
+        assertEquals(1, second.getShotBeats().getBeats().size());
+        assertEquals("局长推门进入。", first.getNarrativeGoal());
+        assertEquals("局长盯着洛白。", second.getNarrativeGoal());
+        assertEquals(line + "\n" + line, first.getDialogue());
+        assertEquals(line, second.getDialogue());
+        assertFalse(first.getNarrativeGoal().contains("摔"));
+    }
+
+    private static DramaShotBeats beats(String blocking, DramaShotBeats.Beat... items) {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking(blocking);
+        beats.setBeats(new java.util.ArrayList<>(List.of(items)));
+        return beats;
+    }
+
+    private static DramaShotBeats.Beat beat(String camera, String action, String continuity, String dialogue) {
+        DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
+        beat.setCamera(camera);
+        beat.setAction(action);
+        beat.setContinuity(continuity);
+        beat.setDialogue(dialogue);
+        return beat;
     }
 
     private static ShotDraftList.ShotDraft shot(

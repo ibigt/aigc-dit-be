@@ -1,5 +1,7 @@
 package cn.aigc.dit.server.drama.entity;
 
+import cn.aigc.dit.server.drama.DramaShotBeats;
+import cn.aigc.dit.server.mybatis.DramaShotBeatsTypeHandler;
 import cn.aigc.dit.server.mybatis.JsonLongListTypeHandler;
 import cn.aigc.dit.server.mybatis.JsonStringListTypeHandler;
 import com.baomidou.mybatisplus.annotation.FieldFill;
@@ -35,6 +37,10 @@ public class DramaShot {
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String ambianceAudio;
+
+    /** 分镜内部 1–3 个镜头。空则编译和页面仍走单句 narrative_goal。 */
+    @TableField(typeHandler = DramaShotBeatsTypeHandler.class, updateStrategy = FieldStrategy.ALWAYS)
+    private DramaShotBeats shotBeats;
 
     private String scene;
     private String dialogue;

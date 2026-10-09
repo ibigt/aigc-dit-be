@@ -5,6 +5,7 @@ import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDialogueSpeakers;
 import cn.aigc.dit.server.drama.DramaDurations;
+import cn.aigc.dit.server.drama.DramaShotBeats;
 import cn.aigc.dit.server.drama.DramaStoryboardCompiler;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.json.JsonReadFeature;
@@ -1447,6 +1448,17 @@ public class DramaTextServiceImpl implements DramaTextService {
         int splitCount = 0;
         for (ShotDraftList.ShotDraft shot : list.getShots()) {
             if (shot == null) {
+                continue;
+            }
+            if (DramaShotBeats.hasBeats(shot.getShotBeats())) {
+                List<ShotDraftList.ShotDraft> parts =
+                        ShotDraftMinimizer.splitOverlongBeats(shot, DramaContract.MAX_DURATION_SEC);
+                if (parts.size() > 1) {
+                    splitCount++;
+                    flattened.addAll(parts);
+                } else {
+                    flattened.add(shot);
+                }
                 continue;
             }
             List<List<String>> groups = groupDialogueBySpeakableBudget(shot.getDialogue());

@@ -38,7 +38,7 @@ class DramaTextPromptsTest {
     void shotSchemaPrefersLongerContinuousShotsAndKeepsDialogueTurnsTogether() {
         String system = DramaTextPrompts.shotSystem();
 
-        assertTrue(system.contains("侦探社对谈"));
+        assertTrue(system.contains("局长问责"));
         assertTrue(system.contains("duration_sec\": 12"));
         assertTrue(system.contains("优先估在 10–15 秒"));
         assertTrue(system.contains("同场连续对谈"));

@@ -376,6 +376,88 @@ class DramaStoryboardCompilerTest {
         assertFalse(result.prompt().contains("<Audio 1>"));
     }
 
+    @Test
+    void compilesBeatSequenceWithoutExactCastOrRestrainedPerformance() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "局长", DramaContract.ASSET_TYPE_CHARACTER, "中年男性；浓眉；灰西装", "设定图"),
+                ref(2, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性；清冷骨相", "设定图"),
+                ref(3, "档案", DramaContract.ASSET_TYPE_PROP, "牛皮档案", "档案"));
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("局长在门口，洛白在画面左侧，档案在桌上。");
+        DramaShotBeats.Beat enter = beat("中景，跟拍", "局长推门进入。", "门开", null);
+        DramaShotBeats.Beat slam = beat("近景，下摇", "局长把档案摔在桌上。", "接推门进入", null);
+        DramaShotBeats.Beat line = beat("特写，静止", "局长盯着洛白。", "接档案落桌", "局长（愤怒）：你给我站住！");
+        beats.setBeats(List.of(enter, slam, line));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "局长办公室日戏",
+                "局长进门摔档案并问责。",
+                "局长（愤怒）：你给我站住！",
+                "门开",
+                "档案落在桌上",
+                12,
+                List.of("局长", "洛白"),
+                2,
+                List.of(),
+                null,
+                "纸页拍在桌面",
+                beats);
+
+        String prompt = DramaStoryboardCompiler.compile(prefix, refs, shot).prompt();
+
+        int first = prompt.indexOf("镜头1:");
+        int second = prompt.indexOf("镜头2:");
+        int third = prompt.indexOf("镜头3:");
+        assertTrue(first >= 0 && first < second && second < third);
+        assertTrue(prompt.contains("站位: 局长（<Picture 1>）在门口，洛白（<Picture 2>）在画面左侧，档案（<Picture 3>）在桌上。"));
+        assertTrue(prompt.substring(first, second).contains("局长（<Picture 1>）推门进入。"));
+        assertTrue(prompt.substring(second, third).contains("档案（<Picture 3>）"));
+        assertTrue(prompt.substring(third, prompt.indexOf("Continuity in:")).contains("你给我站住！"));
+        assertFalse(prompt.contains("Dialogue:"));
+        assertFalse(prompt.contains("Action:"));
+        assertFalse(prompt.contains("Camera:"));
+        assertFalse(prompt.contains("本镜恰好"));
+        assertTrue(prompt.contains("本镜出场人物为局长=<Picture 1>、洛白=<Picture 2>。"));
+        assertTrue(prompt.contains("某一镜头没点名的人保持起始站位或留在画外，禁止突然入画"));
+        assertFalse(prompt.contains("动作自然克制"));
+        assertTrue(prompt.contains("神态与口型"));
+
+        DramaStoryboardCompiler.ShotContent withoutBeats = new DramaStoryboardCompiler.ShotContent(
+                "局长办公室日戏",
+                "局长进门摔档案并问责。",
+                "局长（愤怒）：你给我站住！",
+                "门开",
+                "档案落在桌上",
+                12,
+                List.of("局长", "洛白"),
+                2,
+                List.of(),
+                null,
+                "纸页拍在桌面");
+        assertNotEquals(
+                DramaStoryboardCompiler.fingerprint(prefix, refs, shot),
+                DramaStoryboardCompiler.fingerprint(prefix, refs, withoutBeats));
+        DramaShotBeats changed = new DramaShotBeats();
+        changed.setBlocking(beats.getBlocking());
+        changed.setBeats(List.of(enter, beat("近景，下摇", "局长把档案轻轻放下。", "接推门进入", null), line));
+        DramaStoryboardCompiler.ShotContent changedShot = new DramaStoryboardCompiler.ShotContent(
+                shot.scene(), shot.narrativeGoal(), shot.dialogue(), shot.continuityIn(), shot.continuityOut(),
+                shot.durationSec(), shot.characterNames(), shot.castCount(), shot.unnamedAppearances(),
+                shot.camera(), shot.ambiance(), changed);
+        assertNotEquals(
+                DramaStoryboardCompiler.fingerprint(prefix, refs, shot),
+                DramaStoryboardCompiler.fingerprint(prefix, refs, changedShot));
+    }
+
+    private static DramaShotBeats.Beat beat(String camera, String action, String continuity, String dialogue) {
+        DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
+        beat.setCamera(camera);
+        beat.setAction(action);
+        beat.setContinuity(continuity);
+        beat.setDialogue(dialogue);
+        return beat;
+    }
+
     private static DramaStoryboardCompiler.ActiveReference ref(
             long id, String name, String type, String identity, String descriptor) {
         return new DramaStoryboardCompiler.ActiveReference(id, 1, name, type, descriptor, identity);

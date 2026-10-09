@@ -1138,9 +1138,13 @@ public class DramaStoryboardService {
             shot.setShotIndex(shotIndex);
             shot.setTitle(StringUtils.hasText(draft.getTitle()) ? draft.getTitle().trim() : "分镜 " + shotIndex);
             shot.setDurationSec(resolveDraftDuration(series, draft.getDurationSec() == null ? fallback : draft.getDurationSec()));
+            DramaShotBeats beats = DramaShotBeats.normalize(draft.getShotBeats());
+            draft.setShotBeats(beats);
+            DramaShotBeats.syncDraftDialogue(draft);
             shot.setNarrativeGoal(blankToNull(draft.getNarrativeGoal()));
             shot.setCameraMotion(blankToNull(draft.getCamera()));
             shot.setAmbianceAudio(blankToNull(draft.getAmbiance()));
+            shot.setShotBeats(beats);
             shot.setScene(blankToNull(draft.getScene()));
             shot.setDialogue(blankToNull(draft.getDialogue()));
             shot.setContinuityIn(blankToNull(draft.getContinuityIn()));
@@ -1153,6 +1157,7 @@ public class DramaStoryboardService {
             shot.setCharacterNames(characters);
             List<String> props = cleanNames(draft.getPropNames());
             shot.setPropNames(props);
+            alignMentionedProps(shot, byId);
             shot.setLocationName(StringUtils.hasText(draft.getLocationName())
                     ? draft.getLocationName().trim()
                     : (scenes.get(chapterIndex) == null ? null : scenes.get(chapterIndex).getLocation()));
@@ -1212,6 +1217,13 @@ public class DramaStoryboardService {
         }
         if (req.getDialogue() != null) {
             shot.setDialogue(blankToNull(req.getDialogue()));
+        }
+        if (req.getShotBeats() != null) {
+            DramaShotBeats beats = DramaShotBeats.normalize(req.getShotBeats());
+            shot.setShotBeats(beats);
+            if (DramaShotBeats.hasBeats(beats)) {
+                shot.setDialogue(DramaShotBeats.joinedDialogue(beats));
+            }
         }
         if (req.getContinuityIn() != null) {
             shot.setContinuityIn(blankToNull(req.getContinuityIn()));
@@ -1431,6 +1443,7 @@ public class DramaStoryboardService {
                 String.valueOf(shot.getTitle()),
                 String.valueOf(shot.getScene()),
                 String.valueOf(shot.getNarrativeGoal()),
+                String.join(" ", DramaShotBeats.mentionTexts(shot.getShotBeats())),
                 String.join(" ", cleanNames(shot.getCharacterNames())));
         return blob.contains("入梦") || blob.contains("梦境") || blob.contains("梦魇");
     }
@@ -1685,6 +1698,7 @@ public class DramaStoryboardService {
         resp.setNarrativeGoal(shot.getNarrativeGoal());
         resp.setCameraMotion(shot.getCameraMotion());
         resp.setAmbianceAudio(shot.getAmbianceAudio());
+        resp.setShotBeats(shot.getShotBeats());
         resp.setScene(shot.getScene());
         resp.setDialogue(shot.getDialogue());
         resp.setContinuityIn(shot.getContinuityIn());
@@ -2235,24 +2249,26 @@ public class DramaStoryboardService {
                 characterOrder.size(),
                 unnamedAppearances(characterOrder, assets, pictured, isDreamContext(shot)),
                 shot.getCameraMotion(),
-                shot.getAmbianceAudio());
+                shot.getAmbianceAudio(),
+                shot.getShotBeats());
     }
 
     /**
      * 草稿落库：把动作/台词/出入点里点到的本集角色并入名单（保留用户已写、正文未点名的）。
      * 仅用于首次生成分镜，不用于 update/compile，以免覆盖用户删除。
      */
-    private void alignMentionedCharacters(DramaShot shot, Map<Long, DramaAsset> assets) {
+    static void alignMentionedCharacters(DramaShot shot, Map<Long, DramaAsset> assets) {
         if (shot == null) {
             return;
         }
         List<String> pool = characterAssetNames(assets);
-        List<String> mentioned = DramaNameMentions.mentionedExactInOrder(
-                pool,
-                shot.getNarrativeGoal(),
-                shot.getDialogue(),
-                shot.getContinuityIn(),
-                shot.getContinuityOut());
+        List<String> texts = new ArrayList<>();
+        texts.add(shot.getNarrativeGoal());
+        texts.add(shot.getDialogue());
+        texts.add(shot.getContinuityIn());
+        texts.add(shot.getContinuityOut());
+        texts.addAll(DramaShotBeats.mentionTexts(shot.getShotBeats()));
+        List<String> mentioned = DramaNameMentions.mentionedExactInOrder(pool, texts.toArray(String[]::new));
         List<String> merged = new ArrayList<>(mentioned);
         for (String name : cleanNames(shot.getCharacterNames())) {
             if (!merged.contains(name)) {
@@ -2261,6 +2277,36 @@ public class DramaStoryboardService {
         }
         shot.setCharacterNames(merged);
         shot.setCastCount(merged.size());
+    }
+
+    /** 镜头动作里点到的道具并入 prop_names，继续走现有参考图绑定。 */
+    static void alignMentionedProps(DramaShot shot, Map<Long, DramaAsset> assets) {
+        if (shot == null) {
+            return;
+        }
+        List<String> pool = new ArrayList<>();
+        if (assets != null) {
+            for (DramaAsset asset : assets.values()) {
+                if (asset == null
+                        || !DramaContract.ASSET_TYPE_PROP.equals(asset.getType())
+                        || !StringUtils.hasText(asset.getName())) {
+                    continue;
+                }
+                String name = asset.getName().trim();
+                if (!pool.contains(name)) {
+                    pool.add(name);
+                }
+            }
+        }
+        List<String> mentioned = DramaNameMentions.mentionedExactInOrder(
+                pool, DramaShotBeats.actionTexts(shot).toArray(String[]::new));
+        List<String> merged = new ArrayList<>(cleanNames(shot.getPropNames()));
+        for (String name : mentioned) {
+            if (!merged.contains(name)) {
+                merged.add(name);
+            }
+        }
+        shot.setPropNames(merged);
     }
 
     private static List<String> characterAssetNames(Map<Long, DramaAsset> assets) {
@@ -2284,12 +2330,13 @@ public class DramaStoryboardService {
 
     private static List<String> characterBindOrder(DramaShot shot) {
         List<String> namedCharacters = cleanNames(shot.getCharacterNames());
-        List<String> onScreen = DramaNameMentions.mentionedInOrder(
-                namedCharacters,
-                shot.getNarrativeGoal(),
-                shot.getDialogue(),
-                shot.getContinuityIn(),
-                shot.getContinuityOut());
+        List<String> texts = new ArrayList<>();
+        texts.add(shot.getNarrativeGoal());
+        texts.add(shot.getDialogue());
+        texts.add(shot.getContinuityIn());
+        texts.add(shot.getContinuityOut());
+        texts.addAll(DramaShotBeats.mentionTexts(shot.getShotBeats()));
+        List<String> onScreen = DramaNameMentions.mentionedInOrder(namedCharacters, texts.toArray(String[]::new));
         List<String> characterOrder = new ArrayList<>(onScreen);
         for (String name : namedCharacters) {
             if (!characterOrder.contains(name)) {
