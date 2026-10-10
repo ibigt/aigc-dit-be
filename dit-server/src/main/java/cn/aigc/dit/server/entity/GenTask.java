@@ -2,6 +2,7 @@ package cn.aigc.dit.server.entity;
 
 import cn.aigc.dit.server.mybatis.JsonbTypeHandler;
 import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -24,6 +25,9 @@ public class GenTask {
     private String category;
     private String status;
     private Integer progress;
+
+    /** 允许清空错误信息，否则任务转成功/续跑后旧报错清不掉，前端会看到成功但带报错。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String errorMessage;
     private String prompt;
 

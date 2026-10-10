@@ -188,6 +188,10 @@ public class OpenAiCompatChatClient {
         if (closed < 0) {
             return content.substring(0, opened);
         }
+        if (closed < opened) {
+            // 孤立闭合标签先于 <think> 出现：只移除它本身，否则拼接区间反转会让字符串越拼越长，递归不收敛。
+            return stripReasoning(content.substring(0, closed) + content.substring(closed + "</think>".length()));
+        }
         return stripReasoning(content.substring(0, opened) + content.substring(closed + "</think>".length()));
     }
 

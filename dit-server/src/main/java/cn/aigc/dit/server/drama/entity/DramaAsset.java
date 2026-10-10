@@ -43,6 +43,9 @@ public class DramaAsset {
     private Integer identityVersion;
     private String imageStorageKey;
     private Long imageAssetId;
+
+    /** 允许清空任务号，否则锁定资产上的陈旧任务号清不掉，迟到的回调仍会重开资产。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long genTaskId;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)

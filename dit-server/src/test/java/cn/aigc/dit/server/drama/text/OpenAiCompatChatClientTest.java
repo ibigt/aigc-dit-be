@@ -287,6 +287,14 @@ class OpenAiCompatChatClientTest {
     }
 
     @Test
+    void stripReasoningHandlesClosingTagBeforeOpeningTag() {
+        assertEquals("答案A草稿",
+                OpenAiCompatChatClient.stripReasoning("答案A</think>草稿<think>推理未闭合"),
+                "孤立闭合标签先于 <think> 时应先移除闭合标签、再按未闭合思考处理，而不是区间反转导致无限递归");
+        assertEquals("", OpenAiCompatChatClient.stripReasoning("</think><think>推理"));
+    }
+
+    @Test
     void pingAllowsBlankApiKey() {
         AtomicReference<String> sentKey = new AtomicReference<>("unset");
         OpenAiCompatChatClient client = new OpenAiCompatChatClient(new ObjectMapper(),
