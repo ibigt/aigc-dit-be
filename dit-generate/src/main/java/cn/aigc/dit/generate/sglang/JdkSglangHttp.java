@@ -14,7 +14,8 @@ final class JdkSglangHttp implements SglangHttp {
     private final HttpClient client;
 
     JdkSglangHttp() {
-        this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
+        this(HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(10)).build());
     }
 
     JdkSglangHttp(HttpClient client) { this.client = client; }
@@ -22,6 +23,8 @@ final class JdkSglangHttp implements SglangHttp {
     @Override
     public byte[] request(String method, URI uri, String apiKey, String body) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
+                // Avoid h2c upgrade requests rejected by Uvicorn's HTTP/1.1 parser.
+                .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(uri.getPath().endsWith("/content") ? 300 : 60));
         if (apiKey != null && !apiKey.isBlank()) builder.header("Authorization", "Bearer " + apiKey.trim());
         if (body != null) builder.header("Content-Type", "application/json");

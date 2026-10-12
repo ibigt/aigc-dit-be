@@ -28,6 +28,9 @@ class JdkSglangHttpTest {
         ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
         verify(client, times(3)).send(captor.capture(), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<byte[]>>any());
         var requests = captor.getAllValues();
+        for (HttpRequest request : requests) {
+            assertEquals(HttpClient.Version.HTTP_1_1, request.version().orElseThrow());
+        }
         assertEquals("POST", requests.get(0).method());
         assertEquals("application/json", requests.get(0).headers().firstValue("Content-Type").orElseThrow());
         assertEquals("Bearer secret", requests.get(0).headers().firstValue("Authorization").orElseThrow());
