@@ -23,6 +23,9 @@ public record AudioReferenceCapabilities(boolean supported, int maxReferences, b
             return NONE;
         }
         String adapter = AdapterCatalog.resolveKeyForGenerate(adapterKey, provider, category, modelKey);
+        if (AdapterCatalog.MINIMAX_H3_SGLANG.equals(adapter)) {
+            return new AudioReferenceCapabilities(true, 3, true);
+        }
         if (AdapterCatalog.SEEDANCE_2_5.equals(adapter)) {
             return new AudioReferenceCapabilities(true, 10, true);
         }

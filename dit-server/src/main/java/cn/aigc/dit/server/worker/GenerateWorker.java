@@ -702,6 +702,10 @@ public class GenerateWorker {
         if (!StringUtils.hasText(task.getProviderJobId())) {
             return;
         }
+        if (provider instanceof cn.aigc.dit.generate.sglang.SglangGenerateProvider sglang) {
+            sglang.remember(task.getProviderJobId(), request);
+            return;
+        }
         if (provider instanceof RunningHubGenerateProvider runningHub) {
             String openApiBase = RunningHubUrls.openApiBase(request.getEndpoint(), generateProperties.getRunninghub().getBaseUrl());
             runningHub.remember(task.getProviderJobId(), request, openApiBase, resolveApiKey(model, request.getAdapterKey()));

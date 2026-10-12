@@ -25,6 +25,7 @@ public final class AdapterCatalog {
     public static final String SEEDANCE_2_0 = "seedance-2.0";
     public static final String SEEDANCE_2_5 = "seedance-2.5";
     public static final String MINIMAX_H3 = "minimax-h3";
+    public static final String MINIMAX_H3_SGLANG = "minimax-h3-sglang";
     public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
     public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
     public static final String MINIMAX_SPEECH = "minimax-speech";
@@ -68,6 +69,9 @@ public final class AdapterCatalog {
     public static final String SEEDREAM_5_0_MODEL = "doubao-seedream-5-0-pro";
 
     private static final List<Spec> ALL = List.of(
+            new Spec(MINIMAX_H3_SGLANG, "MiniMax-H3（SGLang）", ModelCategory.VIDEO, "sglang", "SGLang",
+                    "http://127.0.0.1:30010", List.of(GenerateMode.T2V, GenerateMode.I2V, GenerateMode.R2V),
+                    Map.of(), true),
             new Spec(GPT_IMAGE_2, "GPT Image 2", ModelCategory.IMAGE, TRANSPORT_RUNNINGHUB, "RunningHub",
                     "https://www.runninghub.ai", List.of(GenerateMode.T2I, GenerateMode.I2I),
                     Map.of(
@@ -179,6 +183,9 @@ public final class AdapterCatalog {
         String key = modelKey == null ? "" : modelKey.toLowerCase(Locale.ROOT);
         String prov = provider == null ? "" : provider.toLowerCase(Locale.ROOT);
         String cat = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        if (ModelCategory.VIDEO.equals(cat) && prov.contains("sglang")) {
+            return MINIMAX_H3_SGLANG;
+        }
         if (key.contains("agnes-image") || (key.contains("agnes") && ModelCategory.IMAGE.equals(cat))) {
             return AGNES_IMAGE_2_5;
         }
@@ -411,6 +418,9 @@ public final class AdapterCatalog {
     }
 
     public static String defaultModelKey(String adapterKey) {
+        if (MINIMAX_H3_SGLANG.equals(adapterKey)) {
+            return "MiniMaxAI/MiniMax-H3";
+        }
         if (AGNES_IMAGE_2_5.equals(adapterKey)) {
             return AGNES_IMAGE_MODEL;
         }
