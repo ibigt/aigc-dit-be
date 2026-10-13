@@ -26,7 +26,14 @@ public final class DramaStoryboardCompiler {
     public static final String SCENE_PICTURE_HINT = "只借空间陈设，必须有人在此演戏，不继承原图构图、机位、光线";
     public static final String MOVIE_SCENE_MUST =
             "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
-    /** 真人3D 实拍前缀才追加。对白用中近景，全景只留给明确写出的交代镜头。 */
+    /**
+     * 片头片尾稳住：减轻起幅突变脸/构图、落幅乱推远，便于链式衔接。
+     * 所有风格视频编译都追加。
+     */
+    public static final String CLIP_EDGE_STABILITY =
+            "Must: 片头约前 0.5 秒内保持起幅构图、人物脸型与服装稳定，禁止开场突变脸、闪切构图或瞬移；"
+                    + "片尾停在稳定姿态与景别上，禁止落幅前突然推远、甩镜或改脸，便于与下一镜衔接。";
+    /** 真人写实 / 真人3D 前缀才追加。对白用中近景，全景只留给明确写出的交代镜头。 */
     public static final String LIVE_ACTION_COVERAGE =
             "景别：对白和问责用中近景或过肩拍正在说话的人，全景只留给明确写出全景或远景的交代镜头。"
                     + "禁止为了让每个人同时入画而拉成整间房。场景参考图只提供空间和光线，不决定机位和构图。"
@@ -234,7 +241,8 @@ public final class DramaStoryboardCompiler {
         }
 
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
-        if (prefix.contains("极致写实实拍摄影")) {
+        prompt.append(CLIP_EDGE_STABILITY).append('\n');
+        if (needsLiveActionCoverage(prefix)) {
             prompt.append(LIVE_ACTION_COVERAGE).append('\n');
         }
         if (opts.i2v()) {
@@ -883,6 +891,19 @@ public final class DramaStoryboardCompiler {
             return;
         }
         prompt.append(label).append(": ").append(value.trim()).append('\n');
+    }
+
+    /**
+     * 真人写实（半写实3D）与真人3D（极致写实实拍）都需要中近景对白约束，避免场景参考图把机位拉成整间房。
+     */
+    static boolean needsLiveActionCoverage(String stylePrefix) {
+        if (!StringUtils.hasText(stylePrefix)) {
+            return false;
+        }
+        String prefix = stylePrefix.trim();
+        return prefix.contains("极致写实实拍摄影")
+                || prefix.contains("半写实3D渲染")
+                || prefix.contains("高精度二次元写实");
     }
 
     private static String blank(String value) {

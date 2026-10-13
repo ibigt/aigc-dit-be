@@ -71,7 +71,7 @@ public final class DramaTextPrompts {
                   "type": "角色|场景|道具",
                   "state_tag": "base|dream|costume",
                   "description": "完整人物/场景/道具描述，永不缩写",
-                  "identity_invariants": "男性；青年；清冷骨相；黑碎盖；修长；深灰立领长风衣；黑色长裤；皮鞋；锐利眼神",
+                  "identity_invariants": "20岁，男，清冷骨相，黑色碎盖发，修长身形，深灰立领长风衣，黑色长裤，皮鞋，锐利眼神",
                   "image_prompt": "",
                   "voice_lock": "洛白固定声音，没有就留空",
                   "must_split": false
@@ -88,11 +88,14 @@ public final class DramaTextPrompts {
             - 状态条目绝不能并进本体 description，本体 description 里不得出现入梦/湿身字样。
             - 角色 / 场景 / 道具的 image_prompt 一律输出空字符串，由服务端按项目视觉风格生成完整设定图长句。
               禁止自行填写「浅灰背景的角色三视图」或任何短句。
-            - 角色 identity_invariants 必须能把该人和其他角色区分开，写清：性别、年龄段、发型、脸型五官、身材、
-              服装款式颜色与鞋履。三人不得共用同一套外貌；不要把男性写成女性，不要把中年写成少女。
+            - 角色 identity_invariants 是用户可见的外形设定，必须可区分角色，写清：性别、年龄或年龄段、
+              发型发色、脸型五官、身材肤色、上装/外套/下装/鞋履（款式与颜色）。
+              正例：「20岁，女，杏眼，鼻梁小巧，黑色短发刚过耳，暖黄肤色，白色圆领T恤，深蓝工装背心，深色长裤」。
+              禁止只写「某某的外貌、发型、服装和年龄必须保持一致」这类空话；禁止三视图、设定图、风格前缀。
+              三人不得共用同一套外貌；不要把男性写成女性，不要把中年写成少女。
             - 场景不要人物、不要整场剧情动作。道具只写外形、材质、磨损和标志性细节，不要剧情用途或人物名字。
-            - description 与 identity_invariants 不得互相引用，不得写「同上」。
-            - 长度上限：description 不超过 100 字，identity_invariants 不超过 80 字；image_prompt 一律留空。
+            - description 与 identity_invariants 不得互相引用，不得写「同上」；角色 description 可与外形互补，但不得替代 identity_invariants。
+            - 长度上限：description 不超过 100 字，identity_invariants 不超过 200 字；image_prompt 一律留空。
             """;
 
     private static final String SCHEMA_SHOTS = """
@@ -162,6 +165,9 @@ public final class DramaTextPrompts {
               不要写「交代关系」「推进对白」「关键道具出场」这类剧作句，也不能为减少镜头而遗漏情节。
             - 相邻分镜 continuity_out 与下一条 continuity_in 要接得上；写画面出入点
               （手上的道具、姿态、门的状态），不要写「环境立住」「对白落点」「切下一场」。
+            - 同场且下一条分镜仍要画面衔接时，本条 shot_beats 的最后一拍 camera
+              优先用中景、近景或特写，不要用全景、远景或大幅度推拉摇移收尾，
+              方便下一镜从中近景起幅承接；场内唯一一条分镜或明确硬切换场时不强制。
             - 同一场内，相邻分镜里同一个人物在画面中的相对站位要保持稳定
               （左就在左、靠窗就在靠窗、坐在桌子同一侧就在同一侧），
               只能在动作或对白明确让人物位移时才改站位；禁止无理由地「忽左忽右」。
@@ -214,7 +220,10 @@ public final class DramaTextPrompts {
         return "为给定的确定性资产骨架补充描述字段，输出 AssetDraftList。\n"
                 + "只能返回骨架中已有的资产，禁止新增、删除、改名或改类型；name、type、state_tag、must_split 必须逐字保持不变。\n"
                 + "只补充 description、identity_invariants、voice_lock；image_prompt 一律输出空字符串，由服务端按项目风格生成完整设定图。\n"
-                + "缺少信息时返回空字符串。\n\n"
+                + "角色的 identity_invariants 是产品主展示字段：必须写出性别、年龄/年龄段、长相（发型五官肤色身材）与衣着"
+                + "（上装/外套/下装/鞋履），可据剧情合理推断；禁止输出「外貌、发型、服装和年龄必须保持一致」空话，"
+                + "禁止写三视图/设定图/风格前缀。\n"
+                + "缺少信息时该字段返回空字符串，不要用空话凑数。\n\n"
                 + "锁定剧本：\n" + scriptJson + "\n\n确定性资产骨架：\n" + skeletonJson;
     }
 
@@ -291,6 +300,7 @@ public final class DramaTextPrompts {
         text.append("\n镜头必须严格按剧本场次先后、场内动作和对白出现顺序来排，禁止提前、延后或交叉无关事件。");
         text.append("\n动作只归它发生的那一镜：每镜只写本镜时间点内发生的动作，后续镜禁止复演先前镜已演过的动作；");
         text.append("同场各镜 title 按节拍区分、不要共用一个场名；一条分镜内部相邻镜头景别或机位要有变化，写进 shot_beats，不要因此多拆一条分镜。");
+        text.append("同场且下一条仍要画面衔接时，本条最后一拍 camera 优先中景、近景或特写，不要用全景或大幅度运镜收尾。");
         text.append("\n每条分镜的 duration_sec 优先估在 10 到 15 秒；内容本身很短才用 5 到 9 秒。只能是 5 到 15 的整数秒。");
         text.append("台词按每秒 4 字折算（只数口播字，标点符号不发音、不计数）：台词写进对应镜头的 dialogue，不要把整段案情堆在最后一个镜头。");
         text.append("整段口播超过 duration_sec × 4 字、或 15 秒演不完时，才在镜头边界再拆一条分镜。");
@@ -340,6 +350,8 @@ public final class DramaTextPrompts {
                - camera：只写景别和运镜，如「特写，静止」「中景，缓慢推近」。8～24 字。
                  相邻分镜的景别或机位要有变化（前一镜中景推近，下一镜可换近景、特写或侧面），
                  不要每镜都以「中景」开头。
+                 同场且下一条分镜仍要画面衔接时，本条最后一拍（有 beats 时写最后一条 camera；
+                 无 beats 时写本条 camera）优先中景、近景或特写，不要用全景、远景或大幅度运镜收尾。
                - narrative_goal：仅当该分镜没有 beats 时才写。只写该时长内的运动。不写景别、不写运镜、不写光线、不写空间陈设、不写服装长相。
                  按主体动作、物件互动、环境动态写成连贯叙述；60～150 字。
                  动作量跟本镜 duration_sec：5～7 秒完成一个连贯动作加一个细节；

@@ -63,11 +63,18 @@ public final class DramaAssetDrafts {
             String stateTag = StringUtils.hasText(draft.getStateTag())
                     ? draft.getStateTag()
                     : inferStateTag(draft.getName());
-            if (!StringUtils.hasText(draft.getIdentityInvariants())) {
-                boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
-                draft.setIdentityInvariants(mustSplit
-                        ? "与主身份同一张脸和发型；禁止写成另一个人"
-                        : draft.getName().trim() + "的外貌、发型、服装和年龄必须保持一致");
+            if (!StringUtils.hasText(draft.getIdentityInvariants())
+                    || isSkeletonIdentity(draft.getName(), draft.getIdentityInvariants())) {
+                // 骨架句不算有效外形；若 description 已是角色外貌短句则提升，否则空时再落骨架兜底。
+                if (DramaContract.ASSET_TYPE_CHARACTER.equals(draft.getType())
+                        && isAppearanceBlurb(draft.getDescription())) {
+                    draft.setIdentityInvariants(draft.getDescription().trim());
+                } else if (!StringUtils.hasText(draft.getIdentityInvariants())) {
+                    boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
+                    draft.setIdentityInvariants(mustSplit
+                            ? "与主身份同一张脸和发型；禁止写成另一个人"
+                            : draft.getName().trim() + "的外貌、发型、服装和年龄必须保持一致");
+                }
             }
             if (StringUtils.hasText(draft.getImagePrompt())
                     && !shouldReplaceImagePrompt(draft.getImagePrompt(), draft.getType(), specKey(style))) {
@@ -244,8 +251,8 @@ public final class DramaAssetDrafts {
             text.append("浅灰或纯白干净背景。");
         }
         text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
-        // 写实风把设定摘要写入生图句，避免只留在 identity 字段时模型自由发挥成古装。
-        if (usesPhotorealCharacterSheet(spec.key()) && StringUtils.hasText(identity)) {
+        // 外形摘要写入生图句：页面只编辑 identity，构图/风格模板由本方法附加。
+        if (StringUtils.hasText(identity)) {
             text.append("外形与服装必须符合：").append(identity.trim()).append("。");
         }
         text.append(spec.prefix()).append("。");
@@ -370,6 +377,57 @@ public final class DramaAssetDrafts {
             String key = uniqueKey(type, name, inferStateTag(name));
             contexts.putIfAbsent(key, bit);
         }
+    }
+
+    /**
+     * 是否仍是抽取骨架的无效外形句（无性别/衣着等可识别信息）。
+     * 页面「外形设定」与二次增强覆盖都依赖此判断。
+     */
+    public static boolean isSkeletonIdentity(String name, String identity) {
+        if (!StringUtils.hasText(identity)) {
+            return true;
+        }
+        String text = identity.trim();
+        if (text.contains("外貌、发型、服装和年龄必须保持一致")) {
+            return true;
+        }
+        if (text.contains("与主身份同一张脸和发型")) {
+            return true;
+        }
+        if (StringUtils.hasText(name) && text.equals(name.trim() + "的外貌、发型、服装和年龄必须保持一致")) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * description 是否像角色外貌短句（而非设定图长模板），可提升为外形设定。
+     */
+    public static boolean isAppearanceBlurb(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        if (value.length() > 220 || isSkeletonIdentity(null, value) || looksLikeImageTemplate(value)) {
+            return false;
+        }
+        return true;
+    }
+
+    static boolean looksLikeImageTemplate(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        return value.contains("角色设定图")
+                || value.contains("三视图")
+                || value.contains("固定四格设定拼版")
+                || value.contains("场景概念图")
+                || value.contains("实拍空镜")
+                || value.contains("道具设定图")
+                || value.contains("实拍静物")
+                || value.contains("连续运动的电影场面")
+                || value.contains("只要这一个角色，不要剧情场面");
     }
 
     /**

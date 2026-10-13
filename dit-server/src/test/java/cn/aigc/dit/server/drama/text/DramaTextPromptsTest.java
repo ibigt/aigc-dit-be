@@ -142,6 +142,10 @@ class DramaTextPromptsTest {
         // 景别机位变化：相邻镜全写「中景」会让连续 15 秒镜看起来是同一画面。
         assertTrue(system.contains("相邻镜头的景别或机位必须有变化"));
         assertTrue(system.contains("禁止每镜都写同一个景别"));
+        // 末拍景别：同场要接下镜时，末拍用中近景/特写，避免全景收尾导致链式起幅漂。
+        assertTrue(system.contains("最后一拍 camera"));
+        assertTrue(system.contains("优先用中景、近景或特写"));
+        assertTrue(system.contains("不要用全景、远景或大幅度推拉摇移收尾"));
 
         String user = DramaTextPrompts.shotUser("{}", "洛白", 8, 30);
         assertTrue(user.contains("动作只归它发生的那一镜"),
@@ -149,6 +153,7 @@ class DramaTextPromptsTest {
         assertTrue(user.contains("后续镜禁止复演先前镜已演过的动作"));
         assertTrue(user.contains("title 按节拍区分"));
         assertTrue(user.contains("相邻镜头景别或机位要有变化"));
+        assertTrue(user.contains("最后一拍 camera 优先中景、近景或特写"));
     }
 
     @Test
@@ -157,6 +162,9 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("相邻分镜的景别或机位要有变化"),
                 "最终景别由扩写层落笔，草稿全中景时扩写层必须主动换景别");
         assertTrue(system.contains("不要每镜都以「中景」开头"));
+        assertTrue(system.contains("最后一拍"));
+        assertTrue(system.contains("优先中景、近景或特写"));
+        assertTrue(system.contains("不要用全景、远景或大幅度运镜收尾"));
     }
 
     @Test

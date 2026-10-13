@@ -240,14 +240,21 @@ public class DramaTextServiceImpl implements DramaTextService {
                 continue;
             }
             copyIfText(update.getDescription(), target::setDescription);
-            copyIfText(update.getIdentityInvariants(), target::setIdentityInvariants);
+            if (StringUtils.hasText(update.getIdentityInvariants())
+                    && !DramaAssetDrafts.isSkeletonIdentity(target.getName(), update.getIdentityInvariants())) {
+                target.setIdentityInvariants(update.getIdentityInvariants().strip());
+            } else if (DramaAssetDrafts.isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
+                    && DramaAssetDrafts.isAppearanceBlurb(update.getDescription())) {
+                // 模型只写了 description 时，把外貌短句提升为外形设定，避免页面只剩骨架句。
+                target.setIdentityInvariants(update.getDescription().strip());
+            }
             if (StringUtils.hasText(update.getImagePrompt())
                     && !DramaAssetDrafts.shouldReplaceImagePrompt(update.getImagePrompt())) {
                 target.setImagePrompt(update.getImagePrompt().strip());
             }
             copyIfText(update.getVoiceLock(), target::setVoiceLock);
             target.setNeedsHuman(!(StringUtils.hasText(target.getDescription())
-                    && StringUtils.hasText(target.getIdentityInvariants())
+                    && !DramaAssetDrafts.isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
                     && StringUtils.hasText(target.getImagePrompt())));
         }
     }

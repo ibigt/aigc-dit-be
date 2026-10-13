@@ -430,8 +430,8 @@ public class DramaService {
         DramaSeriesResp resp = new DramaSeriesResp();
         resp.setId(series.getId());
         resp.setName(series.getName());
-        DramaStyles.Spec style = DramaStyles.require(
-                StringUtils.hasText(series.getStyleKey()) ? series.getStyleKey() : DramaStyles.ANIME_COMIC);
+        // 列表不能因个别历史/脏 style_key 整页失败；未知键回退默认风格。
+        DramaStyles.Spec style = DramaStyles.resolveOrDefault(series.getStyleKey());
         resp.setStyleKey(style.key());
         resp.setStyleName(style.name());
         resp.setStyleCover(style.cover());

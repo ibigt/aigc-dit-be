@@ -49,6 +49,7 @@ class DramaStoryboardCompilerTest {
         assertTrue(prompt.contains("必须在戏里被使用"));
         assertTrue(prompt.contains("必须有人在此演戏"));
         assertTrue(prompt.contains(DramaStoryboardCompiler.MOVIE_SCENE_MUST));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.CLIP_EDGE_STABILITY));
         assertFalse(prompt.contains("定妆"));
         assertFalse(prompt.contains("Identity lock"));
         assertFalse(prompt.contains("真实人脸"));
@@ -86,10 +87,18 @@ class DramaStoryboardCompilerTest {
                 2);
         String prompt = DramaStoryboardCompiler.compile(prefix, List.of(), shot).prompt();
         assertTrue(prompt.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.CLIP_EDGE_STABILITY));
+
+        String liveRealism = DramaStoryboardCompiler.compile(
+                DramaStyles.require(DramaStyles.LIVE_REALISM).prefix(), List.of(), shot).prompt();
+        assertTrue(liveRealism.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE),
+                "真人写实风也要中近景对白约束，避免场景图把机位拉成整间房");
 
         String anime = DramaStoryboardCompiler.compile(
                 DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), List.of(), shot).prompt();
         assertFalse(anime.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE));
+        assertTrue(anime.contains(DramaStoryboardCompiler.CLIP_EDGE_STABILITY),
+                "片头片尾稳住对所有风格生效");
     }
 
     @Test

@@ -125,6 +125,18 @@ public final class DramaStyles {
         return spec;
     }
 
+    /**
+     * 列表/详情展示用：未知或已下线的 style_key 回退到二次元漫画风，避免整表加载失败。
+     * 创建/改风格仍走 {@link #require(String)}。
+     */
+    public static Spec resolveOrDefault(String styleKey) {
+        if (!StringUtils.hasText(styleKey)) {
+            return require(ANIME_COMIC);
+        }
+        Spec spec = BY_KEY.get(styleKey.trim());
+        return spec != null ? spec : require(ANIME_COMIC);
+    }
+
     private static void register(Spec spec) {
         BY_KEY.put(spec.key(), spec);
     }

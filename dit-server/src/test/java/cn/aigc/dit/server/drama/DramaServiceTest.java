@@ -320,6 +320,26 @@ class DramaServiceTest {
     }
 
     @Test
+    void listSeriesFallsBackWhenStyleKeyUnknown() {
+        DramaSeries series = new DramaSeries();
+        series.setId(21L);
+        series.setUserId(7L);
+        series.setName("旧项目");
+        series.setStyleKey("ancient-realism");
+        series.setAspectRatio("16:9");
+        series.setDefaultResolution("720P");
+        series.setDefaultDurationSec(5);
+        series.setPlannedEpisodeCount(1);
+        when(seriesMapper.selectList(any())).thenReturn(List.of(series));
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+
+        List<DramaSeriesResp> list = service.listSeries();
+        assertEquals(1, list.size());
+        assertEquals(DramaStyles.ANIME_COMIC, list.get(0).getStyleKey());
+        assertEquals("二次元漫画风", list.get(0).getStyleName());
+    }
+
+    @Test
     void deleteSeriesRemovesOwnedProject() {
         DramaSeries existing = new DramaSeries();
         existing.setId(21L);

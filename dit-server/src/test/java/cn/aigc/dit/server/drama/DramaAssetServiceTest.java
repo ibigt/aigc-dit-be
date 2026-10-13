@@ -348,8 +348,46 @@ class DramaAssetServiceTest {
         assertTrue(prompt.contains("浅灰或纯白干净背景"));
         assertTrue(prompt.contains("高精度二次元写实"));
         assertTrue(prompt.length() > 80);
-        assertEquals(prompt, asset.getDescription());
+        assertTrue(prompt.contains("外形与服装必须符合：男性；青年；锐利眼神；冷峻气质；修长身形"));
+        // 方案 A：description 不再被长模板覆盖，旧模板 description 降级为外形摘要
+        assertEquals("男性；青年；锐利眼神；冷峻气质；修长身形", asset.getDescription());
         verify(assetMapper).updateById(asset);
+    }
+
+    @Test
+    void generateAlwaysRebuildsTemplateIgnoringHandEditedImagePrompt() {
+        DramaAsset asset = ownedAsset();
+        asset.setImagePrompt("用户手改的整段提示词，不要三视图，只要半身特写油画风");
+        asset.setIdentityInvariants("男性；青年；黑碎盖；深灰风衣");
+        asset.setDescription("男性；青年；黑碎盖；深灰风衣");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        series.setImageAdapterKey("gpt-image-2");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        cn.aigc.dit.server.entity.AiModel model = new cn.aigc.dit.server.entity.AiModel();
+        model.setId(12L);
+        model.setName("GPT Image 2");
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setCapabilities(List.of("image", "t2i"));
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(100L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateImage(9L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        String prompt = reqCaptor.getValue().getPrompt();
+        assertTrue(prompt.contains("洛白角色设定图"));
+        assertTrue(prompt.contains("同一张图内三视图排列"));
+        assertTrue(prompt.contains("外形与服装必须符合：男性；青年；黑碎盖；深灰风衣"));
+        assertFalse(prompt.contains("油画风"));
+        assertEquals("男性；青年；黑碎盖；深灰风衣", asset.getDescription());
     }
 
     @Test

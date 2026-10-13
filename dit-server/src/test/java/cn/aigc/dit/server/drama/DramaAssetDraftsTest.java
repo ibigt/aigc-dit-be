@@ -163,13 +163,13 @@ class DramaAssetDraftsTest {
 
     @Test
     void animeComicCharacterPromptStaysCanonical() {
-        String canonical = "夏安角色设定图。夏安单独站立，全身可见。"
+        String skeleton = "夏安角色设定图。夏安单独站立，全身可见。"
                 + "发型、脸型、五官、肤色、身材比例完整、可重复。"
                 + "服装款式、颜色、面料、纹理、配饰和鞋履清晰。"
                 + "同一张图内三视图排列：正面全身、侧面半身、面部特写。"
                 + "浅灰或纯白干净背景。"
-                + "只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
-                + "二次元漫画风，干净线稿，赛璐璐平涂，清晰分色，电影分镜构图，不要写实摄影质感。"
+                + "只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。";
+        String styleTail = "二次元漫画风，干净线稿，赛璐璐平涂，清晰分色，电影分镜构图，不要写实摄影质感。"
                 + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         String withIdentity = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
@@ -185,8 +185,8 @@ class DramaAssetDraftsTest {
                 DramaStyles.require(DramaStyles.ANIME_COMIC),
                 null,
                 null);
-        assertEquals(canonical, withIdentity);
-        assertEquals(canonical, withoutIdentity);
+        assertEquals(skeleton + "外形与服装必须符合：女性；青年；机敏；身手矫健。" + styleTail, withIdentity);
+        assertEquals(skeleton + styleTail, withoutIdentity);
         assertTrue(!withIdentity.contains("身份与外形"));
         assertTrue(!withIdentity.contains("本图只画一名"));
     }
@@ -458,5 +458,33 @@ class DramaAssetDraftsTest {
                         + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
                         + "二次元漫画风，干净线稿，赛璐璐平涂，清晰分色，电影分镜构图，不要写实摄影质感。"
                         + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。"));
+    }
+
+    @Test
+    void skeletonIdentityIsDetectedAndAppearanceBlurbCanPromote() {
+        assertTrue(DramaAssetDrafts.isSkeletonIdentity("夏安", "夏安的外貌、发型、服装和年龄必须保持一致"));
+        assertTrue(DramaAssetDrafts.isSkeletonIdentity("洛白", "与主身份同一张脸和发型；禁止写成另一个人"));
+        assertTrue(!DramaAssetDrafts.isSkeletonIdentity(
+                "夏安", "20岁，女，杏眼，黑色短发，白色圆领T恤，深蓝工装背心"));
+        assertTrue(DramaAssetDrafts.isAppearanceBlurb("20岁，女，杏眼，黑色短发，白色圆领T恤"));
+        assertTrue(!DramaAssetDrafts.isAppearanceBlurb(
+                "夏安角色设定图。夏安单独站立，全身可见。同一张图内三视图排列：正面全身、侧面半身、面部特写。"));
+    }
+
+    @Test
+    void ensurePromptsPromotesAppearanceDescriptionOverSkeletonIdentity() {
+        AssetDraftList.AssetDraft draft = new AssetDraftList.AssetDraft();
+        draft.setName("夏安");
+        draft.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        draft.setStateTag(DramaContract.STATE_TAG_BASE);
+        draft.setIdentityInvariants("夏安的外貌、发型、服装和年龄必须保持一致");
+        draft.setDescription("20岁，女，杏眼，黑色短发刚过耳，白色圆领T恤，深蓝工装背心");
+        AssetDraftList list = new AssetDraftList();
+        list.setAssets(List.of(draft));
+
+        DramaAssetDrafts.ensurePrompts(list, new ScriptDoc(), DramaStyles.require(DramaStyles.ANIME_COMIC));
+
+        assertEquals("20岁，女，杏眼，黑色短发刚过耳，白色圆领T恤，深蓝工装背心", draft.getIdentityInvariants());
+        assertTrue(draft.getImagePrompt().contains("外形与服装必须符合：20岁，女，杏眼"));
     }
 }
