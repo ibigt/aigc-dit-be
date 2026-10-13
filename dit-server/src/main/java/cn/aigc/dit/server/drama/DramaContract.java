@@ -54,8 +54,8 @@ public final class DramaContract {
     public static final String STATE_TAG_DREAM = "dream";
     public static final String STATE_TAG_COSTUME = "costume";
 
-    /** 资产页同时进行的 t2i 上限。 */
-    public static final int MAX_ASSET_GENERATE = 4;
+    /** 资产页同时进行的 t2i 上限（支持一次性批量 16 张）；超出部分由前端滚动排队补位。 */
+    public static final int MAX_ASSET_GENERATE = 16;
     /** 同时向模型提交的分镜出片上限；超出的任务保持排队，空出槽位后再提交。 */
     public static final int MAX_SHOT_GENERATE = 8;
 
