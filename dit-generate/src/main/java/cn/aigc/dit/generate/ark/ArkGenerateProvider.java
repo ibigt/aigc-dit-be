@@ -100,6 +100,7 @@ public class ArkGenerateProvider implements GenerateProvider {
             }
             log.warn("Seedance rejected reference images as real person, failing taskId={}",
                     request.getTaskId());
+            // 真人脸停片。不改用 asset、原链或 Base64 再送一次。
             throw new BizException(ErrorCode.BAD_REQUEST, ArkErrors.REAL_PERSON_MESSAGE);
         }
     }
@@ -426,6 +427,11 @@ public class ArkGenerateProvider implements GenerateProvider {
             return null;
         }
         if (!"audio".equals(kind) && !"video".equals(kind)) {
+            String assetUri = ArkAssetRefs.activeUri(objectStorage, objectMapper, storageKey);
+            if (assetUri != null) {
+                log.info("Seedance uses ark asset, key={}", storageKey);
+                return assetUri;
+            }
             String origin = SeedreamOriginUrls.resolve(objectStorage, objectMapper, storageKey, Instant.now());
             if (origin != null) {
                 log.info("Seedance uses Seedream 5.0 origin url, key={}", storageKey);

@@ -17,9 +17,11 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
+import cn.aigc.dit.generate.ark.ArkAssetRefs;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetReviewResp;
 import cn.aigc.dit.server.drama.text.AssetDraftList;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
@@ -42,6 +44,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -67,6 +71,7 @@ public class DramaAssetService {
     private final GenerateService generateService;
     private final AssetService assetService;
     private final DramaStoryboardService storyboardService;
+    private final ArkCharacterReview characterReview;
 
     @Transactional
     public List<DramaAssetResp> listByEpisode(Long episodeId) {
@@ -180,16 +185,26 @@ public class DramaAssetService {
         return toResp(asset, loadTask(asset.getGenTaskId()));
     }
 
+    public DramaAssetReviewResp reviewCharacter(Long assetId) {
+        return characterReview.review(requireAsset(assetId));
+    }
+
     @Transactional
     public void delete(Long assetId) {
         DramaAsset asset = requireAsset(assetId);
         if (isGenerating(loadTask(asset.getGenTaskId()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "生图进行中，请稍后再删");
         }
+        List<DramaAssetGeneration> generations = listGenerationEntities(asset.getId());
+        List<String> storageKeys = generations == null ? List.of() : generations.stream()
+                .filter(item -> item != null && StringUtils.hasText(item.getStorageKey()))
+                .map(DramaAssetGeneration::getStorageKey)
+                .toList();
         assetMapper.deleteById(asset.getId());
         // 删除资产后同步解除分镜参考绑定，保留分镜文字中的道具描述。
         storyboardService.detachAssetReference(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
+        afterCommit(() -> storageKeys.forEach(characterReview::release));
     }
 
     @Transactional
@@ -432,19 +447,34 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
         boolean selected = generation.getId().equals(asset.getSelectedGenerationId());
+        String storageKey = generation.getStorageKey();
+        boolean dropTask = generation.getGenTaskId() != null
+                && generation.getGenTaskId().equals(asset.getGenTaskId());
+        DramaAssetGeneration next = null;
+        if (selected) {
+            next = listGenerationEntities(asset.getId()).stream()
+                    .filter(item -> item != null && !generation.getId().equals(item.getId()))
+                    .findFirst()
+                    .orElse(null);
+            if (next != null) {
+                applySelectedGeneration(asset, next);
+            } else {
+                clearSelectedImage(asset);
+            }
+            storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
+        }
+        // 删掉的若正是资产上挂着的成功任务，列表刷新会把它再插回来并重新选中。
+        // 任务号改到仍选用的那条上，刷新时就没有可回写的结果。
+        if (dropTask) {
+            asset.setGenTaskId(selected
+                    ? (next == null ? null : next.getGenTaskId())
+                    : taskIdOfGeneration(asset.getSelectedGenerationId()));
+        }
+        if (selected || dropTask) {
+            assetMapper.updateById(asset);
+        }
         assetGenerationMapper.deleteById(generation.getId());
-        if (!selected) {
-            touchSeries(asset.getSeriesId());
-            return;
-        }
-        DramaAssetGeneration next = listGenerationEntities(asset.getId()).stream().findFirst().orElse(null);
-        if (next != null) {
-            applySelectedGeneration(asset, next);
-        } else {
-            clearSelectedImage(asset);
-        }
-        assetMapper.updateById(asset);
-        storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
+        afterCommit(() -> characterReview.release(storageKey));
         touchSeries(asset.getSeriesId());
     }
 
@@ -714,6 +744,14 @@ public class DramaAssetService {
         attachImage(asset, null, null);
     }
 
+    private Long taskIdOfGeneration(Long generationId) {
+        if (generationId == null) {
+            return null;
+        }
+        DramaAssetGeneration current = assetGenerationMapper.selectById(generationId);
+        return current == null ? null : current.getGenTaskId();
+    }
+
     private DramaAssetGeneration requireOwnedGeneration(DramaAsset asset, Long generationId) {
         DramaAssetGeneration generation = assetGenerationMapper.selectById(generationId);
         if (generation == null
@@ -758,7 +796,25 @@ public class DramaAssetService {
         resp.setSelected(generation.getId().equals(selectedId));
         resp.setImported(generation.getLibraryAssetId() != null);
         resp.setCreatedAt(generation.getCreatedAt());
+        ArkAssetRefs.Ref review = characterReview.lookup(generation.getStorageKey());
+        if (review != null && StringUtils.hasText(review.status())) {
+            resp.setArkReviewStatus(review.status());
+            resp.setArkReviewError(blankToNull(review.error()));
+        }
         return resp;
+    }
+
+    private void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private static String resolutionFromTask(GenerateTaskResp task) {

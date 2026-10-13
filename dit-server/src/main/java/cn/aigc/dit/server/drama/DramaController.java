@@ -19,6 +19,8 @@ import cn.aigc.dit.server.drama.model.req.DramaTextModelBindReq;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
+import cn.aigc.dit.server.drama.model.resp.DramaArkReviewAvailabilityResp;
+import cn.aigc.dit.server.drama.model.resp.DramaAssetReviewResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotBatchGenerateResp;
@@ -32,6 +34,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaStyleResp;
 import cn.aigc.dit.server.drama.model.resp.DramaTextModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaVideoModelResp;
 import cn.aigc.dit.server.drama.model.resp.DramaScriptAnalyzeResp;
+import cn.aigc.dit.server.service.ArkReviewCredentialService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -64,6 +67,7 @@ public class DramaController {
     private final DramaShotBatchGenerateService dramaShotBatchGenerateService;
     private final DramaFilmService dramaFilmService;
     private final DramaCaptionService dramaCaptionService;
+    private final ArkReviewCredentialService arkReviewCredentialService;
 
     @Operation(summary = "可选视觉风格（图例；不含编译前缀）")
     @GetMapping("/styles")
@@ -321,6 +325,20 @@ public class DramaController {
             @PathVariable Long gid) {
         dramaAssetService.deleteGeneration(id, gid);
         return CommonResult.success();
+    }
+
+    @Operation(summary = "角色审核密钥是否已配好。未配好时前端隐藏审核按钮，不回传密钥")
+    @GetMapping("/ark-review")
+    public CommonResult<DramaArkReviewAvailabilityResp> arkReviewAvailability() {
+        DramaArkReviewAvailabilityResp resp = new DramaArkReviewAvailabilityResp();
+        resp.setConfigured(arkReviewCredentialService.reviewEnabled());
+        return CommonResult.success(resp);
+    }
+
+    @Operation(summary = "把当前选用的角色图送入方舟素材库，轮询到 Active 或 Failed")
+    @PostMapping("/assets/{id}/ark-review")
+    public CommonResult<DramaAssetReviewResp> reviewCharacterAsset(@PathVariable Long id) {
+        return CommonResult.success(dramaAssetService.reviewCharacter(id));
     }
 
     @Operation(summary = "将资产生成记录导入素材库")

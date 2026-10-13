@@ -129,6 +129,12 @@ dit:
     ark:
       base-url: ${ARK_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
       api-key: ${ARK_API_KEY:}
+      # 素材库 HMAC。模型管理里保存的审核密钥优先；这里只在尚未在页面配置时兜底。
+      access-key: ${ARK_ACCESS_KEY:}
+      secret-key: ${ARK_SECRET_KEY:}
+      project-name: ${ARK_PROJECT_NAME:default}
+      asset-group-id: ${ARK_ASSET_GROUP_ID:}
+      asset-endpoint: ${ARK_ASSET_ENDPOINT:https://ark.cn-beijing.volcengineapi.com}
       connect-timeout-seconds: 15
       request-timeout-seconds: ${ARK_REQUEST_TIMEOUT_SECONDS:120}
       poll-timeout-seconds: 30
@@ -178,6 +184,8 @@ dit:
       processor-version: ${FORCED_ALIGNMENT_PROCESSOR_VERSION:forced-alignment-1}
   s3:
     endpoint: ${S3_ENDPOINT:http://172.171.113.250:9000}
+    # 只用于预签名。角色审核把这个 HTTPS 地址交给方舟下载，留空则仍签内部 endpoint。
+    public-endpoint: ${S3_PUBLIC_ENDPOINT:}
     bucket: ${S3_BUCKET:dit}
     access-key: ${S3_ACCESS_KEY:ditminio}
     secret-key: ${S3_SECRET_KEY:DitMinio123}

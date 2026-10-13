@@ -111,6 +111,53 @@ class ArkGenerateProviderTest {
     }
 
     @Test
+    void submitR2vPrefersActiveAssetUriOverSeedreamOrigin() throws Exception {
+        http.postBody = """
+                {"id":"cgt-asset","status":"queued"}
+                """;
+        String key = "users/8/outputs/201/1.png";
+        storage.put(key, TINY_PNG, "image/png");
+        SeedreamOriginUrls.save(storage, mapper, key, "https://cdn.example/lite.png", Instant.now());
+        ArkAssetRefs.save(storage, mapper, key, new ArkAssetRefs.Ref("asset-role", "Active", "", "group-1"));
+
+        provider.submit(video("r2v").setReferences(List.of(new ReferenceAsset("image", key))));
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals("asset://asset-role", body.get("content").get(1).get("image_url").get("url").asText());
+    }
+
+    @Test
+    void submitR2vUsesOriginWhenAssetIsNotActive() throws Exception {
+        http.postBody = """
+                {"id":"cgt-fallback","status":"queued"}
+                """;
+        String key = "users/8/outputs/202/1.png";
+        storage.put(key, TINY_PNG, "image/png");
+        String origin = "https://cdn.example/lite.png";
+        SeedreamOriginUrls.save(storage, mapper, key, origin, Instant.now());
+        ArkAssetRefs.save(storage, mapper, key,
+                new ArkAssetRefs.Ref("asset-failed", "Failed", "InputImageSensitiveContentDetected: 人脸不一致", "group-1"));
+
+        provider.submit(video("r2v").setReferences(List.of(new ReferenceAsset("image", key))));
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals(origin, body.get("content").get(1).get("image_url").get("url").asText());
+    }
+
+    @Test
+    void submitR2vDoesNotRetryRealPersonWhenAssetUriWasSent() {
+        http.postError = new BizException(ErrorCode.BAD_REQUEST, "InputImageSensitiveContentDetected: real person");
+        String key = "users/8/outputs/203/1.png";
+        storage.put(key, TINY_PNG, "image/png");
+        ArkAssetRefs.save(storage, mapper, key, new ArkAssetRefs.Ref("asset-role", "Active", "", "group-1"));
+
+        BizException error = assertThrows(BizException.class, () -> provider.submit(
+                video("r2v").setReferences(List.of(new ReferenceAsset("image", key)))));
+
+        assertEquals(ArkErrors.REAL_PERSON_MESSAGE, error.getMessage());
+        assertEquals(1, http.postCount);
+        assertTrue(http.lastJson.contains("asset://asset-role"));
+    }
+
+    @Test
     void submitR2vFallsBackToBase64WhenOriginExpired() throws Exception {
         http.postBody = """
                 {"id":"cgt-expired","status":"queued"}

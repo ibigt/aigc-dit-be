@@ -4,9 +4,12 @@ import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.model.req.AdminModelEnabledReq;
 import cn.aigc.dit.server.model.req.AdminModelSaveReq;
 import cn.aigc.dit.server.model.req.AdminModelTestConnectionReq;
+import cn.aigc.dit.server.model.req.ArkReviewCredentialSaveReq;
 import cn.aigc.dit.server.model.resp.AdminModelResp;
 import cn.aigc.dit.server.model.resp.AdminModelTestConnectionResp;
+import cn.aigc.dit.server.model.resp.ArkReviewCredentialResp;
 import cn.aigc.dit.server.service.AdminModelService;
+import cn.aigc.dit.server.service.ArkReviewCredentialService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -34,6 +37,21 @@ import java.util.Map;
 public class AdminModelController {
 
     private final AdminModelService adminModelService;
+    private final ArkReviewCredentialService arkReviewCredentialService;
+
+    @Operation(summary = "角色审核密钥是否已配置，不回传明文")
+    @GetMapping("/review-credential")
+    public CommonResult<ArkReviewCredentialResp> reviewCredential() {
+        return CommonResult.success(arkReviewCredentialService.status());
+    }
+
+    @Operation(summary = "保存角色审核密钥，加密落库；留空字段保持原值")
+    @PutMapping("/review-credential")
+    public CommonResult<ArkReviewCredentialResp> saveReviewCredential(@RequestBody ArkReviewCredentialSaveReq req) {
+        String accessKey = req == null ? null : req.getAccessKey();
+        String secretKey = req == null ? null : req.getSecretKey();
+        return CommonResult.success(arkReviewCredentialService.save(accessKey, secretKey));
+    }
 
     @Operation(summary = "已接入的适配协议")
     @GetMapping("/adapters")

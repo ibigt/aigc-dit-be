@@ -20,5 +20,8 @@ public class DramaAssetGenerationResp {
     private Long libraryAssetId;
     private Boolean selected;
     private Boolean imported;
+    /** Active / Processing / Failed。没有审核记录时为空。 */
+    private String arkReviewStatus;
+    private String arkReviewError;
     private OffsetDateTime createdAt;
 }

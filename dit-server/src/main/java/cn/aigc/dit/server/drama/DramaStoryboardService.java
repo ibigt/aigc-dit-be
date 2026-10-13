@@ -789,18 +789,29 @@ public class DramaStoryboardService {
         if (selected && DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "分镜已锁定，不能删除当前选用记录");
         }
+        boolean dropTask = generation.getGenTaskId() != null
+                && generation.getGenTaskId().equals(shot.getGenTaskId());
+        DramaShotGeneration next = null;
+        if (selected) {
+            next = listGenerationEntities(shot.getId()).stream()
+                    .filter(item -> item != null && !generation.getId().equals(item.getId()))
+                    .findFirst()
+                    .orElse(null);
+            if (next != null) {
+                applySelectedGeneration(shot, next);
+            } else {
+                clearSelectedVideo(shot);
+            }
+        }
+        if (dropTask) {
+            shot.setGenTaskId(selected
+                    ? (next == null ? null : next.getGenTaskId())
+                    : taskIdOfShotGeneration(shot.getSelectedGenerationId()));
+        }
+        if (selected || dropTask) {
+            shotMapper.updateById(shot);
+        }
         shotGenerationMapper.deleteById(generation.getId());
-        if (!selected) {
-            touchSeries(shot.getSeriesId());
-            return;
-        }
-        DramaShotGeneration next = listGenerationEntities(shot.getId()).stream().findFirst().orElse(null);
-        if (next != null) {
-            applySelectedGeneration(shot, next);
-        } else {
-            clearSelectedVideo(shot);
-        }
-        shotMapper.updateById(shot);
         touchSeries(shot.getSeriesId());
     }
 
@@ -1979,6 +1990,14 @@ public class DramaStoryboardService {
                 .eq(DramaShotGeneration::getShotId, shotId)
                 .eq(DramaShotGeneration::getVideoKey, videoKey)
                 .last("LIMIT 1"));
+    }
+
+    private Long taskIdOfShotGeneration(Long generationId) {
+        if (generationId == null) {
+            return null;
+        }
+        DramaShotGeneration current = shotGenerationMapper.selectById(generationId);
+        return current == null ? null : current.getGenTaskId();
     }
 
     private void applySelectedGeneration(DramaShot shot, DramaShotGeneration generation) {

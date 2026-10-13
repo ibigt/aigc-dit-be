@@ -72,6 +72,8 @@ class DramaAssetServiceTest {
     private AssetService libraryAssetService;
     @Mock
     private DramaStoryboardService storyboardService;
+    @Mock
+    private ArkCharacterReview characterReview;
 
     private DramaAssetService service;
     private final AtomicLong generationIds = new AtomicLong(500);
@@ -80,7 +82,7 @@ class DramaAssetServiceTest {
     void setUp() {
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
-                textService, generateService, libraryAssetService, storyboardService);
+                textService, generateService, libraryAssetService, storyboardService, characterReview);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
@@ -606,6 +608,37 @@ class DramaAssetServiceTest {
         assertEquals("users/7/gen/old.png", asset.getImageStorageKey());
         assertEquals(55L, asset.getImageAssetId());
         verify(assetMapper).updateById(asset);
+    }
+
+    @Test
+    void deleteSelectedRetargetsGenTaskSoRefreshCannotRecreateIt() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setSelectedGenerationId(2L);
+        asset.setGenTaskId(287L);
+        asset.setImageStorageKey("users/7/outputs/287/1.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+
+        DramaAssetGeneration older = new DramaAssetGeneration();
+        older.setId(1L);
+        older.setAssetId(9L);
+        older.setUserId(7L);
+        older.setGenTaskId(249L);
+        older.setStorageKey("users/7/outputs/249/1.png");
+        DramaAssetGeneration selected = new DramaAssetGeneration();
+        selected.setId(2L);
+        selected.setAssetId(9L);
+        selected.setUserId(7L);
+        selected.setGenTaskId(287L);
+        selected.setStorageKey("users/7/outputs/287/1.png");
+        when(assetGenerationMapper.selectById(2L)).thenReturn(selected);
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of(older));
+
+        service.deleteGeneration(9L, 2L);
+
+        assertEquals(249L, asset.getGenTaskId());
+        assertEquals("users/7/outputs/249/1.png", asset.getImageStorageKey());
+        verify(assetGenerationMapper).deleteById(2L);
     }
 
     @Test

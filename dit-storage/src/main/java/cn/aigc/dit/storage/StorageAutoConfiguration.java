@@ -6,12 +6,14 @@ import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
+import java.time.Duration;
 
 @Configuration
 @EnableConfigurationProperties(StorageProperties.class)
@@ -27,6 +29,7 @@ public class StorageAutoConfiguration {
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(properties.isPathStyle())
                         .build())
+                .overrideConfiguration(clientTimeouts())
                 .build();
     }
 
@@ -34,7 +37,7 @@ public class StorageAutoConfiguration {
     @Conditional(S3ConfiguredCondition.class)
     public S3Presigner s3Presigner(StorageProperties properties) {
         return S3Presigner.builder()
-                .endpointOverride(URI.create(properties.getEndpoint()))
+                .endpointOverride(URI.create(properties.presignEndpoint()))
                 .region(Region.of(properties.getRegion()))
                 .credentialsProvider(credentials(properties))
                 .serviceConfiguration(S3Configuration.builder()
@@ -53,6 +56,14 @@ public class StorageAutoConfiguration {
     @Conditional(S3NotConfiguredCondition.class)
     public ObjectStorage localObjectStorage() {
         return new LocalObjectStorage();
+    }
+
+    /** 对象存储无超时时，一次卡住的读会占住页面连接，删除等接口会跟着超时。 */
+    private static ClientOverrideConfiguration clientTimeouts() {
+        return ClientOverrideConfiguration.builder()
+                .apiCallAttemptTimeout(Duration.ofSeconds(8))
+                .apiCallTimeout(Duration.ofSeconds(12))
+                .build();
     }
 
     private static StaticCredentialsProvider credentials(StorageProperties properties) {

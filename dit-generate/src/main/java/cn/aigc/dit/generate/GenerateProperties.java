@@ -100,6 +100,7 @@ public class GenerateProperties {
     /**
      * 火山方舟官方 Seedance：{@code POST /contents/generations/tasks}，再 {@code GET} 轮询。
      * 默认地址 {@code https://ark.cn-beijing.volces.com/api/v3}；模型记录上的 API Key 优先。
+     * 素材库是另一套管控面，用 AK/SK 调用 OpenAPI，不用这条 API Key。
      */
     @Data
     public static class Ark {
@@ -112,6 +113,16 @@ public class GenerateProperties {
         private int rateLimitBackoffSeconds = 8;
         private int downloadTimeoutSeconds = 600;
         private int downloadRetries = 3;
+        /** 素材库 OpenAPI。与视频任务的 API Key 不是同一套凭证。 */
+        private String accessKey = "";
+        private String secretKey = "";
+        private String projectName = "default";
+        /** 留空时，第一次角色审核创建 AIGC 组并写回这里和对象存储。 */
+        private String assetGroupId = "";
+        private String assetEndpoint = "https://ark.cn-beijing.volcengineapi.com";
+        private String assetRegion = "cn-beijing";
+        private String assetService = "ark";
+        private String assetApiVersion = "2024-01-01";
     }
 
     /**

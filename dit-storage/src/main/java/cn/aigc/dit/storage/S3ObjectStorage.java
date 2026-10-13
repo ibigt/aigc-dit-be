@@ -91,6 +91,14 @@ public class S3ObjectStorage implements ObjectStorage {
             return length;
         } catch (BizException e) {
             throw e;
+        } catch (NoSuchKeyException e) {
+            throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
+            }
+            log.error("S3 head failed, key={}", storageKey, e);
+            throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");
         } catch (Exception e) {
             log.error("S3 head failed, key={}", storageKey, e);
             throw new BizException(ErrorCode.NOT_FOUND, "对象不存在");

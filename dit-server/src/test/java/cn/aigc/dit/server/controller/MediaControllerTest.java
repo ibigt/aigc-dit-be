@@ -90,6 +90,12 @@ class MediaControllerTest {
         assertArrayEquals(body, storage.getBytes(cacheKey));
     }
 
+    @Test
+    void missingImageThumbnailReturnsNotFoundWithoutReading() {
+        var response = controller.get("users/7/outputs/287/1.png", 480, new HttpHeaders());
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    }
+
     private boolean objectExists(String key) {
         try {
             storage.size(key);
