@@ -13,7 +13,7 @@ import java.util.Map;
 /**
  * 资产页自动提示词模板。多数风格共用二次元漫画风的同一骨架，只替换风格句；
  * 其它风格可在服装句后追加一句服饰/材质。
- * {@link DramaStyles#LIVE_REALISM} 角色图用四格设定表，半身取 3/4 侧脸，避免正面大头照。
+ * {@link DramaStyles#LIVE_REALISM} 角色图用四格设定表，半身取 3/4 侧脸，避免正面大头照；风格句为真人写真实拍。
  * {@link DramaStyles#REALISTIC_3D} 角色图用真人实拍定妆转面：旁边一张正脸近景，加正面、严格 90 度侧面、背面三个全身；
  * 场景是实拍空镜，道具是实拍静物。只换风格与构图，不写死某一个人的年龄、发型和服装。
  * 仅影响之后新生成的 {@code imagePrompt}；已锁定旧图需用户重抽才换像素。
@@ -240,7 +240,7 @@ public final class DramaAssetDrafts {
             text.append("禁止 3D 渲染、CG 数字人、游戏角色、塑料皮肤、动漫卡通、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
             text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景。");
         } else if (usesPhotorealCharacterSheet(spec.key())) {
-            // 半写实：四格设定表，半身用 3/4 侧脸，避免正面大头照。
+            // 真人写真：四格设定表，半身用 3/4 侧脸，避免正面大头照。
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
             text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
@@ -264,14 +264,14 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * 二次元漫画风不加句。其它风格只追加一句服饰/材质；写实风强调半写实 CG 设定立绘，弱化证件照/写真措辞。
+     * 二次元漫画风不加句。其它风格只追加一句服饰/材质；真人写实风强调写真实拍定妆。
      */
     static String styleLookExtra(DramaStyles.Spec spec) {
         if (spec == null) {
             return "";
         }
         return switch (spec.key()) {
-            case DramaStyles.LIVE_REALISM -> "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
+            case DramaStyles.LIVE_REALISM -> "真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂。";
             case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
@@ -530,17 +530,25 @@ public final class DramaAssetDrafts {
                     || prompt.contains("单人 3/4 或正面全身为主")
                     || prompt.contains("不要大脸特写拼版");
         }
-        // 已是含现代都市时代锁的新版固定四格则保留。
+        // 已是含真人写真定妆句的新版固定四格则保留。
         if (prompt.contains("固定四格设定拼版")
                 && prompt.contains("禁止正面大头照")
-                && prompt.contains("现代都市常服")) {
+                && prompt.contains("真人写真定妆")
+                && !prompt.contains("二次元写实")
+                && !prompt.contains("3D国漫轻写实")
+                && !prompt.contains("半写实 CG")
+                && !prompt.contains("非真人照片质感")) {
             return false;
         }
-        // 旧：三视图+正面面部特写；软版单帧；或已四格但仍缺现代都市时代锁。
+        // 旧：三视图+正面面部特写；软版单帧；半写实/国漫措辞；或已四格但仍缺写真定妆句。
         return prompt.contains("同一张图内三视图排列：正面全身、侧面半身、面部特写")
                 || prompt.contains("单人 3/4 或正面全身为主")
                 || prompt.contains("不要大脸特写拼版")
-                || (prompt.contains("固定四格设定拼版") && !prompt.contains("现代都市常服"));
+                || prompt.contains("半写实 CG")
+                || prompt.contains("二次元写实")
+                || prompt.contains("3D国漫轻写实")
+                || prompt.contains("非真人照片质感")
+                || (prompt.contains("固定四格设定拼版") && !prompt.contains("真人写真定妆"));
     }
 
     private static boolean usesPhotorealCharacterSheet(String styleKey) {

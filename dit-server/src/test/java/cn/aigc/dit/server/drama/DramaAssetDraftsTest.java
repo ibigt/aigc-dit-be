@@ -134,7 +134,7 @@ class DramaAssetDraftsTest {
 
         assertTrue(luobai.getImagePrompt().contains("洛白角色设定图"));
         assertTrue(luobai.getImagePrompt().contains("单独站立"));
-        assertTrue(luobai.getImagePrompt().contains("半写实 CG 角色设定立绘"));
+        assertTrue(luobai.getImagePrompt().contains("真人写真定妆立绘"));
         assertTrue(luobai.getImagePrompt().contains("现代都市常服"));
         assertTrue(luobai.getImagePrompt().contains("禁止古装武侠汉服仙侠"));
         assertTrue(luobai.getImagePrompt().contains("固定四格设定拼版"));
@@ -244,12 +244,12 @@ class DramaAssetDraftsTest {
     @Test
     void liveRealismCharacterPromptUsesFixedSheetWithoutFrontalMugshot() {
         String prefix = DramaStyles.require(DramaStyles.LIVE_REALISM).prefix();
-        assertTrue(prefix.contains("二次元写实"));
-        assertTrue(prefix.contains("半写实3D渲染"));
-        assertTrue(prefix.contains("写实皮肤毛发与布料质感"));
-        assertTrue(!prefix.contains("真人"));
-        assertTrue(!prefix.contains("实拍"));
-        assertTrue(!prefix.contains("都市写实常服"));
+        assertTrue(prefix.contains("真人实拍写真摄影"));
+        assertTrue(prefix.contains("商业人像与杂志写真质感"));
+        assertTrue(prefix.contains("不要二次元卡通"));
+        assertTrue(prefix.contains("不要3D国漫厚涂"));
+        assertTrue(!prefix.contains("二次元写实"));
+        assertTrue(!prefix.contains("半写实3D渲染"));
 
         String prompt = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
@@ -260,7 +260,7 @@ class DramaAssetDraftsTest {
                 "男性；青年；锐利眼神；冷峻气质；修长身形");
         assertTrue(prompt.contains("洛白角色设定图"));
         assertTrue(prompt.contains("单独站立"));
-        assertTrue(prompt.contains("半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感"));
+        assertTrue(prompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂"));
         assertTrue(prompt.contains("固定四格设定拼版"));
         assertTrue(prompt.contains("3/4 侧脸或 3/4 半身肖像"));
         assertTrue(prompt.contains("全身三视图站立（正面、侧面、背面）"));
@@ -270,16 +270,13 @@ class DramaAssetDraftsTest {
         assertTrue(!prompt.contains("面部特写"));
         assertTrue(!prompt.contains("正面半身大头照"));
         assertTrue(!prompt.contains("单人 3/4 或正面全身为主"));
-        assertTrue(!prompt.contains("写实皮肤、毛发、布料褶皱与缝线清晰"));
-        assertTrue(!prompt.contains("都市写实常服"));
-        assertTrue(!prompt.contains("当代都市实拍"));
+        assertTrue(!prompt.contains("半写实 CG"));
+        assertTrue(!prompt.contains("非真人照片质感"));
         assertTrue(prompt.contains("浅灰或纯白干净背景"));
         assertTrue(prompt.contains("不要剧情场面"));
-        assertTrue(prompt.contains("高精度二次元写实"));
+        assertTrue(prompt.contains("真人实拍写真摄影"));
         assertTrue(!prompt.contains("身份与外形"));
         assertTrue(!prompt.contains("本图只画一名"));
-        assertTrue(!prompt.contains("真人写实"));
-        assertTrue(!prompt.contains("当代都市写实常服"));
         assertTrue(!prompt.contains("不要洛丽塔"));
 
         String missingModern = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧："
@@ -295,6 +292,18 @@ class DramaAssetDraftsTest {
                 + "高精度二次元写实，半写实3D渲染。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 softObsolete, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
+
+        String animeLookExtra = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_CHARACTER,
+                "洛白",
+                DramaContract.STATE_TAG_BASE,
+                DramaStyles.require(DramaStyles.LIVE_REALISM),
+                null,
+                null).replace(
+                "真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂。",
+                "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。");
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                animeLookExtra, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String scene = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", DramaStyles.require(DramaStyles.LIVE_REALISM));

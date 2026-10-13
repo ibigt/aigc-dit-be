@@ -894,7 +894,7 @@ public final class DramaStoryboardCompiler {
     }
 
     /**
-     * 真人写实（半写实3D）与真人3D（极致写实实拍）都需要中近景对白约束，避免场景参考图把机位拉成整间房。
+     * 真人写实（写真实拍）与真人3D（极致写实实拍）都需要中近景对白约束，避免场景参考图把机位拉成整间房。
      */
     static boolean needsLiveActionCoverage(String stylePrefix) {
         if (!StringUtils.hasText(stylePrefix)) {
@@ -902,6 +902,8 @@ public final class DramaStoryboardCompiler {
         }
         String prefix = stylePrefix.trim();
         return prefix.contains("极致写实实拍摄影")
+                || prefix.contains("真人实拍写真摄影")
+                || prefix.contains("真人写真")
                 || prefix.contains("半写实3D渲染")
                 || prefix.contains("高精度二次元写实");
     }
