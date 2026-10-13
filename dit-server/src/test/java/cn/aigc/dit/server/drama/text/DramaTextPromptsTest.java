@@ -45,6 +45,8 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("不要一句一镜"));
         assertTrue(system.contains("有戏份的场常见 1～3 镜"));
         assertTrue(system.contains("不要仅因景别、运镜、正反打偏好而拆镜"));
+        assertTrue(system.contains("对白、问责、争吵用中近景或过肩"));
+        assertTrue(system.contains("全景或远景只用于一场里交代空间的开场镜头"));
         assertTrue(system.contains("下列硬边界才拆开"));
         assertTrue(system.contains("按动作/对白里出场先后排序"));
         assertTrue(system.contains("画面出入点"));

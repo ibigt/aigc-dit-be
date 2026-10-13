@@ -73,6 +73,26 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
+    void realistic3dDialogueStaysCloseInsteadOfShowingTheWholeRoom() {
+        String prefix = DramaStyles.require(DramaStyles.REALISTIC_3D).prefix();
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "幻梦侦探社日戏",
+                "局长问责",
+                "局长：洛老弟，别睡了。",
+                "门开",
+                "档案落在桌上",
+                11,
+                List.of("局长", "洛白"),
+                2);
+        String prompt = DramaStoryboardCompiler.compile(prefix, List.of(), shot).prompt();
+        assertTrue(prompt.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE));
+
+        String anime = DramaStoryboardCompiler.compile(
+                DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), List.of(), shot).prompt();
+        assertFalse(anime.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE));
+    }
+
+    @Test
     void actionBindsActorNameToMatchingPicture() {
         String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
         List<DramaStoryboardCompiler.ActiveReference> refs = List.of(

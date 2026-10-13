@@ -73,7 +73,7 @@ public final class DramaStyles {
         register(new Spec(
                 REALISTIC_3D,
                 "真人3D风",
-                "真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠",
+                "真人3D风，极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠",
                 "/drama/styles/realistic-3d.jpg"));
         register(new Spec(
                 GUOFENG_3D,

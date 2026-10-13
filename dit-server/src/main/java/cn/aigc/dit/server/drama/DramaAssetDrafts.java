@@ -14,8 +14,8 @@ import java.util.Map;
  * 资产页自动提示词模板。多数风格共用二次元漫画风的同一骨架，只替换风格句；
  * 其它风格可在服装句后追加一句服饰/材质。
  * {@link DramaStyles#LIVE_REALISM} 角色图用四格设定表，半身取 3/4 侧脸，避免正面大头照。
- * {@link DramaStyles#REALISTIC_3D} 角色图用影视级仿真人转面：旁边一张正脸特写，加正面、严格 90 度侧面、背面三个全身，
- * 只换风格与构图，不写死某一个人的年龄、发型和服装。
+ * {@link DramaStyles#REALISTIC_3D} 角色图用真人实拍定妆转面：旁边一张正脸近景，加正面、严格 90 度侧面、背面三个全身；
+ * 场景是实拍空镜，道具是实拍静物。只换风格与构图，不写死某一个人的年龄、发型和服装。
  * 仅影响之后新生成的 {@code imagePrompt}；已锁定旧图需用户重抽才换像素。
  */
 public final class DramaAssetDrafts {
@@ -154,12 +154,11 @@ public final class DramaAssetDrafts {
     static String buildPrompt(String type, String name, String stateTag, DramaStyles.Spec style, Context context,
                               String identity) {
         DramaStyles.Spec spec = style == null ? DramaStyles.require(DramaStyles.ANIME_COMIC) : style;
-        String styleLine = spec.prefix();
         if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
-            return scenePrompt(name, styleLine, context);
+            return scenePrompt(name, spec, context, identity);
         }
         if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
-            return propPrompt(name, styleLine);
+            return propPrompt(name, spec);
         }
         return characterPrompt(name, stateTag, spec, identity);
     }
@@ -221,16 +220,18 @@ public final class DramaAssetDrafts {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
         }
         if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
-            text.append("同一张图必须做成影视级虚拟角色设定板：左侧旁边一张正脸特写，右侧是严格属于同一个角色的正面、严格 90 度侧面、背面三个全身视图。");
-            text.append("正脸特写只取头部和肩部，面部正对镜头，看清眼睛、眉毛、鼻唇、肤色和发型，与三个全身是同一张脸。");
+            text.append("同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景，右侧是严格属于同一个人的正面、严格 90 度侧面、背面三个全身视图。");
+            text.append("正脸近景只取头部和肩部，面部正对镜头，侧光或单灯打在脸上，看清毛孔、皱纹、眼球反射和发丝，与三个全身是同一张脸。");
+            text.append("禁止均匀大平光，禁止蜡像磨皮。中年或老年必须看见皱纹、眼袋和松弛皮肤，禁止磨成青年脸。");
             text.append("不得只出单人单帧，不得把不同人物拼在一起，不得用证件照替代全身视图。");
             text.append("正面：身体与面部正对镜头，自然站立，双臂轻微离开身体，完整显示全身。");
             text.append("侧面：严格 90 度侧视，鼻尖、下巴、胸部、髋部和脚尖方向一致，展示真实侧脸轮廓，禁止用四分之三侧脸代替正侧面。");
             text.append("背面：身体背对镜头，清楚展示发型后部、发饰与服装背面。");
             text.append("三个全身视图采用相同的摄影机高度、人物比例、焦距感和地面位置，人物之间留出间隔，头顶、手部、衣摆和双脚均完整显示。");
-            text.append("纯净的中性灰色摄影棚背景，柔和均匀的影视棚灯光。");
-            text.append("禁止动漫、卡通、塑料玩偶皮肤、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
-            text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景、水印、标志和画面文字。");
+            text.append("背景必须是纯白无缝底，四个视图同一块白底。禁止房间、窗户、墙角、窗帘、地板和杂物。不是中性灰摄影棚，不是三维模型展示台。");
+            text.append("禁止胸牌、警号、姓名牌、编号、水印、标志、英文标语和任何可读文字。");
+            text.append("禁止 3D 渲染、CG 数字人、游戏角色、塑料皮肤、动漫卡通、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
+            text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景。");
         } else if (usesPhotorealCharacterSheet(spec.key())) {
             // 半写实：四格设定表，半身用 3/4 侧脸，避免正面大头照。
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
@@ -248,6 +249,9 @@ public final class DramaAssetDrafts {
             text.append("外形与服装必须符合：").append(identity.trim()).append("。");
         }
         text.append(spec.prefix()).append("。");
+        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+            text.append("角色图背景必须是纯白无缝底，不要把风格句里的窗户或房间画进画面。");
+        }
         text.append("同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。");
         return text.toString();
     }
@@ -261,7 +265,7 @@ public final class DramaAssetDrafts {
         }
         return switch (spec.key()) {
             case DramaStyles.LIVE_REALISM -> "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。";
-            case DramaStyles.REALISTIC_3D -> "影视级仿真人数字人，photorealistic CGI digital human，真实人体解剖比例，细腻自然的皮肤纹理与次表面散射，真实眼球反射，精细独立发丝，自然布料褶皱与清晰材质。完全虚构的原创 CG 角色，高预算真人影视质感，不要粗糙动画，不要塑料皮肤。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠。";
+            case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
             case DramaStyles.GUOFENG_3D -> "三维国风角色，汉服广袖与发冠发饰，布料与金属质感清晰，不要现代西装夹克或运动鞋，不要卡通平涂线稿。";
@@ -273,9 +277,11 @@ public final class DramaAssetDrafts {
         };
     }
 
-    private static String scenePrompt(String name, String styleLine, Context context) {
+    private static String scenePrompt(String name, DramaStyles.Spec spec, Context context, String identity) {
+        String styleLine = spec.prefix();
+        boolean liveAction = DramaStyles.REALISTIC_3D.equals(spec.key());
         StringBuilder text = new StringBuilder();
-        text.append(name).append("场景概念图。");
+        text.append(name).append(liveAction ? "实拍空镜。" : "场景概念图。");
         text.append("场景名称：").append(name).append("。");
         if (context != null) {
             if (StringUtils.hasText(context.time()) || StringUtils.hasText(context.heading())) {
@@ -298,15 +304,33 @@ public final class DramaAssetDrafts {
         text.append("只描述可固定复用的空间环境，不要写人物动作、对白或剧情事件。");
         text.append("建筑结构、空间布局、环境陈设和关键道具交代清楚。");
         text.append("墙面、地面、家具、金属、玻璃、木材等材质细节可见。");
-        text.append("主光源、辅光、环境光、明暗关系、色温和阴影方向明确；可用冷暖光、高对比或丁达尔光营造空间情绪。");
-        text.append("电影分镜视角，如广角全景、低机位、俯拍或对称构图。");
+        if (liveAction) {
+            text.append("窗户光或现场实用光打进这间房，墙面、地面和家具有使用过的磨损。");
+            text.append("只画场景名称和剧本已经写出的空间，不要自行加成阁楼、夹层、品牌墙、海报墙或英文标语，不要画成对称的概念效果图。");
+            text.append("真实相机平视拍摄的空镜，像站在房间里看，不要英雄式广角，不要俯拍。");
+            if (isSpaceFact(identity)) {
+                text.append("空间陈设必须符合：").append(identity.trim()).append("。");
+            }
+        } else {
+            text.append("主光源、辅光、环境光、明暗关系、色温和阴影方向明确；可用冷暖光、高对比或丁达尔光营造空间情绪。");
+            text.append("电影分镜视角，如广角全景、低机位、俯拍或对称构图。");
+        }
         text.append(styleLine).append("。");
-        text.append("场景概念图，画面中不要出现人物。");
+        text.append(liveAction ? "实拍空镜，画面中不要出现人物。" : "场景概念图，画面中不要出现人物。");
         return text.toString();
     }
 
-    private static String propPrompt(String name, String styleLine) {
+    private static String propPrompt(String name, DramaStyles.Spec spec) {
+        String styleLine = spec.prefix();
         StringBuilder text = new StringBuilder();
+        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+            text.append(name).append("实拍静物。");
+            text.append("真实相机拍摄，完整展示外形、材质、磨损和标志性细节，可被手持或放置。");
+            text.append("正面与微距特写，干净背景。");
+            text.append(styleLine).append("。");
+            text.append("实拍静物，画面中不要出现人物。");
+            return text.toString();
+        }
         text.append(name).append("道具设定图。");
         text.append("完整展示外形、材质、磨损和标志性细节，可被手持或放置。");
         text.append("正面与微距特写，纯色干净背景，静物产品级清晰。");
@@ -356,7 +380,7 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * @param type     资产类型；写实风仅对角色识别「三视图+面部特写」旧骨架
+     * @param type     资产类型；写实风仅对角色识别「三视图+面部特写」旧骨架。真人3D 还会替换旧 CGI 角色句、场景概念图和道具设定图
      * @param styleKey 项目风格；非写实/真人 3D 时不因面部特写句失效
      */
     public static boolean shouldReplaceImagePrompt(String prompt, String type, String styleKey) {
@@ -383,8 +407,30 @@ public final class DramaAssetDrafts {
         if (isObsoleteScenePromptWithPlotAction(prompt, type)) {
             return true;
         }
+        if (isObsoleteRealistic3dSceneOrProp(prompt, type, styleKey)) {
+            return true;
+        }
         // 写实风旧角色设定表（白底三视图含面部特写）在打开资产页 / 生图时自动换成新骨架，无需手改库。
         return isObsoleteLiveRealismCharacterSheet(prompt, type, styleKey);
+    }
+
+    /**
+     * 真人3D 的场景、道具若仍是概念图 / 设定图旧句，打开资产页或生图时整段重写成实拍空镜、实拍静物。
+     */
+    static boolean isObsoleteRealistic3dSceneOrProp(String prompt, String type, String styleKey) {
+        if (!DramaStyles.REALISTIC_3D.equals(styleKey) || !StringUtils.hasText(prompt)) {
+            return false;
+        }
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return prompt.contains("场景概念图")
+                    || prompt.contains("广角全景")
+                    || prompt.contains("对称构图")
+                    || prompt.contains("低机位");
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return prompt.contains("道具设定图");
+        }
+        return false;
     }
 
     static boolean isObsoleteScenePromptWithPlotAction(String prompt, String type) {
@@ -407,19 +453,24 @@ public final class DramaAssetDrafts {
             return false;
         }
         if (DramaStyles.REALISTIC_3D.equals(styleKey)) {
-            if (prompt.contains("影视级虚拟角色设定板")
-                    && prompt.contains("严格 90 度")
-                    && prompt.contains("旁边一张正脸特写")) {
+            // 纯白底定妆保留。靠窗房间或灰底棚拍的旧句整段重写。
+            if (prompt.contains("纯白无缝背景") && !prompt.contains("靠窗的朴素墙面")) {
                 return false;
             }
-            return prompt.contains("固定四格设定拼版")
+            return prompt.contains("靠窗的朴素墙面")
+                    || prompt.contains("真实房间一角")
+                    || prompt.contains("中性灰色摄影棚")
+                    || prompt.contains("真人实拍定妆")
+                    || prompt.contains("影视级仿真人数字人")
+                    || prompt.contains("photorealistic CGI")
+                    || prompt.contains("影视级虚拟角色设定板")
+                    || prompt.contains("固定四格设定拼版")
                     || prompt.contains("次世代数字人质感")
                     || prompt.contains("非真人照片质感")
                     || prompt.contains("禁止正面大头照")
                     || prompt.contains("同一张图内三视图排列：正面全身、侧面半身、面部特写")
                     || prompt.contains("单人 3/4 或正面全身为主")
-                    || prompt.contains("不要大脸特写拼版")
-                    || (prompt.contains("影视级虚拟角色设定板") && !prompt.contains("旁边一张正脸特写"));
+                    || prompt.contains("不要大脸特写拼版");
         }
         // 已是含现代都市时代锁的新版固定四格则保留。
         if (prompt.contains("固定四格设定拼版")
@@ -440,6 +491,17 @@ public final class DramaAssetDrafts {
 
     private static String specKey(DramaStyles.Spec style) {
         return style == null ? null : style.key();
+    }
+
+    private static boolean isSpaceFact(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        return value.length() <= 200
+                && !value.contains("场景概念图")
+                && !value.contains("实拍空镜")
+                && !value.contains("广角全景");
     }
 
     private static boolean isLegacyOneLiner(String prompt) {

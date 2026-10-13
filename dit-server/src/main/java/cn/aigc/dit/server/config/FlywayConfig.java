@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.config;
 
+import cn.aigc.dit.server.drama.DramaStyles;
 import org.flywaydb.core.Flyway;
 import org.springframework.boot.autoconfigure.flyway.FlywayMigrationStrategy;
 import org.springframework.context.annotation.Bean;
@@ -607,13 +608,23 @@ public class FlywayConfig {
                 WHERE COALESCE(image_prompt, '') LIKE '%当代都市写实常服与日常面料%'
                    OR COALESCE(description, '') LIKE '%当代都市写实常服与日常面料%'
                 """);
+        String realistic3dPrefix = DramaStyles.require(DramaStyles.REALISTIC_3D).prefix().replace("'", "''");
         statement.execute("""
                 UPDATE drama_series
-                SET style_prefix = '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠',
+                SET style_prefix = '%s',
                     updated_at = NOW()
                 WHERE style_key = 'realistic-3d'
-                  AND COALESCE(style_prefix, '') NOT LIKE '%电影级仿真人数字人%'
-                """);
+                  AND COALESCE(style_prefix, '') NOT LIKE '%%电影级仿真人数字人%%'
+                  AND COALESCE(style_prefix, '') NOT LIKE '%%极致写实实拍摄影%%'
+                """.formatted(realistic3dPrefix));
+        statement.execute("""
+                UPDATE drama_series
+                SET style_prefix = '%s',
+                    updated_at = NOW()
+                WHERE style_key = 'realistic-3d'
+                  AND (COALESCE(style_prefix, '') LIKE '%%电影级仿真人数字人%%'
+                    OR COALESCE(style_prefix, '') LIKE '%%photorealistic CGI%%')
+                """.formatted(realistic3dPrefix));
         statement.execute("""
                 UPDATE drama_asset
                 SET image_prompt = REPLACE(

@@ -94,7 +94,7 @@ public final class DramaShotDrafts {
             String matched = matchBeat(beats, "闯入", "摔", "档案");
             ScriptDoc.Dialogue directorLine = dialogueOf(lines, "局长");
             String goal = StringUtils.hasText(matched)
-                    ? visibleAction(matched, "中景")
+                    ? visibleAction(matched, "中近景")
                     : speakingAction(directorLine, List.of(), 0);
             specs.add(clipSpec(
                     "局长闯入",
@@ -404,10 +404,10 @@ public final class DramaShotDrafts {
     private static String speakingAction(ScriptDoc.Dialogue line, List<String> beats, int beatIndex) {
         String beat = beatAt(beats, beatIndex);
         if (StringUtils.hasText(beat)) {
-            return visibleAction(beat, "中景");
+            return visibleAction(beat, "中近景");
         }
         String speaker = line != null && StringUtils.hasText(line.getSpeaker()) ? line.getSpeaker().trim() : "角色";
-        return visibleAction(speaker + "开口说话", "中景");
+        return visibleAction(speaker + "开口说话", "中近景");
     }
 
     private static String visibleAction(String action, String shotSize) {
@@ -468,6 +468,7 @@ public final class DramaShotDrafts {
                 || text.startsWith("跟镜头") || text.startsWith("中近景");
     }
 
+    /** 只给定场开场。两人同场用全景交代空间；对白和问责走中近景，不在这里。 */
     private static String sizeFor(List<String> cast) {
         return cast != null && cast.size() >= 2 ? "全景" : "中景";
     }

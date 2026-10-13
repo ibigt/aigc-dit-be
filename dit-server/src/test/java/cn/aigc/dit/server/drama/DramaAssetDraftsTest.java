@@ -322,6 +322,15 @@ class DramaAssetDraftsTest {
         assertTrue(!guofengPrompt.contains("固定四格设定拼版"));
 
         DramaStyles.Spec realistic = DramaStyles.require(DramaStyles.REALISTIC_3D);
+        assertEquals("真人3D风", realistic.name());
+        assertTrue(realistic.prefix().startsWith("真人3D风，极致写实实拍摄影"));
+        assertTrue(realistic.prefix().length() <= 512);
+        assertTrue(!realistic.prefix().contains("photorealistic CGI"));
+        assertTrue(!realistic.prefix().contains("电影级仿真人数字人"));
+        assertTrue(!realistic.prefix().contains("不要真实人脸"));
+        assertTrue(!realistic.prefix().contains("非真人照片"));
+        assertTrue(!realistic.prefix().contains("原创虚构 CG"));
+
         String realisticPrompt = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
                 "洛白",
@@ -329,34 +338,63 @@ class DramaAssetDraftsTest {
                 realistic,
                 null,
                 "男性；青年；当代常服");
-        assertTrue(realisticPrompt.contains("影视级仿真人数字人"));
-        assertTrue(realisticPrompt.contains("photorealistic CGI digital human"));
-        assertTrue(realisticPrompt.contains("影视级虚拟角色设定板"));
-        assertTrue(realisticPrompt.contains("旁边一张正脸特写"));
+        assertTrue(realisticPrompt.contains("真人实拍定妆"));
+        assertTrue(realisticPrompt.contains("毛孔"));
+        assertTrue(realisticPrompt.contains("旁边一张正脸近景"));
         assertTrue(realisticPrompt.contains("严格 90 度侧面"));
-        assertTrue(realisticPrompt.contains("中性灰色摄影棚背景"));
+        assertTrue(realisticPrompt.contains("侧光或单灯打在脸上"));
+        assertTrue(realisticPrompt.contains("纯白无缝背景"));
+        assertTrue(realisticPrompt.contains("纯白无缝底"));
+        assertTrue(realisticPrompt.contains("禁止胸牌"));
+        assertTrue(realisticPrompt.contains("不是中性灰摄影棚"));
+        assertTrue(!realisticPrompt.contains("中性灰色摄影棚"));
+        assertTrue(!realisticPrompt.contains("靠窗的朴素墙面"));
+        assertTrue(realisticPrompt.contains("不是三维模型展示台"));
+        assertTrue(!realisticPrompt.contains("影视级仿真人数字人"));
+        assertTrue(!realisticPrompt.contains("photorealistic CGI"));
+        assertTrue(!realisticPrompt.contains("影视级虚拟角色设定板"));
         assertTrue(!realisticPrompt.contains("禁止正面大头照"));
-        assertTrue(realisticPrompt.contains("禁止塑料玩偶皮肤") || realisticPrompt.contains("不要塑料皮肤"));
+        assertTrue(realisticPrompt.contains("塑料皮肤"));
         assertTrue(realisticPrompt.contains("外形与服装必须符合：男性；青年；当代常服"));
         assertTrue(realisticPrompt.contains(realistic.prefix()));
         assertTrue(!realisticPrompt.contains("次世代数字人质感"));
         assertTrue(!realisticPrompt.contains("非真人照片质感"));
         assertTrue(!realisticPrompt.contains("固定四格设定拼版"));
         assertTrue(!realisticPrompt.contains("面部特写"));
-
-        String turnaroundWithoutCloseup = realisticPrompt.replace("左侧旁边一张正脸特写，右侧是", "");
-        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                turnaroundWithoutCloseup, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
         assertTrue(!realisticPrompt.contains("25 岁"));
         assertTrue(!realisticPrompt.contains("浅蓝白色中国古典长裙"));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+
+        String handEdited = realisticPrompt + "手改：左颊有一颗小痣。";
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                handEdited, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+
+        String roomCorner = "洛白角色设定图。真人实拍定妆，窗户光或单灯打在脸上。"
+                + "同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景。"
+                + "背景是靠窗的朴素墙面或真实房间一角，不是中性灰摄影棚，不是三维模型展示台。"
+                + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                roomCorner, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+
+        String greyStudio = "洛白角色设定图。真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄。"
+                + "同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景。"
+                + "中性灰色摄影棚实拍背景，真实相机拍摄，不是三维模型展示台。"
+                + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                greyStudio, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+
+        String oldCgiSheet = "洛白角色设定图。影视级仿真人数字人，photorealistic CGI digital human。"
+                + "同一张图必须做成影视级虚拟角色设定板：左侧旁边一张正脸特写，右侧是严格属于同一个角色的正面、严格 90 度侧面、背面三个全身视图。"
+                + "中性灰色摄影棚背景。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldCgiSheet, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
 
         String oldRealistic = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧。"
                 + "禁止正面大头照。现代都市常服。电影级三维角色设定，次世代数字人质感，非真人照片质感。"
                 + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldRealistic, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
-        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
 
         String threeView = "洛白角色设定图。同一张图内三视图排列：正面全身、侧面半身、面部特写。"
                 + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
@@ -365,8 +403,51 @@ class DramaAssetDraftsTest {
                 threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.GUOFENG_3D));
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+
+        String scene = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", realistic);
+        assertTrue(scene.contains("幻梦侦探社实拍空镜"));
+        assertTrue(scene.contains("窗户光或现场实用光"));
+        assertTrue(scene.contains("不要自行加成阁楼"));
+        assertTrue(scene.contains("不要出现人物"));
+        assertTrue(scene.contains(realistic.prefix()));
+        assertTrue(!scene.contains("场景概念图"));
+        assertTrue(!scene.contains("广角全景"));
+        assertTrue(!scene.contains("对称构图"));
         assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                scene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+
+        String oldScene = "幻梦侦探社场景概念图。场景名称：幻梦侦探社。只描述可固定复用的空间环境，不要写人物动作、对白或剧情事件。"
+                + "建筑结构、空间布局、环境陈设和关键道具交代清楚。场景概念图，画面中不要出现人物。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.GUOFENG_3D));
+
+        String oldWide = "幻梦侦探社实拍空镜。场景名称：幻梦侦探社。只描述可固定复用的空间环境。"
+                + "窗户光或现场实用光，真实相机拍摄的空镜，电影分镜视角，如广角全景、低机位、俯拍或对称构图。"
+                + "实拍空镜，画面中不要出现人物。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldWide, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+
+        String prop = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_PROP, "古铜怀表", realistic);
+        assertTrue(prop.contains("古铜怀表实拍静物"));
+        assertTrue(prop.contains("材质"));
+        assertTrue(prop.contains("磨损"));
+        assertTrue(prop.contains("不要出现人物"));
+        assertTrue(prop.contains(realistic.prefix()));
+        assertTrue(!prop.contains("道具设定图"));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                prop, DramaContract.ASSET_TYPE_PROP, DramaStyles.REALISTIC_3D));
+
+        String oldProp = "古铜怀表道具设定图。完整展示外形、材质、磨损和标志性细节，可被手持或放置。"
+                + "正面与微距特写，纯色干净背景，静物产品级清晰。画面中不要出现人物。"
+                + "同一道具在不同镜头里外形必须保持一致。";
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.REALISTIC_3D));
+        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+                oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.LIVE_REALISM));
     }
 
     @Test

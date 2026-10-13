@@ -26,6 +26,11 @@ public final class DramaStoryboardCompiler {
     public static final String SCENE_PICTURE_HINT = "只借空间陈设，必须有人在此演戏，不继承原图构图、机位、光线";
     public static final String MOVIE_SCENE_MUST =
             "Must: 本镜是电影场面，不是设定图。禁止多视角设定表、纯色背景设定页、无人概念图、静物白底。";
+    /** 真人3D 实拍前缀才追加。对白用中近景，全景只留给明确写出的交代镜头。 */
+    public static final String LIVE_ACTION_COVERAGE =
+            "景别：对白和问责用中近景或过肩拍正在说话的人，全景只留给明确写出全景或远景的交代镜头。"
+                    + "禁止为了让每个人同时入画而拉成整间房。场景参考图只提供空间和光线，不决定机位和构图。"
+                    + "未开口的人留在画外或只出肩背。";
     public static final String DIALOGUE_EXECUTION_TAIL = "只念台词正文，不念角色名和冒号，不得增删或改写。";
     public static final String NARRATION_MOUTH_CLOSED = "画面中角色保持闭嘴，不对旁白与画外音台词对口型。";
     public static final String DIALOGUE_PERFORMANCE_PREFIX = "对白表演：表情与语气一致，呈现";
@@ -229,6 +234,9 @@ public final class DramaStoryboardCompiler {
         }
 
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
+        if (prefix.contains("极致写实实拍摄影")) {
+            prompt.append(LIVE_ACTION_COVERAGE).append('\n');
+        }
         if (opts.i2v()) {
             prompt.append(I2V_MUST_START).append('\n');
             appendI2vIdentities(prompt, refs, content);
