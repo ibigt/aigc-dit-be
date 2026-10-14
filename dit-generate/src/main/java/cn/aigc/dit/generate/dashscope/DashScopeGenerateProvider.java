@@ -20,7 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.time.Duration;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -289,7 +289,47 @@ public class DashScopeGenerateProvider implements GenerateProvider {
         if (!objectStorage.exists(storageKey)) {
                 throw new BizException(ErrorCode.NOT_FOUND, "视频素材不存在: " + storageKey);
         }
-        return objectStorage.presignGet(storageKey, Duration.ofHours(24));
+        byte[] bytes = objectStorage.getBytes(storageKey);
+        if (bytes == null || bytes.length == 0) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空: " + storageKey);
+        }
+        String mime = contentTypeOf(storageKey);
+        return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    private static String contentTypeOf(String storageKey) {
+        String name = storageKey.toLowerCase(Locale.ROOT);
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (name.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (name.endsWith(".gif")) {
+            return "image/gif";
+        }
+        if (name.endsWith(".png")) {
+            return "image/png";
+        }
+        if (name.endsWith(".mp4")) {
+            return "video/mp4";
+        }
+        if (name.endsWith(".webm")) {
+            return "video/webm";
+        }
+        if (name.endsWith(".mov")) {
+            return "video/quicktime";
+        }
+        if (name.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (name.endsWith(".wav")) {
+            return "audio/wav";
+        }
+        if (name.endsWith(".m4a") || name.endsWith(".aac")) {
+            return "audio/mp4";
+        }
+        return "image/png";
     }
 
     private List<String> ingestUrl(GenerateRequest request, String url) {
