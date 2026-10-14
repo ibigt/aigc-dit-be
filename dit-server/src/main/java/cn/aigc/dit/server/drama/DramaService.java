@@ -294,8 +294,8 @@ public class DramaService {
      * 剧本页的一键分析闭环。各阶段仍复用现有服务，便于单独重跑和人工编辑。
      * 不能包在同一个事务里：文本模型调用可能持续数分钟，分场落库与后台拆镜必须各自短事务提交。
      * <p>
-     * 同步短路径只做分场 + 资产确定性骨架并立即返回（释放分析锁，首屏可操作）；
-     * 资产 LLM 增强与拆镜在后台继续。
+     * 同步完成分场 + 资产 LLM 外形/场景/道具设定增强后再返回，避免资产页先露出无意义的骨架空话；
+     * 拆镜仍在后台继续。
      */
     public DramaScriptAnalyzeResp analyzeScript(Long id, DramaScriptAnalyzeReq req) {
         DramaEpisode episode = requireEpisode(id);
@@ -316,9 +316,9 @@ public class DramaService {
             // 分场使用项目绑定的文本模型；失败时显式返回诊断，不伪造规则结果。
             ops.importSource(id, importReq);
             ops.lockScript(id);
-            // 首屏只落确定性骨架；立刻占拆镜锁（分镜页显示拆镜中），后台再增强资产并拆镜。
-            List<DramaAssetResp> assets = assetService.extractFromScript(id, false);
-            enqueueAssetEnrichAndDraft(id);
+            // 外形设定与资产清单一步到位：同步 LLM 增强后再给前端，避免先展示骨架空话。
+            List<DramaAssetResp> assets = assetService.extractFromScript(id, true);
+            storyboardService.enqueueAutoDraft(id, null);
             DramaStoryboardResp storyboard = storyboardService.getStoryboard(id);
 
             DramaScriptAnalyzeResp result = new DramaScriptAnalyzeResp();
@@ -326,7 +326,7 @@ public class DramaService {
             result.setAssets(assets);
             result.setStoryboard(storyboard);
             result.setEngine(result.getEpisode().getEngine());
-            result.getWarnings().add("分镜已在后台排队（含资产描述增强）。打开「分镜」页可查看进度，请勿重复点击拆镜。");
+            result.getWarnings().add("资产设定已生成；分镜已在后台排队。打开「分镜」页可查看进度，请勿重复点击拆镜。");
             ScriptDoc analyzedDoc = result.getEpisode().getScript() == null
                     ? null : ScriptDocs.fromMap(result.getEpisode().getScript());
             int sceneCount = analyzedDoc == null || analyzedDoc.getScenes() == null
@@ -345,18 +345,6 @@ public class DramaService {
                 analyzeLock.release(id);
             }
         }
-    }
-
-    /**
-     * 骨架落库后立刻占拆镜锁并入队：后台先 LLM 增强资产，再自动拆镜。
-     * 手动「智能分镜 / 重新拆镜」仍走 {@link DramaStoryboardService#draft}，占锁冲突时会提示忙碌。
-     */
-    private void enqueueAssetEnrichAndDraft(Long episodeId) {
-        storyboardService.enqueueAutoDraft(episodeId, null, () -> {
-            log.info("[drama] 后台资产增强开始 episodeId={}", episodeId);
-            assetService.extractFromScript(episodeId, true);
-            log.info("[drama] 后台资产增强完成 episodeId={}", episodeId);
-        });
     }
 
     private DramaService scriptOps() {

@@ -243,7 +243,7 @@ class DramaServiceScriptTest {
         when(textChatGateway.llmAvailable(21L)).thenReturn(true);
         when(dramaTextService.engine(21L)).thenReturn(DramaTextService.ENGINE_LLM);
         when(dramaTextService.parseScript(anyLong(), anyString())).thenReturn(sampleDoc());
-        when(assetService.extractFromScript(31L, false)).thenReturn(List.of());
+        when(assetService.extractFromScript(31L, true)).thenReturn(List.of());
         cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp board = new cn.aigc.dit.server.drama.model.resp.DramaStoryboardResp();
         board.setDrafting(true);
         when(storyboardService.getStoryboard(31L)).thenReturn(board);
@@ -256,15 +256,13 @@ class DramaServiceScriptTest {
         assertEquals(0, result.getActualShotCount());
         assertEquals(DramaContract.STATUS_LOCKED, episode.getStatus());
         assertTrue(Boolean.TRUE.equals(result.getStoryboard().getDrafting()));
-        // 骨架同步落库后立刻占拆镜锁入队；资产 LLM 增强作为 beforeDraft 在后台跑。
-        org.mockito.Mockito.verify(assetService).extractFromScript(31L, false);
-        org.mockito.ArgumentCaptor<Runnable> beforeDraft = org.mockito.ArgumentCaptor.forClass(Runnable.class);
-        org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(
+        // 资产 LLM 设定同步增强后再返回；拆镜后台排队。
+        org.mockito.Mockito.verify(assetService).extractFromScript(31L, true);
+        org.mockito.Mockito.verify(storyboardService).enqueueAutoDraft(31L, null);
+        org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).enqueueAutoDraft(
                 org.mockito.ArgumentMatchers.eq(31L),
                 org.mockito.ArgumentMatchers.isNull(),
-                beforeDraft.capture());
-        beforeDraft.getValue().run();
-        org.mockito.Mockito.verify(assetService).extractFromScript(31L, true);
+                org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verify(storyboardService, org.mockito.Mockito.never()).draft(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyBoolean());
         org.mockito.Mockito.verify(analyzeLock).claim(31L);
         org.mockito.Mockito.verify(analyzeLock).release(31L);

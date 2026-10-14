@@ -663,11 +663,55 @@ class DramaAssetDraftsTest {
     void skeletonIdentityIsDetectedAndAppearanceBlurbCanPromote() {
         assertTrue(DramaAssetDrafts.isSkeletonIdentity("夏安", "夏安的外貌、发型、服装和年龄必须保持一致"));
         assertTrue(DramaAssetDrafts.isSkeletonIdentity("洛白", "与主身份同一张脸和发型；禁止写成另一个人"));
+        assertTrue(DramaAssetDrafts.isSkeletonIdentity(
+                "写字楼中楼", "写字楼中楼的空间结构、陈设与光影氛围必须保持一致"));
+        assertTrue(DramaAssetDrafts.isSkeletonIdentity(
+                "投诉单", "投诉单的外形、材质与标志性细节必须保持一致"));
         assertTrue(!DramaAssetDrafts.isSkeletonIdentity(
                 "夏安", "20岁，女，杏眼，黑色短发，白色圆领T恤，深蓝工装背心"));
         assertTrue(DramaAssetDrafts.isAppearanceBlurb("20岁，女，杏眼，黑色短发，白色圆领T恤"));
         assertTrue(!DramaAssetDrafts.isAppearanceBlurb(
                 "夏安角色设定图。夏安单独站立，全身可见。同一张图内三视图排列：正面全身、侧面半身、面部特写。"));
+    }
+
+    @Test
+    void sceneAndPropDoNotUseCharacterAppearanceSkeleton() {
+        AssetDraftList list = DramaAssetDrafts.fromScript(scriptWithSceneAndProp(), DramaStyles.require(DramaStyles.ANIME_COMIC));
+        AssetDraftList.AssetDraft scene = list.getAssets().stream()
+                .filter(item -> DramaContract.ASSET_TYPE_SCENE.equals(item.getType()))
+                .findFirst()
+                .orElseThrow();
+        AssetDraftList.AssetDraft prop = list.getAssets().stream()
+                .filter(item -> DramaContract.ASSET_TYPE_PROP.equals(item.getType()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals("写字楼中楼的空间结构、陈设与光影氛围必须保持一致", scene.getIdentityInvariants());
+        assertEquals("投诉单的外形、材质与标志性细节必须保持一致", prop.getIdentityInvariants());
+        assertTrue(!scene.getIdentityInvariants().contains("外貌"));
+        assertTrue(!prop.getIdentityInvariants().contains("发型"));
+
+        AssetDraftList.AssetDraft polluted = new AssetDraftList.AssetDraft();
+        polluted.setName("写字楼中楼");
+        polluted.setType(DramaContract.ASSET_TYPE_SCENE);
+        polluted.setIdentityInvariants("写字楼中楼的外貌、发型、服装和年龄必须保持一致");
+        AssetDraftList dirty = new AssetDraftList();
+        dirty.setAssets(List.of(polluted));
+        DramaAssetDrafts.ensurePrompts(dirty, new ScriptDoc(), DramaStyles.require(DramaStyles.ANIME_COMIC));
+        assertEquals("写字楼中楼的空间结构、陈设与光影氛围必须保持一致", polluted.getIdentityInvariants());
+        assertTrue(DramaAssetDrafts.isCharacterIdentityMisapplied(
+                DramaContract.ASSET_TYPE_SCENE, "写字楼中楼的外貌、发型、服装和年龄必须保持一致"));
+        assertTrue(!DramaAssetDrafts.isCharacterIdentityMisapplied(
+                DramaContract.ASSET_TYPE_CHARACTER, "夏安的外貌、发型、服装和年龄必须保持一致"));
+    }
+
+    private static ScriptDoc scriptWithSceneAndProp() {
+        ScriptDoc doc = new ScriptDoc();
+        ScriptDoc.Scene scene = new ScriptDoc.Scene();
+        scene.setLocation("写字楼中楼");
+        scene.setProps(List.of("投诉单"));
+        scene.setCharacters(List.of("洛白"));
+        doc.setScenes(List.of(scene));
+        return doc;
     }
 
     @Test

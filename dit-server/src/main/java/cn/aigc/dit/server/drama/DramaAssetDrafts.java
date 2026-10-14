@@ -64,17 +64,16 @@ public final class DramaAssetDrafts {
             String stateTag = StringUtils.hasText(draft.getStateTag())
                     ? draft.getStateTag()
                     : inferStateTag(draft.getName());
-            if (!StringUtils.hasText(draft.getIdentityInvariants())
-                    || isSkeletonIdentity(draft.getName(), draft.getIdentityInvariants())) {
-                // 骨架句不算有效外形；若 description 已是角色外貌短句则提升，否则空时再落骨架兜底。
+            String identity = draft.getIdentityInvariants();
+            if (!StringUtils.hasText(identity)
+                    || isSkeletonIdentity(draft.getName(), identity)
+                    || isCharacterIdentityMisapplied(draft.getType(), identity)) {
+                // 骨架句 / 场景道具误套角色外形句：角色可从 description 提升，否则按类型落骨架。
                 if (DramaContract.ASSET_TYPE_CHARACTER.equals(draft.getType())
                         && isAppearanceBlurb(draft.getDescription())) {
                     draft.setIdentityInvariants(draft.getDescription().trim());
-                } else if (!StringUtils.hasText(draft.getIdentityInvariants())) {
-                    boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
-                    draft.setIdentityInvariants(mustSplit
-                            ? "与主身份同一张脸和发型；禁止写成另一个人"
-                            : draft.getName().trim() + "的外貌、发型、服装和年龄必须保持一致");
+                } else {
+                    draft.setIdentityInvariants(defaultIdentity(draft.getType(), draft.getName(), stateTag));
                 }
             }
             if (StringUtils.hasText(draft.getImagePrompt())
@@ -205,11 +204,46 @@ public final class DramaAssetDrafts {
         draft.setMustSplit(mustSplit);
         draft.setNeedsHuman(true);
         draft.setDescription(prompt);
-        draft.setIdentityInvariants(mustSplit
-                ? "与主身份同一张脸和发型；禁止写成另一个人"
-                : name + "的外貌、发型、服装和年龄必须保持一致");
+        draft.setIdentityInvariants(defaultIdentity(type, name, stateTag));
         draft.setImagePrompt(prompt);
         unique.put(key, draft);
+    }
+
+    /**
+     * 按资产类型生成抽取骨架的「设定摘要」占位句。角色才写外貌/发型/服装/年龄。
+     */
+    public static String defaultIdentity(String type, String name, String stateTag) {
+        String label = StringUtils.hasText(name) ? name.trim() : "";
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return label.isEmpty()
+                    ? "空间结构、陈设与光影氛围必须保持一致"
+                    : label + "的空间结构、陈设与光影氛围必须保持一致";
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return label.isEmpty()
+                    ? "外形、材质与标志性细节必须保持一致"
+                    : label + "的外形、材质与标志性细节必须保持一致";
+        }
+        boolean mustSplit = StringUtils.hasText(stateTag) && !DramaContract.STATE_TAG_BASE.equals(stateTag);
+        if (mustSplit) {
+            return "与主身份同一张脸和发型；禁止写成另一个人";
+        }
+        return label.isEmpty()
+                ? "外貌、发型、服装和年龄必须保持一致"
+                : label + "的外貌、发型、服装和年龄必须保持一致";
+    }
+
+    /** 场景/道具误用了角色外形占位句。 */
+    public static boolean isCharacterIdentityMisapplied(String type, String identity) {
+        if (!StringUtils.hasText(identity)) {
+            return false;
+        }
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type) || !StringUtils.hasText(type)) {
+            return false;
+        }
+        String text = identity.trim();
+        return text.contains("外貌、发型、服装和年龄必须保持一致")
+                || text.contains("与主身份同一张脸和发型");
     }
 
     private static String characterPrompt(String name, String stateTag, DramaStyles.Spec spec, String identity) {
@@ -404,22 +438,27 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * 是否仍是抽取骨架的无效外形句（无性别/衣着等可识别信息）。
-     * 页面「外形设定」与二次增强覆盖都依赖此判断。
+     * 是否仍是抽取骨架的无效设定句（无可识别事实）。
+     * 页面「外形/场景/道具设定」与二次增强覆盖都依赖此判断。
      */
     public static boolean isSkeletonIdentity(String name, String identity) {
         if (!StringUtils.hasText(identity)) {
             return true;
         }
         String text = identity.trim();
-        if (text.contains("外貌、发型、服装和年龄必须保持一致")) {
+        if (text.contains("外貌、发型、服装和年龄必须保持一致")
+                || text.contains("与主身份同一张脸和发型")
+                || text.contains("空间结构、陈设与光影氛围必须保持一致")
+                || text.contains("外形、材质与标志性细节必须保持一致")) {
             return true;
         }
-        if (text.contains("与主身份同一张脸和发型")) {
-            return true;
-        }
-        if (StringUtils.hasText(name) && text.equals(name.trim() + "的外貌、发型、服装和年龄必须保持一致")) {
-            return true;
+        if (StringUtils.hasText(name)) {
+            String label = name.trim();
+            if (text.equals(label + "的外貌、发型、服装和年龄必须保持一致")
+                    || text.equals(label + "的空间结构、陈设与光影氛围必须保持一致")
+                    || text.equals(label + "的外形、材质与标志性细节必须保持一致")) {
+                return true;
+            }
         }
         return false;
     }
