@@ -275,9 +275,10 @@ public final class DramaAssetDrafts {
             case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
-            case DramaStyles.GUOFENG_3D -> "三维国风角色，汉服广袖与发冠发饰，布料与金属质感清晰，不要现代西装夹克或运动鞋，不要卡通平涂线稿。";
+            case DramaStyles.GUOFENG_3D -> "半写实国风 CG 角色设定立绘、清晰五官与汉服材质，3D国漫轻写实厚涂，古典妆造与发冠金饰，禁止现代服饰西装夹克与运动鞋，禁止卡通平涂线稿。";
             case DramaStyles.REPUBLICAN_ERA -> "民国人物，旗袍长衫或洋装礼帽，面料与纹样清晰，不要古装广袖。";
             case DramaStyles.CYBERPUNK -> "机能外套与科技面料，可有义体接口，不要古装汉服。";
+            case DramaStyles.NEON_CYBER -> "机能外套与科技面料，金属义体与发光接口清晰可见，现代都市常服与发型妆造，禁止古装汉服，禁止真人证件照大平光。";
             case DramaStyles.SCI_FI -> "科幻制服或轻型防护装，金属与合成面料清晰，不要古装。";
             case DramaStyles.RURAL -> "朴素布衣、粗布棉麻与日常劳作装，不要华服礼服或古装。";
             default -> "";
@@ -552,7 +553,10 @@ public final class DramaAssetDrafts {
     }
 
     private static boolean usesPhotorealCharacterSheet(String styleKey) {
-        return DramaStyles.LIVE_REALISM.equals(styleKey) || DramaStyles.REALISTIC_3D.equals(styleKey);
+        return DramaStyles.LIVE_REALISM.equals(styleKey)
+                || DramaStyles.REALISTIC_3D.equals(styleKey)
+                || DramaStyles.GUOFENG_3D.equals(styleKey)
+                || DramaStyles.NEON_CYBER.equals(styleKey);
     }
 
     private static String specKey(DramaStyles.Spec style) {

@@ -23,6 +23,7 @@ public final class DramaStyles {
     public static final String RURAL = "rural";
     public static final String REALISTIC_3D = "realistic-3d";
     public static final String GUOFENG_3D = "guofeng-3d";
+    public static final String NEON_CYBER = "neon-cyber";
 
     /** 只注入分镜视频编译，不写入主体设定图。 */
     public static final String VIDEO_SCENE_CLAUSE = "连续运动的电影场面，禁止设定表和白底静物";
@@ -78,8 +79,13 @@ public final class DramaStyles {
         register(new Spec(
                 GUOFENG_3D,
                 "古风3D风",
-                "古风3D风，高精度三维国风渲染，汉服广袖与发冠金饰，亭台楼阁与山水云雾，写实布料木质与金属质感，电影级光影，不要卡通平涂线稿，不要现代都市，不要真实人脸",
+                "高精度国风二次元写实，半写实3D渲染，精致CG质感，3D国漫轻写实厚涂，汉服广袖与发冠金饰，亭台楼阁与山水云雾，棚拍柔光，写实皮肤毛发与布料质感，电影级光影，不要卡通平涂线稿，不要现代都市",
                 "/drama/styles/guofeng-3d.jpg"));
+        register(new Spec(
+                NEON_CYBER,
+                "霓虹赛博风",
+                "霓虹赛博写实风，霓虹都市与全息投影，金属义体与雨夜街景，高对比紫蓝橙红霓虹色，半写实3D渲染与电影级夜景摄影质感，35mm 电影镜头与浅景深，可见毛孔与独立发丝，电影分镜构图，不要动漫平涂线稿，不要古装汉服，不要二次元卡通",
+                "/drama/styles/neon-cyber.jpg"));
     }
 
     /**
