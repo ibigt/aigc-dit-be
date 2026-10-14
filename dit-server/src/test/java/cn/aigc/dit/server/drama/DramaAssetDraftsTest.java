@@ -685,10 +685,8 @@ class DramaAssetDraftsTest {
                 .filter(item -> DramaContract.ASSET_TYPE_PROP.equals(item.getType()))
                 .findFirst()
                 .orElseThrow();
-        assertEquals("写字楼中楼的空间结构、陈设与光影氛围必须保持一致", scene.getIdentityInvariants());
-        assertEquals("投诉单的外形、材质与标志性细节必须保持一致", prop.getIdentityInvariants());
-        assertTrue(!scene.getIdentityInvariants().contains("外貌"));
-        assertTrue(!prop.getIdentityInvariants().contains("发型"));
+        assertTrue(scene.getIdentityInvariants() == null || scene.getIdentityInvariants().isBlank());
+        assertTrue(prop.getIdentityInvariants() == null || prop.getIdentityInvariants().isBlank());
 
         AssetDraftList.AssetDraft polluted = new AssetDraftList.AssetDraft();
         polluted.setName("写字楼中楼");
@@ -697,11 +695,23 @@ class DramaAssetDraftsTest {
         AssetDraftList dirty = new AssetDraftList();
         dirty.setAssets(List.of(polluted));
         DramaAssetDrafts.ensurePrompts(dirty, new ScriptDoc(), DramaStyles.require(DramaStyles.ANIME_COMIC));
-        assertEquals("写字楼中楼的空间结构、陈设与光影氛围必须保持一致", polluted.getIdentityInvariants());
+        assertTrue(polluted.getIdentityInvariants() == null || polluted.getIdentityInvariants().isBlank());
         assertTrue(DramaAssetDrafts.isCharacterIdentityMisapplied(
                 DramaContract.ASSET_TYPE_SCENE, "写字楼中楼的外貌、发型、服装和年龄必须保持一致"));
         assertTrue(!DramaAssetDrafts.isCharacterIdentityMisapplied(
                 DramaContract.ASSET_TYPE_CHARACTER, "夏安的外貌、发型、服装和年龄必须保持一致"));
+
+        AssetDraftList.AssetDraft withBlurb = new AssetDraftList.AssetDraft();
+        withBlurb.setName("高二2班教室");
+        withBlurb.setType(DramaContract.ASSET_TYPE_SCENE);
+        withBlurb.setIdentityInvariants("高二2班教室的空间结构、陈设与光影氛围必须保持一致");
+        withBlurb.setDescription("高二教室，前后黑板，成排课桌椅，侧窗自然光");
+        AssetDraftList blurbList = new AssetDraftList();
+        blurbList.setAssets(List.of(withBlurb));
+        DramaAssetDrafts.ensurePrompts(blurbList, new ScriptDoc(), DramaStyles.require(DramaStyles.ANIME_COMIC));
+        assertEquals("高二教室，前后黑板，成排课桌椅，侧窗自然光", withBlurb.getIdentityInvariants());
+        assertTrue(DramaAssetDrafts.isSettingBlurb(
+                DramaContract.ASSET_TYPE_SCENE, "高二教室，前后黑板，成排课桌椅，侧窗自然光"));
     }
 
     private static ScriptDoc scriptWithSceneAndProp() {

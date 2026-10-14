@@ -68,12 +68,16 @@ public final class DramaAssetDrafts {
             if (!StringUtils.hasText(identity)
                     || isSkeletonIdentity(draft.getName(), identity)
                     || isCharacterIdentityMisapplied(draft.getType(), identity)) {
-                // 骨架句 / 场景道具误套角色外形句：角色可从 description 提升，否则按类型落骨架。
+                // 骨架句 / 误套句：优先从短 description 提升；场景道具提升失败则留空，避免假「正在补全」。
                 if (DramaContract.ASSET_TYPE_CHARACTER.equals(draft.getType())
                         && isAppearanceBlurb(draft.getDescription())) {
                     draft.setIdentityInvariants(draft.getDescription().trim());
-                } else {
+                } else if (isSettingBlurb(draft.getType(), draft.getDescription())) {
+                    draft.setIdentityInvariants(draft.getDescription().trim());
+                } else if (DramaContract.ASSET_TYPE_CHARACTER.equals(draft.getType())) {
                     draft.setIdentityInvariants(defaultIdentity(draft.getType(), draft.getName(), stateTag));
+                } else {
+                    draft.setIdentityInvariants(null);
                 }
             }
             if (StringUtils.hasText(draft.getImagePrompt())
@@ -204,26 +208,23 @@ public final class DramaAssetDrafts {
         draft.setMustSplit(mustSplit);
         draft.setNeedsHuman(true);
         draft.setDescription(prompt);
-        draft.setIdentityInvariants(defaultIdentity(type, name, stateTag));
+        // 场景/道具首屏不定骨架空话，等 LLM 写出真实设定；角色仍用外形占位句。
+        draft.setIdentityInvariants(DramaContract.ASSET_TYPE_CHARACTER.equals(type)
+                ? defaultIdentity(type, name, stateTag)
+                : null);
         draft.setImagePrompt(prompt);
         unique.put(key, draft);
     }
 
     /**
-     * 按资产类型生成抽取骨架的「设定摘要」占位句。角色才写外貌/发型/服装/年龄。
+     * 按资产类型生成抽取骨架的「设定摘要」占位句。角色才写外貌/发型/服装/年龄；
+     * 场景/道具返回空，避免页面长期显示假「正在补全」。
      */
     public static String defaultIdentity(String type, String name, String stateTag) {
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type) || DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return null;
+        }
         String label = StringUtils.hasText(name) ? name.trim() : "";
-        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
-            return label.isEmpty()
-                    ? "空间结构、陈设与光影氛围必须保持一致"
-                    : label + "的空间结构、陈设与光影氛围必须保持一致";
-        }
-        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
-            return label.isEmpty()
-                    ? "外形、材质与标志性细节必须保持一致"
-                    : label + "的外形、材质与标志性细节必须保持一致";
-        }
         boolean mustSplit = StringUtils.hasText(stateTag) && !DramaContract.STATE_TAG_BASE.equals(stateTag);
         if (mustSplit) {
             return "与主身份同一张脸和发型；禁止写成另一个人";
@@ -472,6 +473,26 @@ public final class DramaAssetDrafts {
         }
         String value = text.trim();
         if (value.length() > 220 || isSkeletonIdentity(null, value) || looksLikeImageTemplate(value)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * description 是否像场景/道具可用的短设定（非生图长模板），可提升为设定摘要。
+     */
+    public static boolean isSettingBlurb(String type, String text) {
+        if (!DramaContract.ASSET_TYPE_SCENE.equals(type) && !DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return false;
+        }
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        if (value.length() > 220 || isSkeletonIdentity(null, value) || looksLikeImageTemplate(value)) {
+            return false;
+        }
+        if (value.contains("外貌、发型、服装和年龄") || value.contains("同一张脸和发型")) {
             return false;
         }
         return true;
