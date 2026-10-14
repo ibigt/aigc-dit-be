@@ -247,8 +247,10 @@ class DramaAssetDraftsTest {
         // 写实 prefix 跟远端新 LIVE_REALISM 同族：真人实拍写真摄影 + 禁 3D国漫厚涂/CG数字人
         assertTrue(spec.prefix().contains("霓虹赛博写实风"));
         assertTrue(spec.prefix().contains("赛博都市真人实拍写真摄影"));
-        assertTrue(spec.prefix().contains("霓虹招牌与全息投影"));
-        assertTrue(spec.prefix().contains("雨夜街景"));
+        assertTrue(spec.prefix().contains("高对比紫蓝橙红霓虹色"));
+        // prefix 只留摄影质感词，场景元素（会污染角色定妆图）必须不存在
+        assertTrue(!spec.prefix().contains("霓虹招牌与全息投影"));
+        assertTrue(!spec.prefix().contains("雨夜街景"));
         assertTrue(spec.prefix().contains("商业人像与杂志写真质感"));
         assertTrue(spec.prefix().contains("清晰五官与独立发丝"));
         assertTrue(spec.prefix().contains("不要3D国漫厚涂"));
@@ -260,8 +262,9 @@ class DramaAssetDraftsTest {
         assertTrue(!spec.prefix().contains("半写实3D渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
-        // 写实大类底句 + 赛博题材句
-        assertTrue(extra.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        // 写实大类底句（摄影锚点强化版，不用"立绘"等插画措辞）+ 赛博题材句
+        assertTrue(extra.contains("真人写真定妆，真实相机霓虹柔光与自然肤质"));
+        assertTrue(extra.contains("独立发丝与皮肤纹理清晰"));
         assertTrue(extra.contains("赛博都市发型妆造"));
         assertTrue(extra.contains("机能外套"));
         assertTrue(extra.contains("禁止古装汉服"));
@@ -298,6 +301,8 @@ class DramaAssetDraftsTest {
         assertTrue(spec.prefix().contains("国风真人实拍写真摄影"));
         assertTrue(spec.prefix().contains("棚拍柔光与自然肤质"));
         assertTrue(spec.prefix().contains("汉服广袖与发冠金饰"));
+        // prefix 只留摄影质感词，场景元素（亭台楼阁会把定妆图带偏成场景插画）必须不存在
+        assertTrue(!spec.prefix().contains("亭台楼阁与山水云雾"));
         assertTrue(spec.prefix().contains("商业人像与杂志写真质感"));
         assertTrue(spec.prefix().contains("不要3D国漫厚涂"));
         assertTrue(spec.prefix().contains("不要CG数字人"));
@@ -309,8 +314,9 @@ class DramaAssetDraftsTest {
         assertTrue(!spec.prefix().contains("高精度三维国风渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
-        // styleLookExtra = 写实大类底句 + 国风题材句
-        assertTrue(extra.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        // styleLookExtra = 写实大类底句（摄影锚点强化版，不用"立绘"等插画措辞）+ 国风题材句
+        assertTrue(extra.contains("真人写真定妆，真实相机棚拍柔光与自然肤质"));
+        assertTrue(extra.contains("独立发丝与皮肤纹理清晰"));
         assertTrue(extra.contains("国风古典妆造"));
         assertTrue(extra.contains("汉服广袖与发冠金饰"));
         assertTrue(extra.contains("禁止现代西装夹克与运动鞋"));
@@ -438,10 +444,13 @@ class DramaAssetDraftsTest {
                 guofeng,
                 null,
                 "女性；青年");
-        assertTrue(guofengPrompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        assertTrue(guofengPrompt.contains("真人写真定妆，真实相机棚拍柔光与自然肤质"));
         assertTrue(guofengPrompt.contains("国风古典妆造"));
         assertTrue(guofengPrompt.contains("固定四格设定拼版"));
         assertTrue(guofengPrompt.contains("3/4 侧脸"));
+        // 写实四格骨架带摄影锚点，压住拼版自带的 CG 设定表美学
+        assertTrue(guofengPrompt.contains("整体是真实相机拍摄的写真质感"));
+        assertTrue(guofengPrompt.contains("禁止插画、禁止 CG 渲染"));
         assertTrue(guofengPrompt.contains(guofeng.prefix()));
         assertTrue(!guofengPrompt.contains("同一张图内三视图排列"));
         assertTrue(!guofengPrompt.contains("半写实国风 CG 角色设定立绘"));
@@ -608,6 +617,8 @@ class DramaAssetDraftsTest {
                 assertTrue(prompt.contains("3/4 侧脸"), spec.key());
             }
             assertTrue(prompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质")
+                    || prompt.contains("真人写真定妆，真实相机棚拍柔光与自然肤质")
+                    || prompt.contains("真人写真定妆，真实相机霓虹柔光与自然肤质")
                     || prompt.contains("真人实拍定妆，可见毛孔与独立发丝"), spec.key());
             assertTrue(prompt.contains(spec.prefix()), spec.key());
 

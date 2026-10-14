@@ -247,6 +247,9 @@ public final class DramaAssetDrafts {
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
             text.append("禁止正面大头照、禁止正脸证件照特写、禁止摄影棚大脸特写拼版。");
             text.append("浅灰或纯白干净背景。");
+            // 摄影锚点：压住多格拼版自带的 CG 设定表美学，让四格仍是照片质感。
+            text.append("整体是真实相机拍摄的写真质感，皮肤纹理、毛孔与发丝清晰可见，布料纤维真实。");
+            text.append("禁止插画、禁止 CG 渲染、禁止磨皮蜡像质感、禁止动漫大眼。");
         } else {
             text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
             text.append("浅灰或纯白干净背景。");
@@ -282,12 +285,12 @@ public final class DramaAssetDrafts {
         if (spec.realistic()) {
             return switch (spec.key()) {
                 case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
-                case DramaStyles.GUOFENG_3D -> PHOTOREAL_LOOK_BASE
-                        + "国风古典妆造，汉服广袖与发冠金饰，禁止现代西装夹克与运动鞋"
-                        + PHOTOREAL_LOOK_SUFFIX;
-                case DramaStyles.NEON_CYBER -> PHOTOREAL_LOOK_BASE
-                        + "赛博都市发型妆造，机能外套与金属义体发光接口清晰可见，禁止古装汉服，禁止证件照大平光"
-                        + PHOTOREAL_LOOK_SUFFIX;
+                case DramaStyles.GUOFENG_3D -> "真人写真定妆，真实相机棚拍柔光与自然肤质，独立发丝与皮肤纹理清晰，"
+                        + "清晰五官与汉服材质，国风古典妆造，汉服广袖与发冠金饰，"
+                        + "禁止现代西装夹克与运动鞋，禁止二次元卡通与3D国漫厚涂。";
+                case DramaStyles.NEON_CYBER -> "真人写真定妆，真实相机霓虹柔光与自然肤质，独立发丝与皮肤纹理清晰，"
+                        + "清晰五官与科技面料材质，赛博都市发型妆造，机能外套与金属义体发光接口清晰可见，"
+                        + "禁止古装汉服，禁止证件照大平光，禁止二次元卡通与3D国漫厚涂。";
                 default -> PHOTOREAL_LOOK_BASE
                         + "现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰"
                         + PHOTOREAL_LOOK_SUFFIX;
