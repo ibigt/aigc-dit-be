@@ -74,8 +74,8 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
-    void realistic3dDialogueStaysCloseInsteadOfShowingTheWholeRoom() {
-        String prefix = DramaStyles.require(DramaStyles.REALISTIC_3D).prefix();
+    void liveRealismDialogueStaysCloseInsteadOfShowingTheWholeRoom() {
+        String prefix = DramaStyles.require(DramaStyles.LIVE_REALISM).prefix();
         DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
                 "幻梦侦探社日戏",
                 "局长问责",
@@ -92,7 +92,7 @@ class DramaStoryboardCompilerTest {
         String liveRealism = DramaStoryboardCompiler.compile(
                 DramaStyles.require(DramaStyles.LIVE_REALISM).prefix(), List.of(), shot).prompt();
         assertTrue(liveRealism.contains(DramaStoryboardCompiler.LIVE_ACTION_COVERAGE),
-                "真人写实风也要中近景对白约束，避免场景图把机位拉成整间房");
+                "现代写实风也要中近景对白约束，避免场景图把机位拉成整间房");
 
         String anime = DramaStoryboardCompiler.compile(
                 DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), List.of(), shot).prompt();

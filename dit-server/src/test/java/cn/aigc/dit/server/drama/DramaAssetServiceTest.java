@@ -340,13 +340,14 @@ class DramaAssetServiceTest {
         String prompt = list.get(0).getImagePrompt();
         assertTrue(prompt.contains("洛白角色设定图"));
         assertTrue(prompt.contains("单独站立"));
-        assertTrue(prompt.contains("固定四格设定拼版"));
-        assertTrue(prompt.contains("真人写真定妆立绘"));
-        assertTrue(prompt.contains("现代都市常服"));
-        assertTrue(prompt.contains("禁止正面大头照"));
+        // 现代写实风（原真人3D风）走真人实拍定妆转面骨架
+        assertTrue(prompt.contains("真人实拍定妆"));
+        assertTrue(prompt.contains("旁边一张正脸近景"));
+        assertTrue(prompt.contains("严格 90 度侧面"));
+        assertTrue(prompt.contains("纯白无缝底"));
+        assertTrue(!prompt.contains("固定四格设定拼版"));
         assertTrue(!prompt.contains("面部特写"));
-        assertTrue(prompt.contains("浅灰或纯白干净背景"));
-        assertTrue(prompt.contains("真人实拍写真摄影"));
+        assertTrue(prompt.contains("现代写实风"));
         assertTrue(prompt.length() > 80);
         assertTrue(prompt.contains("外形与服装必须符合：男性；青年；锐利眼神；冷峻气质；修长身形"));
         // 方案 A：description 不再被长模板覆盖，旧模板 description 降级为外形摘要

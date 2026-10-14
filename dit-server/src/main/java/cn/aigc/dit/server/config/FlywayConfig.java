@@ -636,36 +636,63 @@ public class FlywayConfig {
                 WHERE COALESCE(image_prompt, '') LIKE '%当代都市写实常服与日常面料%'
                    OR COALESCE(description, '') LIKE '%当代都市写实常服与日常面料%'
                 """);
-        String realistic3dPrefix = DramaStyles.require(DramaStyles.REALISTIC_3D).prefix().replace("'", "''");
+        String modernRealismPrefix = DramaStyles.require(DramaStyles.LIVE_REALISM).prefix().replace("'", "''");
+        // 旧「真人3D风」已合并到「现代写实风」：把 drama_series.style_key 改写为 live-realism，
+        // 并把陈旧的影视级仿真人数字人/CGI/次世代数字人 提示词刷成现代写实风的新版本。
+        // drama_asset 没有 style_key 列（style_key 只属于 drama_series），生成时按 series 的
+        // style_key 重新拼 prompt，资产行不需要刷 key。
         statement.execute("""
                 UPDATE drama_series
-                SET style_prefix = '%s',
+                SET style_key = 'live-realism',
+                    style_prefix = '%s',
                     updated_at = NOW()
                 WHERE style_key = 'realistic-3d'
                   AND COALESCE(style_prefix, '') NOT LIKE '%%电影级仿真人数字人%%'
                   AND COALESCE(style_prefix, '') NOT LIKE '%%极致写实实拍摄影%%'
-                """.formatted(realistic3dPrefix));
+                """.formatted(modernRealismPrefix));
         statement.execute("""
                 UPDATE drama_series
-                SET style_prefix = '%s',
+                SET style_key = 'live-realism',
+                    style_prefix = '%s',
                     updated_at = NOW()
                 WHERE style_key = 'realistic-3d'
                   AND (COALESCE(style_prefix, '') LIKE '%%电影级仿真人数字人%%'
                     OR COALESCE(style_prefix, '') LIKE '%%photorealistic CGI%%')
-                """.formatted(realistic3dPrefix));
+                """.formatted(modernRealismPrefix));
+        statement.execute("""
+                UPDATE drama_series
+                SET style_key = 'live-realism',
+                    updated_at = NOW()
+                WHERE style_key = 'realistic-3d'
+                """);
         statement.execute("""
                 UPDATE drama_asset
                 SET image_prompt = REPLACE(
                         image_prompt,
                         '真人3D风，电影级三维渲染，次世代数字人质感，皮肤次表面散射，电影布光与浅景深，当代都市常服，不要卡通平涂线稿，不要古装，不要武侠仙侠',
-                        '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠'),
+                        '现代写实风，真人实拍定妆与极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质'),
                     description = REPLACE(
                         description,
                         '真人3D风，电影级三维渲染，次世代数字人质感，皮肤次表面散射，电影布光与浅景深，当代都市常服，不要卡通平涂线稿，不要古装，不要武侠仙侠',
-                        '真人3D风，photorealistic CGI digital human，电影级仿真人数字人，高预算影视光影，真实人体比例，细腻自然的皮肤纹理与次表面散射，真实眼球与独立发丝，自然布料褶皱，原创虚构 CG 角色，不要动漫卡通，不要塑料玩偶皮肤，不要夸张五官，不要粗糙动画，不要古装，不要武侠仙侠'),
+                        '现代写实风，真人实拍定妆与极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质'),
                     updated_at = NOW()
                 WHERE COALESCE(image_prompt, '') LIKE '%次世代数字人质感，皮肤次表面散射，电影布光与浅景深%'
                    OR COALESCE(description, '') LIKE '%次世代数字人质感，皮肤次表面散射，电影布光与浅景深%'
+                """);
+        // 同名旧前缀（真人3D 改名前残留的 prefix 文本）也一并刷新。
+        statement.execute("""
+                UPDATE drama_asset
+                SET image_prompt = REPLACE(
+                        image_prompt,
+                        '真人3D风，极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠',
+                        '现代写实风，真人实拍定妆与极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，棚拍柔光与自然肤质，清晰五官与独立发丝，真实布料与妆造质感，商业人像与杂志写真质感，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠，不要平涂线稿'),
+                    description = REPLACE(
+                        description,
+                        '真人3D风，极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠',
+                        '现代写实风，真人实拍定妆与极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，棚拍柔光与自然肤质，清晰五官与独立发丝，真实布料与妆造质感，商业人像与杂志写真质感，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠，不要平涂线稿'),
+                    updated_at = NOW()
+                WHERE COALESCE(image_prompt, '') LIKE '%真人3D风，极致写实实拍摄影%'
+                   OR COALESCE(description, '') LIKE '%真人3D风，极致写实实拍摄影%'
                 """);
     }
 }

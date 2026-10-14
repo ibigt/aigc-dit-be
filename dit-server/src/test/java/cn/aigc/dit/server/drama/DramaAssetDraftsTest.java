@@ -134,15 +134,14 @@ class DramaAssetDraftsTest {
 
         assertTrue(luobai.getImagePrompt().contains("洛白角色设定图"));
         assertTrue(luobai.getImagePrompt().contains("单独站立"));
-        assertTrue(luobai.getImagePrompt().contains("真人写真定妆立绘"));
-        assertTrue(luobai.getImagePrompt().contains("现代都市常服"));
-        assertTrue(luobai.getImagePrompt().contains("禁止古装武侠汉服仙侠"));
-        assertTrue(luobai.getImagePrompt().contains("固定四格设定拼版"));
-        assertTrue(luobai.getImagePrompt().contains("禁止正面大头照"));
+        // 现代写实风（原真人3D风）走真人实拍定妆转面骨架：正脸近景 + 严格 90 度侧面 + 纯白无缝底
+        assertTrue(luobai.getImagePrompt().contains("真人实拍定妆"));
+        assertTrue(luobai.getImagePrompt().contains("旁边一张正脸近景"));
+        assertTrue(luobai.getImagePrompt().contains("严格 90 度侧面"));
+        assertTrue(luobai.getImagePrompt().contains("纯白无缝底"));
         assertTrue(luobai.getImagePrompt().contains("外形与服装必须符合：男性；青年；锐利眼神；冷峻气质；修长身形"));
         assertTrue(!luobai.getImagePrompt().contains("面部特写"));
-        assertTrue(luobai.getImagePrompt().contains("浅灰或纯白干净背景"));
-        assertTrue(luobai.getImagePrompt().contains("不要剧情场面"));
+        assertTrue(!luobai.getImagePrompt().contains("固定四格设定拼版"));
         assertTrue(!luobai.getImagePrompt().contains("身份与外形"));
         assertTrue(luobai.getImagePrompt().length() > 80);
     }
@@ -329,7 +328,7 @@ class DramaAssetDraftsTest {
                 spec,
                 null,
                 null);
-        // 走 photoreal 角色骨架（跟 LIVE_REALISM / REALISTIC_3D / NEON_CYBER 同组）
+        // 走 photoreal 角色骨架（跟 LIVE_REALISM / GUOFENG_3D / NEON_CYBER 同组）
         assertTrue(prompt.contains("洛白角色设定图"));
         assertTrue(prompt.contains("固定四格设定拼版"));
         assertTrue(prompt.contains("3/4 侧脸"));
@@ -355,78 +354,88 @@ class DramaAssetDraftsTest {
     }
 
     @Test
-    void liveRealismCharacterPromptUsesFixedSheetWithoutFrontalMugshot() {
-        String prefix = DramaStyles.require(DramaStyles.LIVE_REALISM).prefix();
-        assertTrue(prefix.contains("真人实拍写真摄影"));
-        assertTrue(prefix.contains("商业人像与杂志写真质感"));
-        assertTrue(prefix.contains("不要二次元卡通"));
-        assertTrue(prefix.contains("不要3D国漫厚涂"));
+    void liveRealismCharacterPromptUsesRealPhotoTurnaroundAndPureWhiteBackground() {
+        // 现代写实风（原真人3D风）的角色提示词：真人实拍定妆转面 + 纯白无缝底。
+        DramaStyles.Spec spec = DramaStyles.require(DramaStyles.LIVE_REALISM);
+        String prefix = spec.prefix();
+        assertTrue(prefix.contains("真人实拍定妆与极致写实实拍摄影"));
+        assertTrue(prefix.contains("自然肤质与可见毛孔"));
+        assertTrue(prefix.contains("窗户光与现场实用光"));
+        assertTrue(prefix.contains("35mm 电影镜头"));
         assertTrue(!prefix.contains("二次元写实"));
         assertTrue(!prefix.contains("半写实3D渲染"));
+        assertTrue(!prefix.contains("photorealistic CGI"));
 
         String prompt = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
                 "洛白",
                 DramaContract.STATE_TAG_BASE,
-                DramaStyles.require(DramaStyles.LIVE_REALISM),
+                spec,
                 null,
                 "男性；青年；锐利眼神；冷峻气质；修长身形");
         assertTrue(prompt.contains("洛白角色设定图"));
         assertTrue(prompt.contains("单独站立"));
-        assertTrue(prompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂"));
-        assertTrue(prompt.contains("固定四格设定拼版"));
-        assertTrue(prompt.contains("3/4 侧脸或 3/4 半身肖像"));
-        assertTrue(prompt.contains("全身三视图站立（正面、侧面、背面）"));
-        assertTrue(prompt.contains("禁止正面大头照"));
-        assertTrue(prompt.contains("不得只出单人全身单帧"));
+        assertTrue(prompt.contains("真人实拍定妆，可见毛孔与独立发丝"));
+        assertTrue(prompt.contains("侧光或单灯打在脸上"));
+        assertTrue(prompt.contains("旁边一张正脸近景"));
+        assertTrue(prompt.contains("严格 90 度侧面"));
+        assertTrue(prompt.contains("纯白无缝底"));
+        assertTrue(prompt.contains("纯白无缝背景"));
+        assertTrue(prompt.contains("禁止胸牌"));
+        assertTrue(prompt.contains("不是中性灰摄影棚"));
+        assertTrue(prompt.contains("不是三维模型展示台"));
         assertTrue(prompt.contains("外形与服装必须符合：男性；青年；锐利眼神；冷峻气质；修长身形"));
+        assertTrue(prompt.contains("角色图背景必须是纯白无缝底"));
+        assertTrue(prompt.contains(spec.prefix()));
+        // 拒绝旧四格 / 三视图 / 灰底棚拍
+        assertTrue(!prompt.contains("固定四格设定拼版"));
+        assertTrue(!prompt.contains("3/4 侧脸"));
         assertTrue(!prompt.contains("面部特写"));
-        assertTrue(!prompt.contains("正面半身大头照"));
-        assertTrue(!prompt.contains("单人 3/4 或正面全身为主"));
-        assertTrue(!prompt.contains("半写实 CG"));
-        assertTrue(!prompt.contains("非真人照片质感"));
-        assertTrue(prompt.contains("浅灰或纯白干净背景"));
-        assertTrue(prompt.contains("不要剧情场面"));
-        assertTrue(prompt.contains("真人实拍写真摄影"));
+        assertTrue(!prompt.contains("中性灰色摄影棚"));
+        assertTrue(!prompt.contains("靠窗的朴素墙面"));
+        assertTrue(!prompt.contains("禁止正面大头照"));
+        // 旧风格句残留
         assertTrue(!prompt.contains("身份与外形"));
         assertTrue(!prompt.contains("本图只画一名"));
         assertTrue(!prompt.contains("不要洛丽塔"));
 
-        String missingModern = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧："
+        // 旧「四格 + 现代都市常服 + 真人写真定妆」prompt 仍应被识别为 obsolete（因为它没有纯白定妆骨架与转面）。
+        String missingTurnaround = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧："
                 + "左侧一张 3/4 侧脸或 3/4 半身肖像，右侧全身三视图站立（正面、侧面、背面）横排对齐。"
                 + "禁止正面大头照、禁止正脸证件照特写、禁止摄影棚大脸特写拼版。"
                 + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
-                + "高精度二次元写实，半写实3D渲染。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+                + "真人写真定妆，现代都市常服。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                missingModern, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
+                missingTurnaround, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String softObsolete = "洛白角色设定图。单人 3/4 或正面全身为主，可附侧面半身；同一张图不要大脸特写拼版。浅灰或纯白干净背景。"
                 + "只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
-                + "高精度二次元写实，半写实3D渲染。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
+                + "真人写真定妆，现代都市常服。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 softObsolete, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
-        String animeLookExtra = DramaAssetDrafts.buildPrompt(
+        // 旧四格 prompt 里把 look 句改回 CG 风格，整段仍需重写
+        String cgiLookExtra = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
                 "洛白",
                 DramaContract.STATE_TAG_BASE,
-                DramaStyles.require(DramaStyles.LIVE_REALISM),
+                spec,
                 null,
                 null).replace(
-                "真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂。",
-                "半写实 CG 角色设定立绘、清晰五官与服装材质，3D国漫轻写实厚涂，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，非摄影棚证件照、非真人照片质感。");
+                "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。",
+                "半写实 CG 角色设定立绘、3D国漫轻写实厚涂，现代都市常服，非摄影棚证件照、非真人照片质感。");
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                animeLookExtra, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
+                cgiLookExtra, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         // 写实大类：场景实拍空镜、道具实拍静物
         String scene = DramaAssetDrafts.buildPrompt(
-                DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", DramaStyles.require(DramaStyles.LIVE_REALISM));
+                DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", spec);
         assertTrue(scene.contains("幻梦侦探社实拍空镜"));
         assertTrue(scene.contains("窗户光或现场实用光"));
         assertTrue(!scene.contains("场景概念图"));
         assertTrue(scene.contains("不要出现人物"));
         String prop = DramaAssetDrafts.buildPrompt(
-                DramaContract.ASSET_TYPE_PROP, "古铜怀表", DramaStyles.require(DramaStyles.LIVE_REALISM));
+                DramaContract.ASSET_TYPE_PROP, "古铜怀表", spec);
         assertTrue(prop.contains("古铜怀表实拍静物"));
         assertTrue(!prop.contains("道具设定图"));
         assertTrue(prop.contains("不要出现人物"));
@@ -434,7 +443,7 @@ class DramaAssetDraftsTest {
 
     @Test
     void guofeng3dUsesPhotorealSheetMatchingLiveRealismFamily() {
-        // 写实 tab 里的 GUOFENG_3D 与 LIVE_REALISM / REALISTIC_3D / NEON_CYBER 共用 photoreal 角色骨架，
+        // 写实 tab 里的 GUOFENG_3D 与 LIVE_REALISM / NEON_CYBER 共用 photoreal 角色骨架，
         // 并采用 LIVE_REALISM 那套 prefix 写实结构（高精度XX写实 + 半写实3D渲染 + 3D国漫轻写实厚涂）。
         DramaStyles.Spec guofeng = DramaStyles.require(DramaStyles.GUOFENG_3D);
         String guofengPrompt = DramaAssetDrafts.buildPrompt(
@@ -455,9 +464,11 @@ class DramaAssetDraftsTest {
         assertTrue(!guofengPrompt.contains("同一张图内三视图排列"));
         assertTrue(!guofengPrompt.contains("半写实国风 CG 角色设定立绘"));
 
-        DramaStyles.Spec realistic = DramaStyles.require(DramaStyles.REALISTIC_3D);
-        assertEquals("真人3D风", realistic.name());
-        assertTrue(realistic.prefix().startsWith("真人3D风，极致写实实拍摄影"));
+        // 旧「真人3D风」已合并到「现代写实风」(LIVE_REALISM)：测试统一走 LIVE_REALISM。
+        DramaStyles.Spec realistic = DramaStyles.require(DramaStyles.LIVE_REALISM);
+        assertEquals("现代写实风", realistic.name());
+        assertTrue(realistic.prefix().startsWith("现代写实风"));
+        assertTrue(realistic.prefix().contains("真人实拍定妆与极致写实实拍摄影"));
         assertTrue(realistic.prefix().length() <= 512);
         assertTrue(!realistic.prefix().contains("photorealistic CGI"));
         assertTrue(!realistic.prefix().contains("电影级仿真人数字人"));
@@ -498,37 +509,37 @@ class DramaAssetDraftsTest {
         assertTrue(!realisticPrompt.contains("25 岁"));
         assertTrue(!realisticPrompt.contains("浅蓝白色中国古典长裙"));
         assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                realisticPrompt, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String handEdited = realisticPrompt + "手改：左颊有一颗小痣。";
         assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                handEdited, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                handEdited, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String roomCorner = "洛白角色设定图。真人实拍定妆，窗户光或单灯打在脸上。"
                 + "同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景。"
                 + "背景是靠窗的朴素墙面或真实房间一角，不是中性灰摄影棚，不是三维模型展示台。"
                 + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                roomCorner, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                roomCorner, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String greyStudio = "洛白角色设定图。真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄。"
                 + "同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景。"
                 + "中性灰色摄影棚实拍背景，真实相机拍摄，不是三维模型展示台。"
                 + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                greyStudio, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                greyStudio, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String oldCgiSheet = "洛白角色设定图。影视级仿真人数字人，photorealistic CGI digital human。"
                 + "同一张图必须做成影视级虚拟角色设定板：左侧旁边一张正脸特写，右侧是严格属于同一个角色的正面、严格 90 度侧面、背面三个全身视图。"
                 + "中性灰色摄影棚背景。同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                oldCgiSheet, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                oldCgiSheet, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String oldRealistic = "洛白角色设定图。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧。"
                 + "禁止正面大头照。现代都市常服。电影级三维角色设定，次世代数字人质感，非真人照片质感。"
                 + "同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                oldRealistic, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                oldRealistic, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String threeView = "洛白角色设定图。同一张图内三视图排列：正面全身、侧面半身、面部特写。"
                 + "浅灰或纯白干净背景。只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。"
@@ -536,8 +547,9 @@ class DramaAssetDraftsTest {
         // GUOFENG_3D 改走 photoreal 骨架（旧三视图 → 新固定四格），三视图 prompt 在 GUOFENG_3D 下应被识别为 obsolete
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.GUOFENG_3D));
+        // 现代写实风走强骨架：旧三视图也属于 obsolete
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.REALISTIC_3D));
+                threeView, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
         String scene = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", realistic);
@@ -550,12 +562,12 @@ class DramaAssetDraftsTest {
         assertTrue(!scene.contains("广角全景"));
         assertTrue(!scene.contains("对称构图"));
         assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                scene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+                scene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.LIVE_REALISM));
 
         String oldScene = "幻梦侦探社场景概念图。场景名称：幻梦侦探社。只描述可固定复用的空间环境，不要写人物动作、对白或剧情事件。"
                 + "建筑结构、空间布局、环境陈设和关键道具交代清楚。场景概念图，画面中不要出现人物。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+                oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.LIVE_REALISM));
         // 写实大类（含古风写实）的旧概念图场景自动重拼成实拍空镜
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.GUOFENG_3D));
@@ -564,7 +576,7 @@ class DramaAssetDraftsTest {
                 + "窗户光或现场实用光，真实相机拍摄的空镜，电影分镜视角，如广角全景、低机位、俯拍或对称构图。"
                 + "实拍空镜，画面中不要出现人物。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                oldWide, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
+                oldWide, DramaContract.ASSET_TYPE_SCENE, DramaStyles.LIVE_REALISM));
 
         String prop = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_PROP, "古铜怀表", realistic);
@@ -575,13 +587,13 @@ class DramaAssetDraftsTest {
         assertTrue(prop.contains(realistic.prefix()));
         assertTrue(!prop.contains("道具设定图"));
         assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
-                prop, DramaContract.ASSET_TYPE_PROP, DramaStyles.REALISTIC_3D));
+                prop, DramaContract.ASSET_TYPE_PROP, DramaStyles.LIVE_REALISM));
 
         String oldProp = "古铜怀表道具设定图。完整展示外形、材质、磨损和标志性细节，可被手持或放置。"
                 + "正面与微距特写，纯色干净背景，静物产品级清晰。画面中不要出现人物。"
                 + "同一道具在不同镜头里外形必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
-                oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.REALISTIC_3D));
+                oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.LIVE_REALISM));
         // 写实大类（含真人写实）的旧设定图道具自动重拼成实拍静物
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.LIVE_REALISM));
@@ -589,12 +601,11 @@ class DramaAssetDraftsTest {
 
     @Test
     void realisticCategoryStylesShareLiveActionTemplates() {
-        // 写实大类 4 风格（真人写实 / 真人3D / 古风写实 / 霓虹赛博）都在写实基础上实现：
-        // 角色为真人定妆拼版（真人3D 为加强定妆转面）、场景为实拍空镜、道具为实拍静物，
+        // 写实大类 3 风格（现代写实 / 古风写实 / 霓虹赛博）都在写实基础上实现：
+        // 现代写实用加强定妆转面、其余用真人写真四格设定表；场景为实拍空镜、道具为实拍静物，
         // 且各自叠加自己的题材服饰句与风格句；动漫大类保持概念图 / 设定图分支。
         java.util.Set<String> realisticKeys = java.util.Set.of(
                 DramaStyles.LIVE_REALISM,
-                DramaStyles.REALISTIC_3D,
                 DramaStyles.GUOFENG_3D,
                 DramaStyles.NEON_CYBER);
         for (DramaStyles.Spec spec : DramaStyles.all()) {
@@ -609,7 +620,8 @@ class DramaAssetDraftsTest {
                     spec,
                     null,
                     null);
-            if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+            if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+                // 现代写实用加强定妆转面骨架：正脸近景 + 严格 90 度侧面。
                 assertTrue(prompt.contains("真人实拍定妆"), spec.key());
                 assertTrue(prompt.contains("严格 90 度侧面"), spec.key());
             } else {

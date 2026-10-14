@@ -21,9 +21,14 @@ public final class DramaStyles {
     public static final String CYBERPUNK = "cyberpunk";
     public static final String SCI_FI = "sci-fi";
     public static final String RURAL = "rural";
-    public static final String REALISTIC_3D = "realistic-3d";
     public static final String GUOFENG_3D = "guofeng-3d";
     public static final String NEON_CYBER = "neon-cyber";
+
+    /**
+     * 旧别名：曾独立存在的「真人3D风」，已合并到 {@link #LIVE_REALISM}「现代写实风」。
+     * 仅用于历史数据回退与迁移识别，注册表不再收录。
+     */
+    public static final String LEGACY_REALISTIC_3D = "realistic-3d";
 
     /** 风格大类：写实（4 风格共用实拍级模板规则）与动漫（共用现骨架）。 */
     public static final String CATEGORY_REALISTIC = "realistic";
@@ -43,8 +48,8 @@ public final class DramaStyles {
                 CATEGORY_ANIME));
         register(new Spec(
                 LIVE_REALISM,
-                "真人写实风",
-                "真人写实风，真人实拍写真摄影，棚拍柔光与自然肤质，清晰五官与独立发丝，真实布料与妆造质感，浅景深，商业人像与杂志写真质感，不要二次元卡通，不要3D国漫厚涂，不要CG数字人，不要塑料皮肤，不要平涂线稿",
+                "现代写实风",
+                "现代写实风，真人实拍定妆与极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，棚拍柔光与自然肤质，清晰五官与独立发丝，真实布料与妆造质感，商业人像与杂志写真质感，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠，不要平涂线稿",
                 "/drama/styles/live-realism.jpg",
                 CATEGORY_REALISTIC));
         register(new Spec(
@@ -83,12 +88,6 @@ public final class DramaStyles {
                 "乡土漫画风，朴实漫画作画，田野村庄与黄土老屋，烟火日常与朴素人物，温暖大地色系，清晰线稿，田园生活气息，电影分镜构图，不要真实人脸，不要古装，不要 3D 写实",
                 "/drama/styles/rural.jpg",
                 CATEGORY_ANIME));
-        register(new Spec(
-                REALISTIC_3D,
-                "真人3D风",
-                "真人3D风，极致写实实拍摄影，当代电影质感，自然肤质与可见毛孔，真实眼球与独立发丝，窗户光与现场实用光，浅景深，35mm 电影镜头，轻微胶片颗粒，真实布料与空间材质，不要 3D 渲染，不要 CG 数字人，不要游戏角色，不要塑料皮肤，不要二次元卡通，不要无影棚拍大平光，不要古装，不要武侠仙侠",
-                "/drama/styles/realistic-3d.jpg",
-                CATEGORY_REALISTIC));
         register(new Spec(
                 GUOFENG_3D,
                 "古风写实风",
@@ -148,13 +147,18 @@ public final class DramaStyles {
 
     /**
      * 列表/详情展示用：未知或已下线的 style_key 回退到二次元漫画风，避免整表加载失败。
+     * 已知历史 key（旧「真人3D风」）自动别名到现代写实风。
      * 创建/改风格仍走 {@link #require(String)}。
      */
     public static Spec resolveOrDefault(String styleKey) {
         if (!StringUtils.hasText(styleKey)) {
             return require(ANIME_COMIC);
         }
-        Spec spec = BY_KEY.get(styleKey.trim());
+        String key = styleKey.trim();
+        if (LEGACY_REALISTIC_3D.equals(key)) {
+            return require(LIVE_REALISM);
+        }
+        Spec spec = BY_KEY.get(key);
         return spec != null ? spec : require(ANIME_COMIC);
     }
 

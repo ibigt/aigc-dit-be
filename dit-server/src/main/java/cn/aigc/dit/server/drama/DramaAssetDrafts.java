@@ -262,7 +262,8 @@ public final class DramaAssetDrafts {
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
         }
-        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+            // 现代写实风：真人实拍定妆转面，纯白无缝底。骨架最严，照片锚点最强。
             text.append("同一张图必须做成同一人的真人实拍定妆：左侧旁边一张正脸近景，右侧是严格属于同一个人的正面、严格 90 度侧面、背面三个全身视图。");
             text.append("正脸近景只取头部和肩部，面部正对镜头，侧光或单灯打在脸上，看清毛孔、皱纹、眼球反射和发丝，与三个全身是同一张脸。");
             text.append("禁止均匀大平光，禁止蜡像磨皮。中年或老年必须看见皱纹、眼袋和松弛皮肤，禁止磨成青年脸。");
@@ -276,7 +277,7 @@ public final class DramaAssetDrafts {
             text.append("禁止 3D 渲染、CG 数字人、游戏角色、塑料皮肤、动漫卡通、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
             text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景。");
         } else if (spec.realistic()) {
-            // 写实大类共用：真人写真四格设定表，半身用 3/4 侧脸，避免正面大头照。
+            // 写实大类（古风写实 / 霓虹赛博）共用：真人写真四格设定表，半身用 3/4 侧脸，避免正面大头照。
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
             text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
@@ -295,7 +296,7 @@ public final class DramaAssetDrafts {
             text.append("外形与服装必须符合：").append(identity.trim()).append("。");
         }
         text.append(spec.prefix()).append("。");
-        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
             text.append("角色图背景必须是纯白无缝底，不要把风格句里的窗户或房间画进画面。");
         }
         text.append("同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。");
@@ -319,7 +320,7 @@ public final class DramaAssetDrafts {
         }
         if (spec.realistic()) {
             return switch (spec.key()) {
-                case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
+                case DramaStyles.LIVE_REALISM -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
                 case DramaStyles.GUOFENG_3D -> "真人写真定妆，真实相机棚拍柔光与自然肤质，独立发丝与皮肤纹理清晰，"
                         + "清晰五官与汉服材质，国风古典妆造，汉服广袖与发冠金饰，"
                         + "禁止现代西装夹克与运动鞋，禁止二次元卡通与3D国漫厚涂。";
@@ -594,7 +595,7 @@ public final class DramaAssetDrafts {
         if (StringUtils.hasText(type) && !DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
             return false;
         }
-        if (DramaStyles.REALISTIC_3D.equals(styleKey)) {
+        if (DramaStyles.LIVE_REALISM.equals(styleKey)) {
             // 纯白底定妆保留。靠窗房间或灰底棚拍的旧句整段重写。
             if (prompt.contains("纯白无缝背景") && !prompt.contains("靠窗的朴素墙面")) {
                 return false;
@@ -614,7 +615,7 @@ public final class DramaAssetDrafts {
                     || prompt.contains("单人 3/4 或正面全身为主")
                     || prompt.contains("不要大脸特写拼版");
         }
-        // 已是含真人写真定妆句的新版固定四格则保留。
+        // 写实大类其余（古风写实 / 霓虹赛博）共用旧逻辑：固定四格+真人写真定妆句视为新版。
         if (prompt.contains("固定四格设定拼版")
                 && prompt.contains("禁止正面大头照")
                 && prompt.contains("真人写真定妆")
