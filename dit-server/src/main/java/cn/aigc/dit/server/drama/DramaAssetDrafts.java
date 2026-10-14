@@ -11,11 +11,12 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * 资产页自动提示词模板。多数风格共用二次元漫画风的同一骨架，只替换风格句；
- * 其它风格可在服装句后追加一句服饰/材质。
- * {@link DramaStyles#LIVE_REALISM} 角色图用四格设定表，半身取 3/4 侧脸，避免正面大头照；风格句为真人写真实拍。
- * {@link DramaStyles#REALISTIC_3D} 角色图用真人实拍定妆转面：旁边一张正脸近景，加正面、严格 90 度侧面、背面三个全身；
- * 场景是实拍空镜，道具是实拍静物。只换风格与构图，不写死某一个人的年龄、发型和服装。
+ * 资产页自动提示词模板。按大类分流：
+ * 动漫大类共用二次元漫画风的同一骨架，只替换风格句与服饰句；
+ * 写实大类（真人写实 / 真人3D / 古风写实 / 霓虹赛博）参照真人写实风提取共用实拍级规则——
+ * 角色为真人写真定妆拼版（真人3D 用更强的实拍定妆转面：正脸近景 + 正面、严格 90 度侧面、背面三个全身），
+ * 场景为实拍空镜（窗户光或现场实用光、使用磨损、平视拍摄），道具为实拍静物；
+ * 各风格再叠加题材服饰句。只换风格与构图，不写死某一个人的年龄、发型和服装。
  * 仅影响之后新生成的 {@code imagePrompt}；已锁定旧图需用户重抽才换像素。
  */
 public final class DramaAssetDrafts {
@@ -239,8 +240,8 @@ public final class DramaAssetDrafts {
             text.append("禁止胸牌、警号、姓名牌、编号、水印、标志、英文标语和任何可读文字。");
             text.append("禁止 3D 渲染、CG 数字人、游戏角色、塑料皮肤、动漫卡通、夸张眼睛、不真实身体比例、不一致的五官发型服装、");
             text.append("多余肢体、多余或缺失手指、裁切手脚和头部、模糊、过曝、杂乱背景。");
-        } else if (usesPhotorealCharacterSheet(spec.key())) {
-            // 真人写真：四格设定表，半身用 3/4 侧脸，避免正面大头照。
+        } else if (spec.realistic()) {
+            // 写实大类共用：真人写真四格设定表，半身用 3/4 侧脸，避免正面大头照。
             text.append("同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
             text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
             text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
@@ -263,22 +264,40 @@ public final class DramaAssetDrafts {
         return text.toString();
     }
 
+    /** 写实大类底句（参照真人写实风提取）：定妆形态 + 真实相机 + 清晰五官与材质。 */
+    static final String PHOTOREAL_LOOK_BASE =
+            "真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，";
+
+    /** 写实大类收尾反卡通句。 */
+    static final String PHOTOREAL_LOOK_SUFFIX = "，禁止二次元卡通与3D国漫厚涂。";
+
     /**
-     * 二次元漫画风不加句。其它风格只追加一句服饰/材质；真人写实风强调写真实拍定妆。
+     * 二次元漫画风不加句。其它风格追加一句服饰/材质。
+     * 写实大类共用底句 + 各自题材服饰句；真人3D 在写实基础上用更强的实拍定妆句。
      */
     static String styleLookExtra(DramaStyles.Spec spec) {
         if (spec == null) {
             return "";
         }
+        if (spec.realistic()) {
+            return switch (spec.key()) {
+                case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
+                case DramaStyles.GUOFENG_3D -> PHOTOREAL_LOOK_BASE
+                        + "国风古典妆造，汉服广袖与发冠金饰，禁止现代西装夹克与运动鞋"
+                        + PHOTOREAL_LOOK_SUFFIX;
+                case DramaStyles.NEON_CYBER -> PHOTOREAL_LOOK_BASE
+                        + "赛博都市发型妆造，机能外套与金属义体发光接口清晰可见，禁止古装汉服，禁止证件照大平光"
+                        + PHOTOREAL_LOOK_SUFFIX;
+                default -> PHOTOREAL_LOOK_BASE
+                        + "现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰"
+                        + PHOTOREAL_LOOK_SUFFIX;
+            };
+        }
         return switch (spec.key()) {
-            case DramaStyles.LIVE_REALISM -> "真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质，现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰，禁止二次元卡通与3D国漫厚涂。";
-            case DramaStyles.REALISTIC_3D -> "真人实拍定妆，可见毛孔与独立发丝，真实相机拍摄，侧光或单灯打在脸上，纯白无缝背景，禁止均匀大平光、房间、窗户、墙角、3D 渲染、CG 数字人、游戏角色、塑料皮肤与蜡像磨皮。服装、发型与年龄以该角色自身设定为准，禁止无故改成古装武侠汉服仙侠，禁止胸牌、编号和可读文字。";
             case DramaStyles.ANIME_WUXIA -> "古装武侠人物，服饰飘逸，可佩刀剑，不要现代西装夹克或运动鞋。";
             case DramaStyles.COSTUME_COMIC -> "古风汉服人物，广袖裙裾与发饰清晰，不要现代西装夹克或运动鞋。";
-            case DramaStyles.GUOFENG_3D -> "国风真人写真定妆立绘，真实相机棚拍柔光，清晰五官与汉服材质，汉服广袖与发冠金饰，古典妆造，禁止现代西装夹克与运动鞋，禁止二次元卡通与3D国漫厚涂。";
             case DramaStyles.REPUBLICAN_ERA -> "民国人物，旗袍长衫或洋装礼帽，面料与纹样清晰，不要古装广袖。";
             case DramaStyles.CYBERPUNK -> "机能外套与科技面料，可有义体接口，不要古装汉服。";
-            case DramaStyles.NEON_CYBER -> "赛博真人写真定妆立绘，真实相机霓虹柔光，清晰五官与科技面料材质，机能外套与金属义体发光接口清晰可见，现代都市发型妆造，禁止古装汉服，禁止二次元卡通与3D国漫厚涂，禁止证件照大平光。";
             case DramaStyles.SCI_FI -> "科幻制服或轻型防护装，金属与合成面料清晰，不要古装。";
             case DramaStyles.RURAL -> "朴素布衣、粗布棉麻与日常劳作装，不要华服礼服或古装。";
             default -> "";
@@ -287,7 +306,8 @@ public final class DramaAssetDrafts {
 
     private static String scenePrompt(String name, DramaStyles.Spec spec, Context context, String identity) {
         String styleLine = spec.prefix();
-        boolean liveAction = DramaStyles.REALISTIC_3D.equals(spec.key());
+        // 写实大类共用实拍空镜规则；动漫大类走概念图分支。
+        boolean liveAction = spec.realistic();
         StringBuilder text = new StringBuilder();
         text.append(name).append(liveAction ? "实拍空镜。" : "场景概念图。");
         text.append("场景名称：").append(name).append("。");
@@ -331,7 +351,7 @@ public final class DramaAssetDrafts {
     private static String propPrompt(String name, DramaStyles.Spec spec) {
         String styleLine = spec.prefix();
         StringBuilder text = new StringBuilder();
-        if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+        if (spec.realistic()) {
             text.append(name).append("实拍静物。");
             text.append("真实相机拍摄，完整展示外形、材质、磨损和标志性细节，可被手持或放置。");
             text.append("正面与微距特写，干净背景。");
@@ -439,8 +459,8 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * @param type     资产类型；写实风仅对角色识别「三视图+面部特写」旧骨架。真人3D 还会替换旧 CGI 角色句、场景概念图和道具设定图
-     * @param styleKey 项目风格；非写实/真人 3D 时不因面部特写句失效
+     * @param type     资产类型；写实大类仅对角色识别「三视图+面部特写」旧骨架，并替换旧 CGI 角色句、场景概念图和道具设定图
+     * @param styleKey 项目风格；非写实大类时不因面部特写句失效
      */
     public static boolean shouldReplaceImagePrompt(String prompt, String type, String styleKey) {
         if (!StringUtils.hasText(prompt)) {
@@ -466,7 +486,7 @@ public final class DramaAssetDrafts {
         if (isObsoleteScenePromptWithPlotAction(prompt, type)) {
             return true;
         }
-        if (isObsoleteRealistic3dSceneOrProp(prompt, type, styleKey)) {
+        if (isObsoleteRealisticSceneOrProp(prompt, type, styleKey)) {
             return true;
         }
         // 写实风旧角色设定表（白底三视图含面部特写）在打开资产页 / 生图时自动换成新骨架，无需手改库。
@@ -474,10 +494,10 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * 真人3D 的场景、道具若仍是概念图 / 设定图旧句，打开资产页或生图时整段重写成实拍空镜、实拍静物。
+     * 写实大类（4 风格）的场景、道具若仍是概念图 / 设定图旧句，打开资产页或生图时整段重写成实拍空镜、实拍静物。
      */
-    static boolean isObsoleteRealistic3dSceneOrProp(String prompt, String type, String styleKey) {
-        if (!DramaStyles.REALISTIC_3D.equals(styleKey) || !StringUtils.hasText(prompt)) {
+    static boolean isObsoleteRealisticSceneOrProp(String prompt, String type, String styleKey) {
+        if (!DramaStyles.isRealistic(styleKey) || !StringUtils.hasText(prompt)) {
             return false;
         }
         if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
@@ -505,7 +525,7 @@ public final class DramaAssetDrafts {
     }
 
     static boolean isObsoleteLiveRealismCharacterSheet(String prompt, String type, String styleKey) {
-        if (!usesPhotorealCharacterSheet(styleKey) || !StringUtils.hasText(prompt)) {
+        if (!DramaStyles.isRealistic(styleKey) || !StringUtils.hasText(prompt)) {
             return false;
         }
         if (StringUtils.hasText(type) && !DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
@@ -550,13 +570,6 @@ public final class DramaAssetDrafts {
                 || prompt.contains("3D国漫轻写实")
                 || prompt.contains("非真人照片质感")
                 || (prompt.contains("固定四格设定拼版") && !prompt.contains("真人写真定妆"));
-    }
-
-    private static boolean usesPhotorealCharacterSheet(String styleKey) {
-        return DramaStyles.LIVE_REALISM.equals(styleKey)
-                || DramaStyles.REALISTIC_3D.equals(styleKey)
-                || DramaStyles.GUOFENG_3D.equals(styleKey)
-                || DramaStyles.NEON_CYBER.equals(styleKey);
     }
 
     private static String specKey(DramaStyles.Spec style) {

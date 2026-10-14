@@ -196,10 +196,7 @@ class DramaAssetDraftsTest {
         String identity = "男性；青年；锐利眼神；冷峻气质；修长身形";
         String baseline = null;
         for (DramaStyles.Spec spec : DramaStyles.all()) {
-            if (DramaStyles.LIVE_REALISM.equals(spec.key())
-                    || DramaStyles.REALISTIC_3D.equals(spec.key())
-                    || DramaStyles.GUOFENG_3D.equals(spec.key())
-                    || DramaStyles.NEON_CYBER.equals(spec.key())) {
+            if (DramaStyles.isRealistic(spec.key())) {
                 continue;
             }
             String prompt = DramaAssetDrafts.buildPrompt(
@@ -263,7 +260,9 @@ class DramaAssetDraftsTest {
         assertTrue(!spec.prefix().contains("半写实3D渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
-        assertTrue(extra.contains("赛博真人写真定妆立绘"));
+        // 写实大类底句 + 赛博题材句
+        assertTrue(extra.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        assertTrue(extra.contains("赛博都市发型妆造"));
         assertTrue(extra.contains("机能外套"));
         assertTrue(extra.contains("禁止古装汉服"));
         assertTrue(extra.contains("禁止二次元卡通与3D国漫厚涂"));
@@ -283,11 +282,12 @@ class DramaAssetDraftsTest {
         assertTrue(!prompt.contains("同一张图内三视图排列"));
         assertTrue(prompt.contains(extra));
 
-        // 场景走通用概念图分支（不启用 REALISTIC_3D 那种实拍空镜 + 窗户光）
+        // 写实大类共用实拍空镜分支（与真人3D 同款窗户光 / 平视拍摄约束）
         String scene = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_SCENE, "霓虹街", spec);
-        assertTrue(scene.contains("霓虹街场景概念图"));
-        assertTrue(!scene.contains("实拍空镜"));
+        assertTrue(scene.contains("霓虹街实拍空镜"));
+        assertTrue(scene.contains("窗户光或现场实用光"));
+        assertTrue(!scene.contains("场景概念图"));
     }
 
     @Test
@@ -309,10 +309,11 @@ class DramaAssetDraftsTest {
         assertTrue(!spec.prefix().contains("高精度三维国风渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
-        // styleLookExtra 同样走真人写真定妆路线（跟 LIVE_REALISM 的"真人写真定妆立绘"对齐）
-        assertTrue(extra.contains("国风真人写真定妆立绘"));
-        assertTrue(extra.contains("真实相机棚拍柔光"));
+        // styleLookExtra = 写实大类底句 + 国风题材句
+        assertTrue(extra.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        assertTrue(extra.contains("国风古典妆造"));
         assertTrue(extra.contains("汉服广袖与发冠金饰"));
+        assertTrue(extra.contains("禁止现代西装夹克与运动鞋"));
         assertTrue(extra.contains("禁止二次元卡通与3D国漫厚涂"));
 
         String prompt = DramaAssetDrafts.buildPrompt(
@@ -411,13 +412,17 @@ class DramaAssetDraftsTest {
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 animeLookExtra, DramaContract.ASSET_TYPE_CHARACTER, DramaStyles.LIVE_REALISM));
 
+        // 写实大类：场景实拍空镜、道具实拍静物
         String scene = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", DramaStyles.require(DramaStyles.LIVE_REALISM));
-        assertTrue(scene.contains("幻梦侦探社场景概念图"));
+        assertTrue(scene.contains("幻梦侦探社实拍空镜"));
+        assertTrue(scene.contains("窗户光或现场实用光"));
+        assertTrue(!scene.contains("场景概念图"));
         assertTrue(scene.contains("不要出现人物"));
         String prop = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_PROP, "古铜怀表", DramaStyles.require(DramaStyles.LIVE_REALISM));
-        assertTrue(prop.contains("古铜怀表道具设定图"));
+        assertTrue(prop.contains("古铜怀表实拍静物"));
+        assertTrue(!prop.contains("道具设定图"));
         assertTrue(prop.contains("不要出现人物"));
     }
 
@@ -433,7 +438,8 @@ class DramaAssetDraftsTest {
                 guofeng,
                 null,
                 "女性；青年");
-        assertTrue(guofengPrompt.contains("国风真人写真定妆立绘"));
+        assertTrue(guofengPrompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质"));
+        assertTrue(guofengPrompt.contains("国风古典妆造"));
         assertTrue(guofengPrompt.contains("固定四格设定拼版"));
         assertTrue(guofengPrompt.contains("3/4 侧脸"));
         assertTrue(guofengPrompt.contains(guofeng.prefix()));
@@ -541,7 +547,8 @@ class DramaAssetDraftsTest {
                 + "建筑结构、空间布局、环境陈设和关键道具交代清楚。场景概念图，画面中不要出现人物。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.REALISTIC_3D));
-        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+        // 写实大类（含古风写实）的旧概念图场景自动重拼成实拍空镜
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldScene, DramaContract.ASSET_TYPE_SCENE, DramaStyles.GUOFENG_3D));
 
         String oldWide = "幻梦侦探社实拍空镜。场景名称：幻梦侦探社。只描述可固定复用的空间环境。"
@@ -566,8 +573,69 @@ class DramaAssetDraftsTest {
                 + "同一道具在不同镜头里外形必须保持一致。";
         assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.REALISTIC_3D));
-        assertTrue(!DramaAssetDrafts.shouldReplaceImagePrompt(
+        // 写实大类（含真人写实）的旧设定图道具自动重拼成实拍静物
+        assertTrue(DramaAssetDrafts.shouldReplaceImagePrompt(
                 oldProp, DramaContract.ASSET_TYPE_PROP, DramaStyles.LIVE_REALISM));
+    }
+
+    @Test
+    void realisticCategoryStylesShareLiveActionTemplates() {
+        // 写实大类 4 风格（真人写实 / 真人3D / 古风写实 / 霓虹赛博）都在写实基础上实现：
+        // 角色为真人定妆拼版（真人3D 为加强定妆转面）、场景为实拍空镜、道具为实拍静物，
+        // 且各自叠加自己的题材服饰句与风格句；动漫大类保持概念图 / 设定图分支。
+        java.util.Set<String> realisticKeys = java.util.Set.of(
+                DramaStyles.LIVE_REALISM,
+                DramaStyles.REALISTIC_3D,
+                DramaStyles.GUOFENG_3D,
+                DramaStyles.NEON_CYBER);
+        for (DramaStyles.Spec spec : DramaStyles.all()) {
+            if (!realisticKeys.contains(spec.key())) {
+                continue;
+            }
+            assertTrue(spec.realistic(), spec.key());
+            String prompt = DramaAssetDrafts.buildPrompt(
+                    DramaContract.ASSET_TYPE_CHARACTER,
+                    "洛白",
+                    DramaContract.STATE_TAG_BASE,
+                    spec,
+                    null,
+                    null);
+            if (DramaStyles.REALISTIC_3D.equals(spec.key())) {
+                assertTrue(prompt.contains("真人实拍定妆"), spec.key());
+                assertTrue(prompt.contains("严格 90 度侧面"), spec.key());
+            } else {
+                assertTrue(prompt.contains("固定四格设定拼版"), spec.key());
+                assertTrue(prompt.contains("3/4 侧脸"), spec.key());
+            }
+            assertTrue(prompt.contains("真人写真定妆立绘，真实相机棚拍柔光，清晰五官与服装材质")
+                    || prompt.contains("真人实拍定妆，可见毛孔与独立发丝"), spec.key());
+            assertTrue(prompt.contains(spec.prefix()), spec.key());
+
+            String scene = DramaAssetDrafts.buildPrompt(
+                    DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", spec);
+            assertTrue(scene.contains("幻梦侦探社实拍空镜"), spec.key());
+            assertTrue(scene.contains("窗户光或现场实用光"), spec.key());
+            assertTrue(scene.contains("真实相机平视拍摄"), spec.key());
+            assertTrue(!scene.contains("场景概念图"), spec.key());
+            assertTrue(scene.contains(spec.prefix()), spec.key());
+
+            String prop = DramaAssetDrafts.buildPrompt(
+                    DramaContract.ASSET_TYPE_PROP, "古铜怀表", spec);
+            assertTrue(prop.contains("古铜怀表实拍静物"), spec.key());
+            assertTrue(prop.contains("真实相机拍摄"), spec.key());
+            assertTrue(!prop.contains("道具设定图"), spec.key());
+            assertTrue(prop.contains(spec.prefix()), spec.key());
+        }
+
+        // 动漫大类仍是概念图 / 设定图
+        DramaStyles.Spec anime = DramaStyles.require(DramaStyles.ANIME_WUXIA);
+        assertTrue(!anime.realistic());
+        String animeScene = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_SCENE, "幻梦侦探社", anime);
+        assertTrue(animeScene.contains("幻梦侦探社场景概念图"));
+        String animeProp = DramaAssetDrafts.buildPrompt(
+                DramaContract.ASSET_TYPE_PROP, "古铜怀表", anime);
+        assertTrue(animeProp.contains("古铜怀表道具设定图"));
     }
 
     @Test
