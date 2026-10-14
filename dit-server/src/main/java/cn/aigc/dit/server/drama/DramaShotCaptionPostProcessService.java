@@ -43,7 +43,7 @@ public class DramaShotCaptionPostProcessService {
     private final ObjectMapper objectMapper;
 
     public void enqueue(Long shotId, Long genTaskId, Long userId, String sourceVideoKey) {
-        if (!enabled() || shotId == null || !StringUtils.hasText(sourceVideoKey)) {
+        if (shotId == null || !StringUtils.hasText(sourceVideoKey)) {
             return;
         }
         DramaShotCaption existing = captionMapper.selectOne(new LambdaQueryWrapper<DramaShotCaption>()
@@ -83,7 +83,9 @@ public class DramaShotCaptionPostProcessService {
             Path wav = work.resolve("audio.wav");
             Files.write(video, storage.getBytes(task.getSourceVideoKey()));
             FfmpegAudioExtractor.extractPcm16Mono(video, wav, ffmpeg().getCaptionTimeoutSeconds());
-            List<SpeechSegment> speech = voiceActivityDetector.detect(wav);
+            List<SpeechSegment> speech = vadEnabled()
+                    ? voiceActivityDetector.detect(wav)
+                    : List.of();
             AlignmentTextNormalizer.NormalizedText normalizedText =
                     AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue());
             CaptionTimingResolver.Resolution resolution =
@@ -160,7 +162,7 @@ public class DramaShotCaptionPostProcessService {
         }
     }
 
-    private boolean enabled() {
+    private boolean vadEnabled() {
         return generateProperties.getVad() != null && generateProperties.getVad().isEnabled();
     }
 
