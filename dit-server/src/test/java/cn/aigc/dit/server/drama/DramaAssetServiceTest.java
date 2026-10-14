@@ -340,11 +340,11 @@ class DramaAssetServiceTest {
         String prompt = list.get(0).getImagePrompt();
         assertTrue(prompt.contains("洛白角色设定图"));
         assertTrue(prompt.contains("单独站立"));
-        // 现代写实风（原真人3D风）走真人实拍定妆转面骨架
+        // 现代写实风：压缩定妆转面骨架
         assertTrue(prompt.contains("真人实拍定妆"));
-        assertTrue(prompt.contains("旁边一张正脸近景"));
+        assertTrue(prompt.contains("正脸近景"));
         assertTrue(prompt.contains("严格 90 度侧面"));
-        assertTrue(prompt.contains("纯白无缝底"));
+        assertTrue(prompt.contains("纯白无缝背景"));
         assertTrue(!prompt.contains("固定四格设定拼版"));
         assertTrue(!prompt.contains("面部特写"));
         assertTrue(prompt.contains("现代写实风"));
