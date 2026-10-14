@@ -247,21 +247,26 @@ class DramaAssetDraftsTest {
     void neonCyberUsesPhotorealCharacterSheetAndExcludesAnime() {
         DramaStyles.Spec spec = DramaStyles.require(DramaStyles.NEON_CYBER);
         assertEquals("霓虹赛博风", spec.name());
-        // 写实 prefix 镜像赛博朋克结构：同 subject（霓虹都市/全息/雨夜/高对比色），但写实质感替代动漫质感
+        // 写实 prefix 跟远端新 LIVE_REALISM 同族：真人实拍写真摄影 + 禁 3D国漫厚涂/CG数字人
         assertTrue(spec.prefix().contains("霓虹赛博写实风"));
-        assertTrue(spec.prefix().contains("霓虹都市与全息投影"));
+        assertTrue(spec.prefix().contains("赛博都市真人实拍写真摄影"));
+        assertTrue(spec.prefix().contains("霓虹招牌与全息投影"));
         assertTrue(spec.prefix().contains("雨夜街景"));
-        assertTrue(spec.prefix().contains("半写实3D渲染"));
-        assertTrue(spec.prefix().contains("电影级夜景摄影质感"));
-        assertTrue(spec.prefix().contains("可见毛孔与独立发丝"));
-        // 动漫 marker 必须不存在
+        assertTrue(spec.prefix().contains("商业人像与杂志写真质感"));
+        assertTrue(spec.prefix().contains("清晰五官与独立发丝"));
+        assertTrue(spec.prefix().contains("不要3D国漫厚涂"));
+        assertTrue(spec.prefix().contains("不要CG数字人"));
+        // 动漫 / 旧半写实 marker 必须不存在
         assertTrue(!spec.prefix().contains("动漫风"));
         assertTrue(!spec.prefix().contains("清晰线稿"));
         assertTrue(!spec.prefix().contains("不要真实人脸"));
+        assertTrue(!spec.prefix().contains("半写实3D渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
+        assertTrue(extra.contains("赛博真人写真定妆立绘"));
         assertTrue(extra.contains("机能外套"));
         assertTrue(extra.contains("禁止古装汉服"));
+        assertTrue(extra.contains("禁止二次元卡通与3D国漫厚涂"));
 
         String prompt = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
@@ -288,22 +293,27 @@ class DramaAssetDraftsTest {
     @Test
     void guofeng3dFollowsLiveRealismPatternAndUsesPhotorealSheet() {
         DramaStyles.Spec spec = DramaStyles.require(DramaStyles.GUOFENG_3D);
-        // 写实 prefix 套 LIVE_REALISM 那套结构：二次元写实 + 半写实3D + 3D国漫轻写实厚涂
-        assertTrue(spec.prefix().contains("高精度国风二次元写实"));
-        assertTrue(spec.prefix().contains("半写实3D渲染"));
-        assertTrue(spec.prefix().contains("3D国漫轻写实厚涂"));
-        assertTrue(spec.prefix().contains("写实皮肤毛发与布料质感"));
+        assertEquals("古风写实风", spec.name());
+        // 写实 prefix 跟远端新 LIVE_REALISM 同族：国风真人实拍写真摄影 + 禁 3D国漫厚涂/CG数字人
+        assertTrue(spec.prefix().contains("国风真人实拍写真摄影"));
+        assertTrue(spec.prefix().contains("棚拍柔光与自然肤质"));
         assertTrue(spec.prefix().contains("汉服广袖与发冠金饰"));
-        // 动漫 marker 必须不存在（之前错用的"不要真实人脸"已删）
+        assertTrue(spec.prefix().contains("商业人像与杂志写真质感"));
+        assertTrue(spec.prefix().contains("不要3D国漫厚涂"));
+        assertTrue(spec.prefix().contains("不要CG数字人"));
+        // 动漫 / 旧半写实 marker 必须不存在（"高精度三维国风渲染"旧版已废）
         assertTrue(!spec.prefix().contains("动漫风"));
         assertTrue(!spec.prefix().contains("清晰线稿"));
         assertTrue(!spec.prefix().contains("不要真实人脸"));
+        assertTrue(!spec.prefix().contains("半写实3D渲染"));
+        assertTrue(!spec.prefix().contains("高精度三维国风渲染"));
 
         String extra = DramaAssetDrafts.styleLookExtra(spec);
-        // styleLookExtra 也要走写实化（半写实 CG + 3D国漫轻写实厚涂）
-        assertTrue(extra.contains("半写实国风 CG 角色设定立绘"));
-        assertTrue(extra.contains("3D国漫轻写实厚涂"));
-        assertTrue(extra.contains("禁止卡通平涂线稿"));
+        // styleLookExtra 同样走真人写真定妆路线（跟 LIVE_REALISM 的"真人写真定妆立绘"对齐）
+        assertTrue(extra.contains("国风真人写真定妆立绘"));
+        assertTrue(extra.contains("真实相机棚拍柔光"));
+        assertTrue(extra.contains("汉服广袖与发冠金饰"));
+        assertTrue(extra.contains("禁止二次元卡通与3D国漫厚涂"));
 
         String prompt = DramaAssetDrafts.buildPrompt(
                 DramaContract.ASSET_TYPE_CHARACTER,
@@ -321,16 +331,18 @@ class DramaAssetDraftsTest {
 
     @Test
     void fixedRealisticTabStylesHaveNoAnimeMarkers() {
-        // 本轮写实化的两个目标风格：GUOFENG_3D + NEON_CYBER。prefix 必须不含动漫 marker。
-        // 其它写实 tab 风格（SCI_FI 等）prefix 仍是 动漫写法，前后端语义未对齐，等后续单独处理。
+        // 写实 tab 已对齐的两个风格：GUOFENG_3D + NEON_CYBER。
+        // prefix 不允许出现动漫 marker，也不允许出现旧半写实 marker（远端已把 LIVE_REALISM 改为真人实拍写真，
+        // 写实 tab 风格须同族），防止以后回退。
         java.util.Set<String> fixedKeys = java.util.Set.of(
                 DramaStyles.GUOFENG_3D,
                 DramaStyles.NEON_CYBER);
         for (DramaStyles.Spec spec : DramaStyles.all()) {
             if (!fixedKeys.contains(spec.key())) continue;
             String prefix = spec.prefix();
-            if (prefix.contains("动漫风") || prefix.contains("清晰线稿") || prefix.contains("不要真实人脸")) {
-                throw new AssertionError(spec.key() + " 的 prefix 仍含动漫 marker: " + prefix);
+            if (prefix.contains("动漫风") || prefix.contains("清晰线稿") || prefix.contains("不要真实人脸")
+                    || prefix.contains("半写实3D渲染") || prefix.contains("3D国漫轻写实厚涂")) {
+                throw new AssertionError(spec.key() + " 的 prefix 仍含动漫或旧半写实 marker: " + prefix);
             }
         }
     }
@@ -421,12 +433,12 @@ class DramaAssetDraftsTest {
                 guofeng,
                 null,
                 "女性；青年");
-        assertTrue(guofengPrompt.contains("半写实国风 CG 角色设定立绘"));
+        assertTrue(guofengPrompt.contains("国风真人写真定妆立绘"));
         assertTrue(guofengPrompt.contains("固定四格设定拼版"));
         assertTrue(guofengPrompt.contains("3/4 侧脸"));
         assertTrue(guofengPrompt.contains(guofeng.prefix()));
         assertTrue(!guofengPrompt.contains("同一张图内三视图排列"));
-        assertTrue(!guofengPrompt.contains("三维国风角色，汉服广袖与发冠发饰"));
+        assertTrue(!guofengPrompt.contains("半写实国风 CG 角色设定立绘"));
 
         DramaStyles.Spec realistic = DramaStyles.require(DramaStyles.REALISTIC_3D);
         assertEquals("真人3D风", realistic.name());

@@ -328,7 +328,7 @@ class DramaTextServiceImplTest {
         assertTrue(DramaTextPrompts.scriptSystem().contains("没有主要道具时返回空数组"));
         assertTrue(DramaTextPrompts.assetSystem().contains("只允许从各场 props 数组引用"));
         assertTrue(DramaTextPrompts.assetSystem().contains("image_prompt 一律输出空字符串"));
-        assertTrue(DramaTextPrompts.assetSystem().contains("服装款式颜色与鞋履"));
+        assertTrue(DramaTextPrompts.assetSystem().contains("上装/外套/下装/鞋履"));
     }
 
     @Test
