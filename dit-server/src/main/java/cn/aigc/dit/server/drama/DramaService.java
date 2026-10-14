@@ -694,6 +694,10 @@ public class DramaService {
         // 系列级模式产品侧不可再切换；仅保留「当前为 i2v 但模型不支持」时回退 r2v。
         if (DramaVideoGenerateModes.isI2v(mode) && !supportsVideoMode(model, GenerateMode.I2V)) {
             series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        } else if (DramaVideoGenerateModes.isR2v(mode)
+                && !supportsVideoMode(model, GenerateMode.R2V)
+                && supportsVideoMode(model, GenerateMode.I2V)) {
+            series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         }
         seriesMapper.updateById(series);
         if (!mode.equals(DramaVideoGenerateModes.canonical(series.getVideoGenerateMode()))) {

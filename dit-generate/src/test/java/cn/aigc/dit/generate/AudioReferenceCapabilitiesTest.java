@@ -30,4 +30,13 @@ class AudioReferenceCapabilitiesTest {
         assertFalse(v15.supported());
         assertEquals(0, v15.maxReferences());
     }
+
+    @Test
+    void allowsFiveAudiosForWan3ButRequiresVisualReference() {
+        AudioReferenceCapabilities wan3 = AudioReferenceCapabilities.resolve(
+                AdapterCatalog.WAN3, AdapterCatalog.PROVIDER_OFFICIAL, "video", "wan3.0-video");
+        assertTrue(wan3.supported());
+        assertEquals(5, wan3.maxReferences());
+        assertFalse(wan3.audioOnly());
+    }
 }

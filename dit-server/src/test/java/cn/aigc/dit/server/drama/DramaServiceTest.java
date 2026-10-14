@@ -495,4 +495,32 @@ class DramaServiceTest {
         assertEquals("所选视频模型不支持参考生视频或首尾帧", error.getMessage());
         verify(seriesMapper, never()).updateById(existing);
     }
+
+    @Test
+    void bindWan3KeepsReferenceMode() {
+        DramaSeries existing = new DramaSeries();
+        existing.setId(21L);
+        existing.setUserId(7L);
+        existing.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(episodeMapper.selectList(any())).thenReturn(List.of());
+        AiModel video = new AiModel();
+        video.setId(90L);
+        video.setName("Wan 3.0");
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setAdapterKey("wan3");
+        video.setProvider("官方API");
+        video.setModelKey("wan3.0-video");
+        video.setCapabilities(List.of("video", "t2v", "i2v"));
+        when(aiModelMapper.selectById(90L)).thenReturn(video);
+        when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(video));
+
+        DramaVideoModelBindReq req = new DramaVideoModelBindReq();
+        req.setVideoModelId(90L);
+        service.bindVideoModel(21L, req);
+
+        assertEquals(DramaVideoGenerateModes.R2V, existing.getVideoGenerateMode());
+        verify(storyboardService, never()).enqueueSeriesRecompile(21L);
+    }
 }

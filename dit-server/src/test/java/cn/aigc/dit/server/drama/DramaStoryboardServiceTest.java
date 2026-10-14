@@ -220,6 +220,24 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void storyboardKeepsR2vWhenWan3SupportsReferenceVideo() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        storedShots.add(pendingShot());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        DramaSeries series = ownedSeries();
+        series.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(wan3Model());
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        assertEquals(DramaVideoGenerateModes.R2V,
+                board.getChapters().get(0).getShots().get(0).getEffectiveVideoGenerateMode());
+    }
+
+    @Test
     void draftRejectsWhenAlreadyDrafting() {
         DramaEpisode episode = ownedEpisode();
         episode.setStatus(DramaContract.STATUS_LOCKED);
@@ -2604,6 +2622,19 @@ class DramaStoryboardServiceTest {
         model.setProvider("官方API");
         model.setModelKey("doubao-seedance-2.0-fast");
         model.setCapabilities(List.of("video", "t2v", "r2v"));
+        return model;
+    }
+
+    private static AiModel wan3Model() {
+        AiModel model = new AiModel();
+        model.setId(88L);
+        model.setName("Wan 3.0");
+        model.setCategory("video");
+        model.setEnabled(true);
+        model.setAdapterKey("wan3");
+        model.setProvider("官方API");
+        model.setModelKey("wan3.0-video");
+        model.setCapabilities(List.of("video", "t2v", "i2v"));
         return model;
     }
 }

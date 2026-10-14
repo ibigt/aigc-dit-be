@@ -13,6 +13,7 @@ public class GenerateProperties {
     private Runninghub runninghub = new Runninghub();
     private Agnes agnes = new Agnes();
     private Ark ark = new Ark();
+    private Dashscope dashscope = new Dashscope();
     private Minimax minimax = new Minimax();
     private Speech speech = new Speech();
     private OpenAiImage openAiImage = new OpenAiImage();
@@ -123,6 +124,26 @@ public class GenerateProperties {
         private String assetRegion = "cn-beijing";
         private String assetService = "ark";
         private String assetApiVersion = "2024-01-01";
+    }
+
+    /**
+     * 阿里云百炼 DashScope 视频：{@code POST /services/aigc/video-generation/video-synthesis}
+     * 后轮询 {@code GET /tasks/{task_id}}。
+     * 实际地址按工作区分：{@code https://[workspace-id].cn-beijing.maas.aliyuncs.com/api/v1}，
+     * 管理端模型记录上的 endpoint 覆盖本默认值。
+     */
+    @Data
+    public static class Dashscope {
+        private String baseUrl = "https://dashscope.aliyuncs.com/api/v1";
+        private String apiKey = "";
+        private int connectTimeoutSeconds = 15;
+        private int requestTimeoutSeconds = 120;
+        private int pollTimeoutSeconds = 30;
+        private int pollIntervalSeconds = 5;
+        /** 命中查询限流后的起始退避秒数，随后指数增加，上限 60 秒。 */
+        private int rateLimitBackoffSeconds = 8;
+        private int downloadTimeoutSeconds = 600;
+        private int downloadRetries = 3;
     }
 
     /**

@@ -2633,10 +2633,30 @@ public class DramaStoryboardService {
     private DramaStoryboardCompiler.CompileOptions compileOptionsOf(DramaSeries series, DramaShot shot) {
         boolean firstInChapter = isFirstShotInChapter(shot);
         String mode = DramaVideoGenerateModes.effectiveMode(series, shot);
+        if (DramaVideoGenerateModes.isR2v(mode)
+                && !supportsBoundVideoMode(series, GenerateMode.R2V)
+                && supportsBoundVideoMode(series, GenerateMode.I2V)) {
+            mode = DramaVideoGenerateModes.I2V;
+        }
         boolean chain = !firstInChapter
                 && DramaVideoGenerateModes.isR2v(mode)
                 && resolveChainPrevTail(series, shot);
         return DramaStoryboardCompiler.CompileOptions.of(mode, chain);
+    }
+
+    private boolean supportsBoundVideoMode(DramaSeries series, String mode) {
+        if (series == null || series.getVideoModelId() == null) {
+            return false;
+        }
+        AiModel model = aiModelMapper.selectById(series.getVideoModelId());
+        if (model == null || !ModelCategory.VIDEO.equalsIgnoreCase(model.getCategory())
+                || !Boolean.TRUE.equals(model.getEnabled())) {
+            return false;
+        }
+        String adapter = resolvedAdapter(model);
+        return adapter != null
+                ? AdapterCatalog.supportsMode(adapter, mode)
+                : GenerateRequests.supportsMode(model.getCapabilities(), ModelCategory.VIDEO, mode);
     }
 
     private static boolean resolveChainPrevTail(DramaSeries series, DramaShot shot) {

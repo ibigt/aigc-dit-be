@@ -28,6 +28,7 @@ public final class AdapterCatalog {
     public static final String MINIMAX_H3_SGLANG = "minimax-h3-sglang";
     public static final String AGNES_IMAGE_2_5 = "agnes-image-2.5";
     public static final String AGNES_VIDEO_2_5 = "agnes-video-2.5";
+    public static final String WAN3 = "wan3";
     public static final String MINIMAX_SPEECH = "minimax-speech";
     public static final String OPENAI_SPEECH = "openai-speech";
     public static final String MOCK = "mock";
@@ -36,6 +37,7 @@ public final class AdapterCatalog {
     public static final String TRANSPORT_COMFYUI = "comfyui";
     public static final String TRANSPORT_AGNES = "agnes";
     public static final String TRANSPORT_ARK = "ark";
+    public static final String TRANSPORT_DASHSCOPE = "dashscope";
     public static final String TRANSPORT_SEEDREAM = "seedream";
     public static final String TRANSPORT_MINIMAX = "minimax";
     public static final String TRANSPORT_MINIMAX_SPEECH = "minimax-speech";
@@ -49,6 +51,8 @@ public final class AdapterCatalog {
     public static final String AGNES_DEFAULT_ENDPOINT = "https://api.agnes-ai.cn/v1";
     public static final String AGNES_IMAGE_MODEL = "agnes-image-2.5-flash";
     public static final String AGNES_VIDEO_MODEL = "agnes-video-2.5-flash";
+    public static final String DASHSCOPE_DEFAULT_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1";
+    public static final String WAN3_VIDEO_MODEL = "wan3.0-video";
     public static final String ARK_DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3";
     public static final String SEEDANCE_2_0_MODEL = "doubao-seedance-2-0-260128";
     public static final String SEEDANCE_2_5_MODEL = "doubao-seedance-2-5-260628";
@@ -111,6 +115,9 @@ public final class AdapterCatalog {
                     Map.of(), true),
             new Spec(AGNES_VIDEO_2_5, "Agnes Video 2.5", ModelCategory.VIDEO, TRANSPORT_AGNES, PROVIDER_OFFICIAL,
                     AGNES_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
+                    Map.of(), true),
+            new Spec(WAN3, "Wan 3", ModelCategory.VIDEO, TRANSPORT_DASHSCOPE, PROVIDER_OFFICIAL,
+                    DASHSCOPE_DEFAULT_ENDPOINT, List.of(GenerateMode.T2V, GenerateMode.R2V, GenerateMode.I2V),
                     Map.of(), true),
             new Spec(MINIMAX_SPEECH, "MiniMax Speech", ModelCategory.AUDIO, TRANSPORT_MINIMAX_SPEECH, PROVIDER_OFFICIAL,
                     MINIMAX_SPEECH_DEFAULT_ENDPOINT, List.of(GenerateMode.T2A), Map.of(), true),
@@ -202,6 +209,11 @@ public final class AdapterCatalog {
         if (key.contains("agnes")) {
             return AGNES_VIDEO_2_5;
         }
+        if (ModelCategory.VIDEO.equals(cat)
+                && (key.contains("wan3") || key.contains("wan-3")
+                || prov.contains("dashscope") || prov.contains("阿里") || prov.contains("百炼"))) {
+            return WAN3;
+        }
         if (ModelCategory.AUDIO.equals(cat) && (key.startsWith("speech-")
                 || key.contains("minimax-speech") || prov.contains("minimax") || prov.contains("稀宇"))) {
             return MINIMAX_SPEECH;
@@ -280,6 +292,11 @@ public final class AdapterCatalog {
     public static boolean isAgnes(String adapterKey) {
         Spec spec = find(adapterKey);
         return spec != null && TRANSPORT_AGNES.equals(spec.transport());
+    }
+
+    public static boolean isDashScope(String adapterKey) {
+        Spec spec = find(adapterKey);
+        return spec != null && TRANSPORT_DASHSCOPE.equals(spec.transport());
     }
 
     public static boolean isArk(String adapterKey) {
@@ -426,6 +443,9 @@ public final class AdapterCatalog {
         }
         if (AGNES_VIDEO_2_5.equals(adapterKey)) {
             return AGNES_VIDEO_MODEL;
+        }
+        if (WAN3.equals(adapterKey)) {
+            return WAN3_VIDEO_MODEL;
         }
         if (SEEDANCE_2_0.equals(adapterKey)) {
             return SEEDANCE_2_0_MODEL;

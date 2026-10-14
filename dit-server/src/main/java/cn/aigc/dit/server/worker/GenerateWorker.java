@@ -16,6 +16,8 @@ import cn.aigc.dit.generate.ark.ArkGenerateProvider;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.comfyui.ComfyUiGenerateProvider;
+import cn.aigc.dit.generate.dashscope.DashScopeGenerateProvider;
+import cn.aigc.dit.generate.dashscope.DashScopeUrls;
 import cn.aigc.dit.generate.minimax.MiniMaxGenerateProvider;
 import cn.aigc.dit.generate.minimax.MiniMaxSpeechProvider;
 import cn.aigc.dit.generate.minimax.MiniMaxUrls;
@@ -727,6 +729,12 @@ public class GenerateWorker {
             ark.remember(task.getProviderJobId(), request, v3Base, resolveApiKey(model, request.getAdapterKey()));
             return;
         }
+        if (provider instanceof DashScopeGenerateProvider dashScope) {
+            String apiBase = DashScopeUrls.apiBase(
+                    request.getEndpoint(), generateProperties.getDashscope().getBaseUrl());
+            dashScope.remember(task.getProviderJobId(), request, apiBase, resolveApiKey(model, request.getAdapterKey()));
+            return;
+        }
         if (provider instanceof MiniMaxGenerateProvider miniMax) {
             String origin = MiniMaxUrls.origin(request.getEndpoint(), generateProperties.getMinimax().getBaseUrl());
             miniMax.remember(task.getProviderJobId(), request, origin, resolveApiKey(model, request.getAdapterKey()));
@@ -1114,6 +1122,9 @@ public class GenerateWorker {
         }
         if (AdapterCatalog.isArk(resolved) || AdapterCatalog.isSeedream(resolved)) {
             return generateProperties.getArk().getApiKey();
+        }
+        if (AdapterCatalog.isDashScope(resolved)) {
+            return generateProperties.getDashscope().getApiKey();
         }
         if (AdapterCatalog.isMiniMaxOfficial(resolved, model == null ? null : model.getProvider())) {
             return generateProperties.getMinimax().getApiKey();

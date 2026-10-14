@@ -16,6 +16,11 @@ class AdapterCatalogTest {
     void infersFromProviderAndCategory() {
         assertEquals(AdapterCatalog.AGNES_IMAGE_2_5, AdapterCatalog.infer("官方API", "image", "agnes-image-2.5-flash"));
         assertEquals(AdapterCatalog.AGNES_VIDEO_2_5, AdapterCatalog.infer("官方API", "video", "agnes-video-2.5-flash"));
+        assertEquals(AdapterCatalog.WAN3, AdapterCatalog.infer("官方API", "video", "wan3.0-video"));
+        assertEquals(AdapterCatalog.WAN3, AdapterCatalog.infer("DashScope", "video", "wan3.0-video"));
+        assertEquals(AdapterCatalog.TRANSPORT_DASHSCOPE, AdapterCatalog.transport(AdapterCatalog.WAN3, "官方API"));
+        assertEquals(AdapterCatalog.WAN3_VIDEO_MODEL, AdapterCatalog.defaultModelKey(AdapterCatalog.WAN3));
+        assertTrue(AdapterCatalog.isDashScope(AdapterCatalog.WAN3));
         assertEquals(AdapterCatalog.MINIMAX_H3, AdapterCatalog.infer("官方API", "video", "MiniMax-H3"));
         assertEquals(AdapterCatalog.MINIMAX_H3, AdapterCatalog.infer("ComfyUI", "video", "minimax.h3"));
         assertEquals(AdapterCatalog.SEEDANCE_2, AdapterCatalog.infer("RunningHub", "video", "seedance-2.0"));

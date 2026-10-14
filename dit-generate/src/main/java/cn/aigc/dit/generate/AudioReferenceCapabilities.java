@@ -29,6 +29,9 @@ public record AudioReferenceCapabilities(boolean supported, int maxReferences, b
         if (AdapterCatalog.SEEDANCE_2_5.equals(adapter)) {
             return new AudioReferenceCapabilities(true, 10, true);
         }
+        if (AdapterCatalog.WAN3.equals(adapter)) {
+            return new AudioReferenceCapabilities(true, 5, false);
+        }
         if (AdapterCatalog.SEEDANCE_2_0.equals(adapter)) {
             return new AudioReferenceCapabilities(true, 3, false);
         }
