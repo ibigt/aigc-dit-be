@@ -64,51 +64,59 @@ class DashScopeGenerateProviderTest {
     }
 
     @Test
-    void submitI2vPresignsFrames() throws Exception {
+    void submitI2vInlinesFramesAsBase64() throws Exception {
         http.postBody = """
                 {"output":{"task_id":"task-2","task_status":"PENDING"}}
                 """;
-        storage.put("first.png", new byte[]{1}, "image/png");
-        storage.put("last.png", new byte[]{1}, "image/png");
+        storage.put("first.png", new byte[]{1, 2, 3}, "image/png");
+        storage.put("last.png", new byte[]{4, 5, 6}, "image/png");
 
         provider.submit(video("i2v").setFrames(new FramePair("first.png", "last.png")));
         JsonNode body = mapper.readTree(http.lastJson);
         assertEquals("first_frame", body.path("input").path("media").get(0).path("type").asText());
-        assertEquals("first.png", body.path("input").path("media").get(0).path("url").asText());
+        String firstUrl = body.path("input").path("media").get(0).path("url").asText();
+        assertTrue(firstUrl.startsWith("data:image/png;base64,"), firstUrl);
+        assertEquals("AQID", firstUrl.substring("data:image/png;base64,".length()));
         assertEquals("last_frame", body.path("input").path("media").get(1).path("type").asText());
-        assertEquals("last.png", body.path("input").path("media").get(1).path("url").asText());
+        String lastUrl = body.path("input").path("media").get(1).path("url").asText();
+        assertTrue(lastUrl.startsWith("data:image/png;base64,"), lastUrl);
+        assertEquals("BAUG", lastUrl.substring("data:image/png;base64,".length()));
     }
 
     @Test
-    void submitR2vPresignsReferences() throws Exception {
+    void submitR2vInlinesReferencesAsBase64() throws Exception {
         http.postBody = """
                 {"output":{"task_id":"task-r2v","task_status":"PENDING"}}
                 """;
-        storage.put("ref-a.png", new byte[]{1}, "image/png");
-        storage.put("ref-b.png", new byte[]{1}, "image/png");
+        storage.put("ref-a.png", new byte[]{10, 20}, "image/png");
+        storage.put("ref-b.jpg", new byte[]{30, 40}, "image/jpeg");
 
         provider.submit(video("r2v").setReferences(java.util.List.of(
                 new cn.aigc.dit.generate.ReferenceAsset("image", "ref-a.png"),
-                new cn.aigc.dit.generate.ReferenceAsset("image", "ref-b.png"))));
+                new cn.aigc.dit.generate.ReferenceAsset("image", "ref-b.jpg"))));
 
         JsonNode body = mapper.readTree(http.lastJson);
         JsonNode media = body.path("input").path("media");
         assertEquals(2, media.size());
         assertEquals("reference_image", media.get(0).path("type").asText());
-        assertEquals("ref-a.png", media.get(0).path("url").asText());
+        String refAUrl = media.get(0).path("url").asText();
+        assertTrue(refAUrl.startsWith("data:image/png;base64,"), refAUrl);
+        assertEquals("ChQ=", refAUrl.substring("data:image/png;base64,".length()));
         assertEquals("reference_image", media.get(1).path("type").asText());
-        assertEquals("ref-b.png", media.get(1).path("url").asText());
+        String refBUrl = media.get(1).path("url").asText();
+        assertTrue(refBUrl.startsWith("data:image/jpeg;base64,"), refBUrl);
+        assertEquals("Hig=", refBUrl.substring("data:image/jpeg;base64,".length()));
         assertFalse(body.path("input").has("first_frame_url"));
         assertFalse(body.path("input").has("last_frame_url"));
     }
 
     @Test
-    void submitR2vSeparatesImageAndAudioReferences() throws Exception {
+    void submitR2vSeparatesImageAndAudioReferencesAsBase64() throws Exception {
         http.postBody = """
                 {"output":{"task_id":"task-r2v-audio","task_status":"PENDING"}}
                 """;
         storage.put("ref-a.png", new byte[]{1}, "image/png");
-        storage.put("ref-voice.mp3", new byte[]{1}, "audio/mpeg");
+        storage.put("ref-voice.mp3", new byte[]{2}, "audio/mpeg");
 
         provider.submit(video("r2v").setReferences(java.util.List.of(
                 new cn.aigc.dit.generate.ReferenceAsset("image", "ref-a.png"),
@@ -118,9 +126,11 @@ class DashScopeGenerateProviderTest {
         JsonNode media = body.path("input").path("media");
         assertEquals(2, media.size());
         assertEquals("reference_image", media.get(0).path("type").asText());
-        assertEquals("ref-a.png", media.get(0).path("url").asText());
+        String imageUrl = media.get(0).path("url").asText();
+        assertTrue(imageUrl.startsWith("data:image/png;base64,"), imageUrl);
         assertEquals("reference_audio", media.get(1).path("type").asText());
-        assertEquals("ref-voice.mp3", media.get(1).path("url").asText());
+        String audioUrl = media.get(1).path("url").asText();
+        assertTrue(audioUrl.startsWith("data:audio/mpeg;base64,"), audioUrl);
     }
 
     @Test
