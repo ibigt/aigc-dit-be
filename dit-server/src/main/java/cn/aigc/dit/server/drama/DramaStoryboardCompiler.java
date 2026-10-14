@@ -44,6 +44,11 @@ public final class DramaStoryboardCompiler {
     public static final String DIALOGUE_PERFORMANCE_SUFFIX = "神态，动作自然克制，不夸张演过头。";
     /** 有镜头序列时力度由镜头动作自己写，对白表演只约束表情和口型。 */
     public static final String DIALOGUE_PERFORMANCE_SUFFIX_BEATS = "神态与口型。";
+    /** 台词已经写在各镜头里时，文末只保留怎么念，不再把原句复述一遍。 */
+    public static final String BEAT_DIALOGUE_EXECUTION =
+            "只念各镜头台词正文，不念角色名和冒号，不得增删或改写。";
+    public static final String BEAT_NO_SPEECH = "本镜头无人开口";
+    public static final String BEAT_LIP_SYNC = "口型与这句同步";
     public static final String I2V_MUST_START =
             "Must start: 以提供的首帧为起幅（空间、已在画面中人物的服装与站位）。严格按 Action 的主语演出，禁止改写谁做了什么。"
                     + "Action 新点名、但首帧里还没有的人，必须按其 Identities 外貌入画；"
@@ -253,7 +258,8 @@ public final class DramaStoryboardCompiler {
         }
         Map<String, Integer> pictures = pictureIndexByName(pictureRefs);
         boolean beats = DramaShotBeats.hasBeats(content.shotBeats());
-        appendVisualLines(prompt, content, pictures);
+        boolean beatsSpeak = beats && beatsHaveSpoken(content.shotBeats());
+        appendVisualLines(prompt, content, pictures, beatsSpeak);
         if (!beats) {
             appendLine(prompt, "Dialogue", bindPictureNames(content.dialogue(), pictures));
         }
@@ -261,7 +267,9 @@ public final class DramaStoryboardCompiler {
         appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
         prompt.append(castConstraint(content, pictureRefs, opts.i2v(), beats)).append('\n');
         prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
-        String spoken = spokenDialogueConstraint(content.dialogue(), beats);
+        String spoken = beatsSpeak
+                ? beatDialogueGlobalRule(content.shotBeats())
+                : spokenDialogueConstraint(content.dialogue(), beats);
         if (StringUtils.hasText(spoken)) {
             String voices = voiceConstraint(audioRefs);
             if (StringUtils.hasText(voices)) {
@@ -324,7 +332,7 @@ public final class DramaStoryboardCompiler {
         prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
         prompt.append(STILL_MUST).append('\n');
         Map<String, Integer> pictures = pictureIndexByName(refs);
-        appendVisualLines(prompt, content, pictures);
+        appendVisualLines(prompt, content, pictures, false);
         appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
         prompt.append(castConstraint(content, refs, false, DramaShotBeats.hasBeats(content.shotBeats())));
         return new Result(prompt.toString().trim(), fingerprint(prefix, refs, List.of(), content, CompileOptions.r2v()));
@@ -574,6 +582,73 @@ public final class DramaStoryboardCompiler {
         return count;
     }
 
+    static boolean beatsHaveSpoken(DramaShotBeats beats) {
+        if (beats == null || beats.getBeats() == null) {
+            return false;
+        }
+        for (DramaShotBeats.Beat beat : beats.getBeats()) {
+            if (beat != null && !spokenUtterances(beat.getDialogue()).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 镜头序列里的台词只在对应镜头出现一次。文末保留念法，并在有旁白或画外音时要求闭嘴。
+     */
+    static String beatDialogueGlobalRule(DramaShotBeats beats) {
+        boolean offScreen = false;
+        if (beats != null && beats.getBeats() != null) {
+            for (DramaShotBeats.Beat beat : beats.getBeats()) {
+                if (beat == null) {
+                    continue;
+                }
+                for (SpokenUtterance spoken : spokenUtterances(beat.getDialogue())) {
+                    if (spoken.narration() || spoken.voiceOver()) {
+                        offScreen = true;
+                        break;
+                    }
+                }
+            }
+        }
+        StringBuilder line = new StringBuilder("对白执行：").append(BEAT_DIALOGUE_EXECUTION);
+        if (offScreen) {
+            line.append(NARRATION_MOUTH_CLOSED);
+        }
+        return line.toString();
+    }
+
+    static String beatDialogueText(String dialogue) {
+        List<SpokenUtterance> utterances = spokenUtterances(dialogue);
+        if (utterances.isEmpty()) {
+            return BEAT_NO_SPEECH;
+        }
+        List<String> parts = new ArrayList<>();
+        for (SpokenUtterance spoken : utterances) {
+            parts.add(beatUtteranceClause(spoken));
+        }
+        return String.join("；", parts);
+    }
+
+    private static String beatUtteranceClause(SpokenUtterance spoken) {
+        String words = spoken.words();
+        if (spoken.narration()) {
+            return "旁白解说员以全片统一的旁白音色逐字念出：“" + words
+                    + "”，该音色不与任何角色混淆，画面中人物闭嘴，不对口型";
+        }
+        if (spoken.voiceOver()) {
+            String speaker = spoken.speaker();
+            return "角色“" + speaker + "”的画外音（使用" + speaker + "的音色，自画面外传来）逐字念出：“"
+                    + words + "”，画面中人物闭嘴，不对口型";
+        }
+        String speaker = spoken.speaker();
+        if (StringUtils.hasText(spoken.emotion())) {
+            return "角色“" + speaker + "”以" + spoken.emotion() + "的语气逐字说出：“" + words + "”，" + BEAT_LIP_SYNC;
+        }
+        return "角色“" + speaker + "”逐字说出：“" + words + "”，" + BEAT_LIP_SYNC;
+    }
+
     static String spokenDialogueConstraint(String dialogue) {
         return spokenDialogueConstraint(dialogue, false);
     }
@@ -804,7 +879,8 @@ public final class DramaStoryboardCompiler {
         }
     }
 
-    private static void appendVisualLines(StringBuilder prompt, ShotContent content, Map<String, Integer> pictures) {
+    private static void appendVisualLines(
+            StringBuilder prompt, ShotContent content, Map<String, Integer> pictures, boolean performBeatDialogue) {
         appendLine(prompt, "Scene", bindPictureNames(content.scene(), pictures));
         if (DramaShotBeats.hasBeats(content.shotBeats())) {
             appendLine(prompt, "站位", bindPictureNames(content.shotBeats().getBlocking(), pictures));
@@ -817,7 +893,8 @@ public final class DramaStoryboardCompiler {
                 appendBeatClause(block, "景别", beat.getCamera(), pictures);
                 appendBeatClause(block, "动作", beat.getAction(), pictures);
                 appendBeatClause(block, "接续", beat.getContinuity(), pictures);
-                appendBeatClause(block, "台词", beat.getDialogue(), pictures);
+                String dialogue = performBeatDialogue ? beatDialogueText(beat.getDialogue()) : beat.getDialogue();
+                appendBeatClause(block, "台词", dialogue, pictures);
                 if (!block.isEmpty()) {
                     prompt.append("镜头").append(index).append(": ").append(block).append('\n');
                 }

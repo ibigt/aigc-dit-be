@@ -561,14 +561,20 @@ public class DramaAssetService {
                 && StringUtils.hasText(draft.getDescription())) {
             current.setDescription(draft.getDescription().trim());
         }
-        // 骨架「必须保持一致」句不算有效外形，允许被 LLM 外形摘要覆盖。
-        if (DramaAssetDrafts.isSkeletonIdentity(current.getName(), current.getIdentityInvariants())
+        // 骨架句或场景/道具误套角色外形句，允许被 LLM 摘要覆盖。
+        boolean identityOpen = DramaAssetDrafts.isSkeletonIdentity(current.getName(), current.getIdentityInvariants())
+                || DramaAssetDrafts.isCharacterIdentityMisapplied(type, current.getIdentityInvariants());
+        if (identityOpen
                 && StringUtils.hasText(draft.getIdentityInvariants())
-                && !DramaAssetDrafts.isSkeletonIdentity(current.getName(), draft.getIdentityInvariants())) {
+                && !DramaAssetDrafts.isSkeletonIdentity(current.getName(), draft.getIdentityInvariants())
+                && !DramaAssetDrafts.isCharacterIdentityMisapplied(type, draft.getIdentityInvariants())) {
             current.setIdentityInvariants(draft.getIdentityInvariants().trim());
-        } else if (DramaAssetDrafts.isSkeletonIdentity(current.getName(), current.getIdentityInvariants())
+        } else if (identityOpen
+                && DramaContract.ASSET_TYPE_CHARACTER.equals(type)
                 && DramaAssetDrafts.isAppearanceBlurb(draft.getDescription())) {
             current.setIdentityInvariants(draft.getDescription().trim());
+        } else if (DramaAssetDrafts.isCharacterIdentityMisapplied(type, current.getIdentityInvariants())) {
+            current.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(type, current.getName(), stateTag));
         }
         if ((!StringUtils.hasText(current.getImagePrompt())
                 || DramaAssetDrafts.shouldReplaceImagePrompt(
@@ -994,12 +1000,22 @@ public class DramaAssetService {
             if (asset == null || DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
                 continue;
             }
-            if (!DramaAssetDrafts.shouldReplaceImagePrompt(
-                    asset.getImagePrompt(), asset.getType(), style.key())) {
-                continue;
+            boolean changed = false;
+            if (DramaAssetDrafts.isCharacterIdentityMisapplied(asset.getType(), asset.getIdentityInvariants())) {
+                asset.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(
+                        asset.getType(), asset.getName(), asset.getStateTag()));
+                changed = true;
             }
-            applyCompiledImagePrompt(asset, style);
-            assetMapper.updateById(asset);
+            if (DramaAssetDrafts.shouldReplaceImagePrompt(
+                    asset.getImagePrompt(), asset.getType(), style.key())) {
+                applyCompiledImagePrompt(asset, style);
+                changed = true;
+            } else if (changed) {
+                applyCompiledImagePrompt(asset, style);
+            }
+            if (changed) {
+                assetMapper.updateById(asset);
+            }
         }
     }
 
@@ -1011,7 +1027,7 @@ public class DramaAssetService {
         DramaStyles.Spec style = DramaStyles.require(series.getStyleKey());
         String rebuilt = DramaAssetDrafts.buildPrompt(
                 asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
-        rebuilt = withIdentityConstraint(rebuilt, asset.getIdentityInvariants());
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), asset.getIdentityInvariants());
         if (StringUtils.hasText(rebuilt) && !rebuilt.equals(blankToNull(asset.getImagePrompt()))) {
             asset.setImagePrompt(rebuilt);
             scrubTemplateDescription(asset, style);
@@ -1032,7 +1048,7 @@ public class DramaAssetService {
     private static void applyCompiledImagePrompt(DramaAsset asset, DramaStyles.Spec style) {
         String rebuilt = DramaAssetDrafts.buildPrompt(
                 asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
-        rebuilt = withIdentityConstraint(rebuilt, asset.getIdentityInvariants());
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), asset.getIdentityInvariants());
         asset.setImagePrompt(rebuilt);
         scrubTemplateDescription(asset, style);
     }
@@ -1109,12 +1125,26 @@ public class DramaAssetService {
 
     /** 生图时把设定摘要并进 prompt，避免服装/发型只写在摘要里却未进入模型。 */
     static String withIdentityConstraint(String prompt, String identity) {
+        return withIdentityConstraint(prompt, DramaContract.ASSET_TYPE_CHARACTER, identity);
+    }
+
+    static String withIdentityConstraint(String prompt, String type, String identity) {
         if (!StringUtils.hasText(prompt) || !StringUtils.hasText(identity)) {
             return prompt;
         }
         String id = identity.trim();
+        if (DramaAssetDrafts.isSkeletonIdentity(null, id)
+                || DramaAssetDrafts.isCharacterIdentityMisapplied(type, id)) {
+            return prompt;
+        }
         if (prompt.contains(id)) {
             return prompt;
+        }
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return prompt + "空间陈设必须符合：" + id + "。";
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return prompt + "外形材质必须符合：" + id + "。";
         }
         return prompt + "外形与服装必须符合：" + id + "。";
     }

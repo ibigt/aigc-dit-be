@@ -241,12 +241,19 @@ public class DramaTextServiceImpl implements DramaTextService {
             }
             copyIfText(update.getDescription(), target::setDescription);
             if (StringUtils.hasText(update.getIdentityInvariants())
-                    && !DramaAssetDrafts.isSkeletonIdentity(target.getName(), update.getIdentityInvariants())) {
+                    && !DramaAssetDrafts.isSkeletonIdentity(target.getName(), update.getIdentityInvariants())
+                    && !DramaAssetDrafts.isCharacterIdentityMisapplied(
+                            target.getType(), update.getIdentityInvariants())) {
                 target.setIdentityInvariants(update.getIdentityInvariants().strip());
-            } else if (DramaAssetDrafts.isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
+            } else if (DramaContract.ASSET_TYPE_CHARACTER.equals(target.getType())
+                    && DramaAssetDrafts.isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
                     && DramaAssetDrafts.isAppearanceBlurb(update.getDescription())) {
-                // 模型只写了 description 时，把外貌短句提升为外形设定，避免页面只剩骨架句。
+                // 角色：模型只写了 description 时，把外貌短句提升为外形设定，避免页面只剩骨架句。
                 target.setIdentityInvariants(update.getDescription().strip());
+            } else if (DramaAssetDrafts.isCharacterIdentityMisapplied(
+                    target.getType(), target.getIdentityInvariants())) {
+                target.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(
+                        target.getType(), target.getName(), target.getStateTag()));
             }
             if (StringUtils.hasText(update.getImagePrompt())
                     && !DramaAssetDrafts.shouldReplaceImagePrompt(update.getImagePrompt())) {

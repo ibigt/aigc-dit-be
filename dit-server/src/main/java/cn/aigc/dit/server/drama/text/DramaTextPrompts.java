@@ -93,7 +93,8 @@ public final class DramaTextPrompts {
               正例：「20岁，女，杏眼，鼻梁小巧，黑色短发刚过耳，暖黄肤色，白色圆领T恤，深蓝工装背心，深色长裤」。
               禁止只写「某某的外貌、发型、服装和年龄必须保持一致」这类空话；禁止三视图、设定图、风格前缀。
               三人不得共用同一套外貌；不要把男性写成女性，不要把中年写成少女。
-            - 场景不要人物、不要整场剧情动作。道具只写外形、材质、磨损和标志性细节，不要剧情用途或人物名字。
+            - 场景不要人物、不要整场剧情动作；场景 identity_invariants 只写空间结构、陈设、材质与光影，禁止外貌/发型/服装/年龄。
+            - 道具只写外形、材质、磨损和标志性细节，不要剧情用途或人物名字；道具 identity_invariants 禁止写人物外貌。
             - description 与 identity_invariants 不得互相引用，不得写「同上」；角色 description 可与外形互补，但不得替代 identity_invariants。
             - 长度上限：description 不超过 100 字，identity_invariants 不超过 200 字；image_prompt 一律留空。
             """;
@@ -223,6 +224,8 @@ public final class DramaTextPrompts {
                 + "角色的 identity_invariants 是产品主展示字段：必须写出性别、年龄/年龄段、长相（发型五官肤色身材）与衣着"
                 + "（上装/外套/下装/鞋履），可据剧情合理推断；禁止输出「外貌、发型、服装和年龄必须保持一致」空话，"
                 + "禁止写三视图/设定图/风格前缀。\n"
+                + "场景的 identity_invariants 只写空间结构、陈设、材质与光影氛围，禁止写外貌/发型/服装/年龄或人物。\n"
+                + "道具的 identity_invariants 只写外形、材质、磨损与标志性细节，禁止写人物外貌或剧情用途。\n"
                 + "缺少信息时该字段返回空字符串，不要用空话凑数。\n\n"
                 + "锁定剧本：\n" + scriptJson + "\n\n确定性资产骨架：\n" + skeletonJson;
     }

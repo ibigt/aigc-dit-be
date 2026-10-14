@@ -440,8 +440,21 @@ class DramaStoryboardCompilerTest {
         assertTrue(first >= 0 && first < second && second < third);
         assertTrue(prompt.contains("站位: 局长（<Picture 1>）在门口，洛白（<Picture 2>）在画面左侧，档案（<Picture 3>）在桌上。"));
         assertTrue(prompt.substring(first, second).contains("局长（<Picture 1>）推门进入。"));
+        assertTrue(prompt.substring(first, second).contains("台词：" + DramaStoryboardCompiler.BEAT_NO_SPEECH + "。"));
         assertTrue(prompt.substring(second, third).contains("档案（<Picture 3>）"));
-        assertTrue(prompt.substring(third, prompt.indexOf("Continuity in:")).contains("你给我站住！"));
+        assertTrue(prompt.substring(second, third).contains("台词：" + DramaStoryboardCompiler.BEAT_NO_SPEECH + "。"));
+        String speaking = prompt.substring(third, prompt.indexOf("Continuity in:"));
+        assertTrue(speaking.contains(
+                "台词：角色“局长（<Picture 1>）”以愤怒的语气逐字说出：“你给我站住！”，"
+                        + DramaStoryboardCompiler.BEAT_LIP_SYNC + "。"));
+        assertFalse(speaking.contains(DramaStoryboardCompiler.BEAT_NO_SPEECH));
+        int execution = prompt.indexOf("对白执行：");
+        assertTrue(execution > third);
+        assertTrue(prompt.substring(execution).startsWith(
+                "对白执行：" + DramaStoryboardCompiler.BEAT_DIALOGUE_EXECUTION));
+        assertFalse(prompt.substring(execution).contains("你给我站住"));
+        assertEquals(1, prompt.split("你给我站住", -1).length - 1);
+        assertTrue(prompt.contains("Duration: 12 seconds."));
         assertFalse(prompt.contains("Dialogue:"));
         assertFalse(prompt.contains("Action:"));
         assertFalse(prompt.contains("Camera:"));
@@ -449,7 +462,7 @@ class DramaStoryboardCompilerTest {
         assertTrue(prompt.contains("本镜出场人物为局长=<Picture 1>、洛白=<Picture 2>。"));
         assertTrue(prompt.contains("某一镜头没点名的人保持起始站位或留在画外，禁止突然入画"));
         assertFalse(prompt.contains("动作自然克制"));
-        assertTrue(prompt.contains("神态与口型"));
+        assertFalse(prompt.contains("对白表演"));
 
         DramaStoryboardCompiler.ShotContent withoutBeats = new DramaStoryboardCompiler.ShotContent(
                 "局长办公室日戏",
@@ -476,6 +489,50 @@ class DramaStoryboardCompilerTest {
         assertNotEquals(
                 DramaStoryboardCompiler.fingerprint(prefix, refs, shot),
                 DramaStoryboardCompiler.fingerprint(prefix, refs, changedShot));
+    }
+
+    @Test
+    void beatVoiceOverStaysOnThatShotAndGlobalRuleDoesNotRepeatTheLine() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "张总", DramaContract.ASSET_TYPE_CHARACTER, "中年男性", "设定图"),
+                ref(2, "李四", DramaContract.ASSET_TYPE_CHARACTER, "青年男性", "设定图"));
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("李四在画面左侧。");
+        beats.setBeats(List.of(
+                beat("近景", "李四停下脚步。", "走廊", "张总（画外音）：难道是他？"),
+                beat("特写", "李四开口。", "接停下", "李四：是我。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "走廊夜戏",
+                "张总画外音，李四应答。",
+                "张总（画外音）：难道是他？\n李四：是我。",
+                "走廊",
+                "李四开口",
+                11,
+                List.of("张总", "李四"),
+                2,
+                List.of(),
+                null,
+                null,
+                beats);
+
+        String prompt = DramaStoryboardCompiler.compile(prefix, refs, shot).prompt();
+        int first = prompt.indexOf("镜头1:");
+        int second = prompt.indexOf("镜头2:");
+        int execution = prompt.indexOf("对白执行：");
+        assertTrue(first >= 0 && first < second && second < execution);
+        assertTrue(prompt.substring(first, second).contains(
+                "角色“张总（<Picture 1>）”的画外音（使用张总（<Picture 1>）的音色，自画面外传来）逐字念出：“难道是他？”，画面中人物闭嘴，不对口型。"));
+        assertFalse(prompt.substring(first, second).contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
+        assertTrue(prompt.substring(second, execution).contains(
+                "角色“李四（<Picture 2>）”逐字说出：“是我。”，" + DramaStoryboardCompiler.BEAT_LIP_SYNC + "。"));
+        assertTrue(prompt.substring(execution).contains(DramaStoryboardCompiler.BEAT_DIALOGUE_EXECUTION));
+        assertTrue(prompt.substring(execution).contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
+        assertFalse(prompt.substring(execution).contains("难道是他"));
+        assertFalse(prompt.substring(execution).contains("是我"));
+        assertFalse(prompt.contains("对白表演"));
+        assertTrue(prompt.contains("Duration: 11 seconds."));
+        assertEquals(1, prompt.split("难道是他", -1).length - 1);
     }
 
     private static DramaShotBeats.Beat beat(String camera, String action, String continuity, String dialogue) {
