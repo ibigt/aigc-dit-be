@@ -18,6 +18,7 @@ public class DramaSeries {
 
     private Long userId;
     private String name;
+    private String synopsis;
     private String styleKey;
     private String stylePrefix;
     private String aspectRatio;

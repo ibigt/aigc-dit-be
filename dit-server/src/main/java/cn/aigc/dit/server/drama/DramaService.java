@@ -122,6 +122,7 @@ public class DramaService {
         DramaSeries series = new DramaSeries();
         series.setUserId(userId);
         series.setName(req.getName().trim());
+        series.setSynopsis(normalizeSynopsis(req.getSynopsis()));
         applyStyle(series, req.getStyleKey());
         series.setAspectRatio(normalizeAspectRatio(req.getAspectRatio()));
         series.setDefaultResolution(normalizeResolution(req.getDefaultResolution()));
@@ -195,6 +196,9 @@ public class DramaService {
         String previousRatio = series.getAspectRatio();
         if (StringUtils.hasText(req.getName())) {
             series.setName(req.getName().trim());
+        }
+        if (req.getSynopsis() != null) {
+            series.setSynopsis(normalizeSynopsis(req.getSynopsis()));
         }
         if (req.getStyleKey() != null) {
             applyStyle(series, req.getStyleKey());
@@ -418,6 +422,7 @@ public class DramaService {
         DramaSeriesResp resp = new DramaSeriesResp();
         resp.setId(series.getId());
         resp.setName(series.getName());
+        resp.setSynopsis(series.getSynopsis());
         // 列表不能因个别历史/脏 style_key 整页失败；未知键回退默认风格。
         DramaStyles.Spec style = DramaStyles.resolveOrDefault(series.getStyleKey());
         resp.setStyleKey(style.key());
@@ -591,6 +596,18 @@ public class DramaService {
         if (analyzing || drafting) {
             throw new BizException(ErrorCode.CONFLICT, analyzing ? "剧本正在分析，暂时无法删除" : "分镜正在生成，暂时无法删除");
         }
+    }
+
+    /** 空白简介存空串，便于更新时清空；未传（null）表示不改。 */
+    static String normalizeSynopsis(String value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.trim();
+        if (text.length() > 200) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "简介不能超过 200 字");
+        }
+        return text;
     }
 
     static String normalizeAspectRatio(String value) {

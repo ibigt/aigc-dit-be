@@ -90,11 +90,13 @@ class DramaServiceTest {
 
         DramaSeriesCreateReq req = new DramaSeriesCreateReq();
         req.setName(" 侦探社 ");
+        req.setSynopsis("  洛白追查失踪案  ");
         req.setPlannedEpisodeCount(5);
 
         DramaSeriesResp resp = service.createSeries(req);
         assertEquals(21L, resp.getId());
         assertEquals("侦探社", resp.getName());
+        assertEquals("洛白追查失踪案", resp.getSynopsis());
         assertEquals(DramaStyles.ANIME_COMIC, resp.getStyleKey());
         assertEquals("二次元漫画风", resp.getStyleName());
         assertEquals("/drama/styles/anime-comic.jpg", resp.getStyleCover());
@@ -110,6 +112,7 @@ class DramaServiceTest {
         ArgumentCaptor<DramaSeries> seriesCaptor = ArgumentCaptor.forClass(DramaSeries.class);
         verify(seriesMapper).insert(seriesCaptor.capture());
         assertEquals(7L, seriesCaptor.getValue().getUserId());
+        assertEquals("洛白追查失踪案", seriesCaptor.getValue().getSynopsis());
         assertEquals(DramaStyles.ANIME_COMIC, seriesCaptor.getValue().getStyleKey());
         assertEquals(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), seriesCaptor.getValue().getStylePrefix());
         assertEquals(DramaVideoGenerateModes.R2V, seriesCaptor.getValue().getVideoGenerateMode());
@@ -164,9 +167,12 @@ class DramaServiceTest {
         req.setDefaultResolution("480p");
         req.setStyleKey(DramaStyles.ANIME_COMIC);
         req.setPlannedEpisodeCount(3);
+        req.setSynopsis("  新的故事简介  ");
 
         DramaSeriesResp resp = service.updateSeries(21L, req);
         assertEquals("480P", existing.getDefaultResolution());
+        assertEquals("新的故事简介", existing.getSynopsis());
+        assertEquals("新的故事简介", resp.getSynopsis());
         assertEquals(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix(), existing.getStylePrefix());
         assertEquals(3, existing.getPlannedEpisodeCount());
         assertEquals("二次元漫画风", resp.getStyleName());

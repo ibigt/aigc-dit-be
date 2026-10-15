@@ -14,6 +14,10 @@ public class DramaSeriesCreateReq {
     @Schema(description = "系列名称", example = "侦探社")
     private String name;
 
+    @Size(max = 200)
+    @Schema(description = "故事简介，最长 200 字", example = "洛白追查一桩失踪案")
+    private String synopsis;
+
     @Size(max = 64)
     @Schema(description = "风格键：anime-comic / live-realism / anime-wuxia / costume-comic / republican-era / cyberpunk / sci-fi / rural / guofeng-3d / neon-cyber", example = "anime-comic")
     private String styleKey;

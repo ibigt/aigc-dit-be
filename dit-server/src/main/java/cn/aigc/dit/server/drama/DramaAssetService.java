@@ -380,50 +380,6 @@ public class DramaAssetService {
         return resp;
     }
 
-    @Transactional
-    public DramaAssetResp lock(Long assetId) {
-        DramaAsset asset = requireAsset(assetId);
-        if (DramaContract.STATUS_LOCKED.equals(asset.getStatus())) {
-            // A locked asset is already confirmed.  Never let a stale task id keep
-            // driving the response back to "generating" after a refresh.
-            if (asset.getGenTaskId() != null) {
-                asset.setGenTaskId(null);
-                assetMapper.updateById(asset);
-            }
-            return toResp(asset, null);
-        }
-        // Locking is the user's confirmation of the currently selected image.  Do not
-        // allow an older regeneration to remain attached: a late task callback would
-        // otherwise make a locked asset look generating again (or reopen it).
-        GenTask attachedTask = loadTask(asset.getGenTaskId());
-        if (attachedTask != null && isGenerating(attachedTask)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "图片仍在生成中，请等待完成后再锁定");
-        }
-        if (!StringUtils.hasText(asset.getImageStorageKey())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先上传或生成参考图再锁定");
-        }
-        DramaSeries series = requireOwnedSeries(asset.getSeriesId());
-        String prompt = compileImagePromptForGenerate(asset, series);
-        if (!StringUtils.hasText(prompt)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请先完善外形设定再锁定");
-        }
-        if (!StringUtils.hasText(asset.getDescription()) && StringUtils.hasText(asset.getIdentityInvariants())) {
-            asset.setDescription(asset.getIdentityInvariants().trim());
-        }
-        int version = asset.getIdentityVersion() == null ? 0 : asset.getIdentityVersion();
-        asset.setIdentityVersion(version + 1);
-        asset.setStatus(DramaContract.STATUS_LOCKED);
-        asset.setNeedsHuman(false);
-        // A terminal task is historical metadata after the selected image is locked.
-        // Clearing the association prevents stale PENDING/RUNNING rows from driving
-        // the UI back to "生成中" on the next asset-list refresh.
-        asset.setGenTaskId(null);
-        assetMapper.updateById(asset);
-        storyboardService.invalidateByAsset(asset.getEpisodeId(), asset.getId());
-        touchSeries(asset.getSeriesId());
-        return toResp(asset, loadTask(asset.getGenTaskId()));
-    }
-
     @Transactional(readOnly = true)
     public List<DramaAssetGenerationResp> listGenerations(Long assetId) {
         DramaAsset asset = requireAsset(assetId);

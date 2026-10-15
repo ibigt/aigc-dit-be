@@ -11,6 +11,10 @@ public class DramaSeriesUpdateReq {
     @Size(max = 128)
     private String name;
 
+    @Size(max = 200)
+    @Schema(description = "故事简介，最长 200 字；传空字符串表示清空")
+    private String synopsis;
+
     @Size(max = 64)
     @Schema(description = "风格键：anime-comic / live-realism / anime-wuxia / costume-comic / republican-era / cyberpunk / sci-fi / rural / guofeng-3d / neon-cyber")
     private String styleKey;

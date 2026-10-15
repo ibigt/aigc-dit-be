@@ -298,12 +298,6 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.getGenerateTask(id, taskId));
     }
 
-    @Operation(summary = "确认锁定资产并升 identity_version；分镜参考只看当前选用图")
-    @PostMapping("/assets/{id}/lock")
-    public CommonResult<DramaAssetResp> lockAsset(@PathVariable Long id) {
-        return CommonResult.success(dramaAssetService.lock(id));
-    }
-
     @Operation(summary = "资产生成记录列表（新→旧）")
     @GetMapping("/assets/{id}/generations")
     public CommonResult<List<DramaAssetGenerationResp>> listAssetGenerations(@PathVariable Long id) {

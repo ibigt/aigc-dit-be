@@ -12,6 +12,8 @@ public class DramaSeriesResp {
 
     private Long id;
     private String name;
+    @Schema(description = "故事简介，最长 200 字")
+    private String synopsis;
     private String styleKey;
     private String styleName;
     private String styleCover;
