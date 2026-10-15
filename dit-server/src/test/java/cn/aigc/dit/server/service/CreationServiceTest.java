@@ -76,6 +76,15 @@ class CreationServiceTest {
     }
 
     @Test
+    void fileFormatDerivesFromStorageKey() {
+        assertEquals("WAV", CreationService.fileFormat("users/1/voice.wav"));
+        assertEquals("MP3", CreationService.fileFormat("users/1/voice.mp3"));
+        assertNull(CreationService.fileFormat("users/1/without-extension"));
+        assertNull(CreationService.fileFormat(""));
+        assertNull(CreationService.fileFormat(null));
+    }
+
+    @Test
     void titleFromPromptStripsPictureAnchors() {
         assertEquals("高精度二次元写实，半写实", CreationService.titleFromPrompt(
                 "<Picture 1> <Picture 2> <Picture 3> 高精度二次元写实，半写实3D渲染"));

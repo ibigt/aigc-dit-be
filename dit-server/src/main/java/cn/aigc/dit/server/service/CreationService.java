@@ -325,6 +325,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         resp.setTitle(creation.getTitle());
         resp.setCategory(creation.getCategory());
         resp.setType(mediaType(creation.getStorageKey(), creation.getCategory()));
+        resp.setFormat(fileFormat(creation.getStorageKey()));
         resp.setStorageKey(creation.getStorageKey());
         resp.setPosterKey(creation.getPosterKey());
         resp.setUrl(MediaUrls.of(creation.getStorageKey()));
@@ -553,6 +554,18 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             }
         }
         return category;
+    }
+
+    static String fileFormat(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        String path = storageKey.split("[?#]", 2)[0];
+        int extensionIndex = path.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex == path.length() - 1 || extensionIndex < path.lastIndexOf('/')) {
+            return null;
+        }
+        return path.substring(extensionIndex + 1).toUpperCase();
     }
 
     public static String elapsedLabel(GenTask task) {

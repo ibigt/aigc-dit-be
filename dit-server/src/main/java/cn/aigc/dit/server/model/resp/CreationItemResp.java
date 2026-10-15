@@ -16,6 +16,8 @@ public class CreationItemResp {
     private String title;
     private String category;
     private String type;
+    @Schema(description = "文件格式，如 MP3、WAV、PNG、MP4")
+    private String format;
     private String storageKey;
     private String posterKey;
     private String url;
