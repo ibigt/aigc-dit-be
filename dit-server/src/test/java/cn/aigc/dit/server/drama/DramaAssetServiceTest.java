@@ -15,6 +15,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
+import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -700,6 +701,50 @@ class DramaAssetServiceTest {
         assertNull(asset.getSelectedGenerationId());
         assertNull(asset.getImageStorageKey());
         assertNull(asset.getImageAssetId());
+    }
+
+    @Test
+    void listGenerationsResolvesModelNameFromHistoricalTask() {
+        DramaAsset asset = ownedAsset();
+        asset.setSelectedGenerationId(11L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+
+        DramaAssetGeneration generated = generation(11L, 100L, "generate", "生成方案 1", "gen.png");
+        DramaAssetGeneration uploaded = generation(12L, null, "upload", "上传 1", "up.png");
+        DramaAssetGeneration missingModel = generation(13L, 101L, "generate", "生成方案 2", "old.png");
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of(generated, uploaded, missingModel));
+
+        GenTask task = new GenTask();
+        task.setId(100L);
+        task.setModelId(77L);
+        GenTask orphanTask = new GenTask();
+        orphanTask.setId(101L);
+        orphanTask.setModelId(88L);
+        when(genTaskMapper.selectBatchIds(any())).thenReturn(List.of(task, orphanTask));
+        AiModel model = new AiModel();
+        model.setId(77L);
+        model.setName("Seedream 4.5");
+        when(aiModelMapper.selectBatchIds(any())).thenReturn(List.of(model));
+
+        var list = service.listGenerations(9L);
+
+        assertEquals(3, list.size());
+        assertEquals("Seedream 4.5", list.get(0).getModelName());
+        assertTrue(list.get(0).getSelected());
+        assertNull(list.get(1).getModelName());
+        assertNull(list.get(2).getModelName());
+    }
+
+    private static DramaAssetGeneration generation(Long id, Long taskId, String source, String label, String key) {
+        DramaAssetGeneration generation = new DramaAssetGeneration();
+        generation.setId(id);
+        generation.setAssetId(9L);
+        generation.setUserId(7L);
+        generation.setGenTaskId(taskId);
+        generation.setSource(source);
+        generation.setLabel(label);
+        generation.setStorageKey(key);
+        return generation;
     }
 
     private static DramaEpisode ownedEpisode() {

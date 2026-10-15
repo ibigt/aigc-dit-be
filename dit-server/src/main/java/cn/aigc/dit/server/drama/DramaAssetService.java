@@ -427,8 +427,10 @@ public class DramaAssetService {
     @Transactional(readOnly = true)
     public List<DramaAssetGenerationResp> listGenerations(Long assetId) {
         DramaAsset asset = requireAsset(assetId);
-        return listGenerationEntities(asset.getId()).stream()
-                .map(item -> toGenerationResp(item, asset.getSelectedGenerationId()))
+        List<DramaAssetGeneration> generations = listGenerationEntities(asset.getId());
+        Map<Long, String> modelNames = modelNamesByTaskId(generations);
+        return generations.stream()
+                .map(item -> toGenerationResp(item, asset.getSelectedGenerationId(), modelNames))
                 .toList();
     }
 
@@ -484,7 +486,7 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaAssetGeneration generation = requireOwnedGeneration(asset, generationId);
         if (generation.getLibraryAssetId() != null) {
-            return toGenerationResp(generation, asset.getSelectedGenerationId());
+            return toGenerationResp(generation, asset.getSelectedGenerationId(), modelNamesByTaskId(List.of(generation)));
         }
         String name = asset.getName() + " · " + generation.getLabel();
         AssetResp library = assetService.importFromStorage(
@@ -496,7 +498,7 @@ public class DramaAssetService {
             assetMapper.updateById(asset);
         }
         touchSeries(asset.getSeriesId());
-        return toGenerationResp(generation, asset.getSelectedGenerationId());
+        return toGenerationResp(generation, asset.getSelectedGenerationId(), modelNamesByTaskId(List.of(generation)));
     }
 
     @Transactional
@@ -787,7 +789,10 @@ public class DramaAssetService {
         return "生成方案 " + next;
     }
 
-    private DramaAssetGenerationResp toGenerationResp(DramaAssetGeneration generation, Long selectedId) {
+    private DramaAssetGenerationResp toGenerationResp(
+            DramaAssetGeneration generation,
+            Long selectedId,
+            Map<Long, String> modelNames) {
         DramaAssetGenerationResp resp = new DramaAssetGenerationResp();
         resp.setId(generation.getId());
         resp.setAssetId(generation.getAssetId());
@@ -797,6 +802,7 @@ public class DramaAssetService {
         resp.setSource(generation.getSource());
         resp.setLabel(generation.getLabel());
         resp.setResolution(generation.getResolution());
+        resp.setModelName(modelNameOf(generation, modelNames));
         resp.setLibraryAssetId(generation.getLibraryAssetId());
         resp.setSelected(generation.getId().equals(selectedId));
         resp.setImported(generation.getLibraryAssetId() != null);
@@ -897,6 +903,52 @@ public class DramaAssetService {
             map.put(uniqueKey(asset.getType(), asset.getName(), asset.getStateTag()), asset);
         }
         return map;
+    }
+
+    /** 按生成记录上的任务号反查当时的模型展示名，键是 gen_task.id。 */
+    private Map<Long, String> modelNamesByTaskId(List<DramaAssetGeneration> generations) {
+        Set<Long> taskIds = new HashSet<>();
+        for (DramaAssetGeneration generation : generations) {
+            if (generation.getGenTaskId() != null) {
+                taskIds.add(generation.getGenTaskId());
+            }
+        }
+        if (taskIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Long> modelIdByTask = new HashMap<>();
+        Set<Long> modelIds = new HashSet<>();
+        for (GenTask task : genTaskMapper.selectBatchIds(taskIds)) {
+            if (task.getId() == null || task.getModelId() == null) {
+                continue;
+            }
+            modelIdByTask.put(task.getId(), task.getModelId());
+            modelIds.add(task.getModelId());
+        }
+        if (modelIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> namesByModel = new HashMap<>();
+        for (AiModel model : aiModelMapper.selectBatchIds(modelIds)) {
+            if (model.getId() != null && StringUtils.hasText(model.getName())) {
+                namesByModel.put(model.getId(), model.getName().trim());
+            }
+        }
+        Map<Long, String> namesByTask = new HashMap<>();
+        for (Map.Entry<Long, Long> entry : modelIdByTask.entrySet()) {
+            String name = namesByModel.get(entry.getValue());
+            if (StringUtils.hasText(name)) {
+                namesByTask.put(entry.getKey(), name);
+            }
+        }
+        return namesByTask;
+    }
+
+    private static String modelNameOf(DramaAssetGeneration generation, Map<Long, String> modelNames) {
+        if (generation.getGenTaskId() == null || modelNames == null) {
+            return null;
+        }
+        return modelNames.get(generation.getGenTaskId());
     }
 
     private Map<Long, GenTask> loadTasks(List<DramaAsset> assets) {

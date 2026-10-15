@@ -17,6 +17,8 @@ public class DramaAssetGenerationResp {
     private String source;
     private String label;
     private String resolution;
+    /** 生成该图时任务绑定的模型展示名。上传、引用或任务已不在时为空。 */
+    private String modelName;
     private Long libraryAssetId;
     private Boolean selected;
     private Boolean imported;
