@@ -43,6 +43,11 @@ public class DramaShotResp {
     private String compiledPrompt;
     private String compiledFingerprint;
     private Boolean compiledStale;
+    @Schema(description = "用户可见核心正文。无存库值且不是旧覆盖时，为按当前镜头结构现场渲染的初值")
+    private String visiblePrompt;
+    @Schema(description = "仍是旧的整段覆盖且用户尚未改存核心正文")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private Boolean legacyOverride;
     private String promptOverride;
     private List<String> unboundNames = new ArrayList<>();
     private String status;

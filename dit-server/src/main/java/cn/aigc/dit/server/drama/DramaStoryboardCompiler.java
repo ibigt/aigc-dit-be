@@ -7,12 +7,15 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 分镜视频 prompt 编译器。每镜自包含：Picture 锚点 + 风格前缀 + Active References（完整身份短句）
@@ -996,5 +999,1295 @@ public final class DramaStoryboardCompiler {
         } catch (NoSuchAlgorithmException e) {
             return Integer.toHexString(value.hashCode());
         }
+    }
+
+    private static final Pattern VISIBLE_LABEL = Pattern.compile(
+            "(站位|镜头\\d+|景别|动作|接续|台词|场景|运镜|环境声)\\s*[:：]");
+
+    /** 「说：」以及旁白、画外音的冒号。冒号之后到行尾是口播，不再写 {@code @}。 */
+    private static final Pattern SAY_MARK = Pattern.compile("说\\s*[:：]|旁白\\s*[:：]|（画外音）\\s*[:：]");
+
+    /**
+     * 给用户看的核心正文。场景单独一行；站位、景别和接续留在镜头说明里。
+     * 动作和该角色的下一句台词写成「@名字 动作，说：台词」。口播里的名字不加 {@code @}。
+     * 不含风格、参考图声明和口播模板。
+     */
+    public static String renderVisiblePrompt(ShotContent content, List<String> imagedNames) {
+        return renderVisiblePrompt(content, imagedNames, null);
+    }
+
+    public static String renderVisiblePrompt(ShotContent content, List<String> imagedNames, String locationName) {
+        return renderVisiblePrompt(content, imagedNames, locationName, List.of());
+    }
+
+    /**
+     * @param propNames 本镜要用的道具。已有参考图、但画面说明里没写出名字的，补到站位行，保证出片能引用到图。
+     */
+    public static String renderVisiblePrompt(
+            ShotContent content, List<String> imagedNames, String locationName, List<String> propNames) {
+        ShotContent shot = content == null
+                ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
+                : content;
+        List<String> names = normalizeNames(imagedNames);
+        StringBuilder body = new StringBuilder();
+        if (DramaShotBeats.hasBeats(shot.shotBeats())) {
+            appendVisibleLine(body, "场景", sceneLine(shot.scene(), locationName, names));
+            appendVisibleLine(body, "站位", markAtNames(shot.shotBeats().getBlocking(), names));
+            int index = 1;
+            for (DramaShotBeats.Beat beat : shot.shotBeats().getBeats()) {
+                if (beat == null) {
+                    continue;
+                }
+                String header = cameraHeader(
+                        markAtNames(beat.getCamera(), names),
+                        markAtNames(beat.getContinuity(), names));
+                List<String> lines = performanceLines(
+                        beat.getAction(), beat.getDialogue(), names, shot.characterNames());
+                if (!StringUtils.hasText(header) && lines.isEmpty()) {
+                    continue;
+                }
+                if (!body.isEmpty()) {
+                    // 同一镜头内的动作和对白只换行；不同镜头之间留一行空行。
+                    body.append(index > 1 ? "\n\n" : "\n");
+                }
+                body.append("镜头").append(index).append('：').append(header);
+                for (String line : lines) {
+                    body.append('\n').append(line);
+                }
+                index++;
+            }
+        } else {
+            appendVisibleLine(body, "场景", sceneLine(shot.scene(), locationName, names));
+            appendVisibleLine(body, "运镜", markAtNames(shot.camera(), names));
+            if (spokenUtterances(shot.dialogue()).isEmpty()) {
+                appendVisibleLine(body, "动作", markAtNames(shot.narrativeGoal(), names));
+            } else {
+                for (String line : performanceLines(shot.narrativeGoal(), shot.dialogue(), names, shot.characterNames())) {
+                    if (!body.isEmpty()) {
+                        body.append('\n');
+                    }
+                    body.append(line);
+                }
+            }
+            appendVisibleLine(body, "环境声", markAtNames(shot.ambiance(), names));
+        }
+        citeMissingProps(body, propNames, names);
+        return body.toString().trim();
+    }
+
+    /**
+     * 本镜道具名单里、已有参考图、正文还没有 {@code @名字} 的道具，补到站位行。
+     * 动作里已经写过的不重复补。没有参考图的不写 {@code @}。
+     */
+    private static void citeMissingProps(StringBuilder body, List<String> propNames, List<String> imagedNames) {
+        if (propNames == null || propNames.isEmpty()) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        for (String raw : propNames) {
+            if (!StringUtils.hasText(raw)) {
+                continue;
+            }
+            String name = raw.trim();
+            if (imagedNames == null || !imagedNames.contains(name) || containsAtName(body, name, imagedNames)) {
+                continue;
+            }
+            if (!missing.contains(name)) {
+                missing.add(name);
+            }
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+        StringBuilder mention = new StringBuilder();
+        for (String name : missing) {
+            if (!mention.isEmpty()) {
+                mention.append('，');
+            }
+            mention.append('@').append(name);
+        }
+        int label = labelIndex(body, "站位");
+        if (label >= 0) {
+            int lineEnd = newlineAt(body, label);
+            int end = lineEnd < 0 ? body.length() : lineEnd;
+            end = trimTrailingPunct(body, label, end);
+            if (hasContentAfterLabel(body, label, end)) {
+                body.insert(end, '，');
+                end++;
+            }
+            body.insert(end, mention);
+            body.insert(end + mention.length(), '。');
+            return;
+        }
+        String line = "站位：" + mention + "。";
+        int scene = labelIndex(body, "场景");
+        if (scene >= 0) {
+            int lineEnd = newlineAt(body, scene);
+            if (lineEnd < 0) {
+                body.append('\n').append(line);
+            } else {
+                body.insert(lineEnd, "\n" + line);
+            }
+            return;
+        }
+        if (body.isEmpty()) {
+            body.append(line);
+        } else {
+            body.insert(0, line + "\n");
+        }
+    }
+
+    /** {@code @怀表开关} 也算已经引用了「怀表」；{@code @档案袋} 不算「档案」。 */
+    private static boolean containsAtName(CharSequence text, String name, List<String> imagedNames) {
+        if (!StringUtils.hasText(name) || text == null) {
+            return false;
+        }
+        String source = text.toString();
+        String token = "@" + name;
+        int from = 0;
+        while (from < source.length()) {
+            int at = source.indexOf(token, from);
+            if (at < 0) {
+                return false;
+            }
+            String matched = longestNameAt(source, at + 1, imagedNames);
+            if (name.equals(matched)) {
+                return true;
+            }
+            from = at + 1;
+        }
+        return false;
+    }
+
+    private static int labelIndex(CharSequence text, String label) {
+        String source = text.toString();
+        for (String mark : List.of(label + "：", label + ":")) {
+            int from = 0;
+            while (from < source.length()) {
+                int found = source.indexOf(mark, from);
+                if (found < 0) {
+                    break;
+                }
+                if (found == 0 || source.charAt(found - 1) == '\n') {
+                    return found;
+                }
+                from = found + 1;
+            }
+        }
+        return -1;
+    }
+
+    private static int newlineAt(CharSequence text, int from) {
+        for (int i = Math.max(from, 0); i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int trimTrailingPunct(StringBuilder body, int from, int end) {
+        int index = end;
+        while (index > from) {
+            char value = body.charAt(index - 1);
+            if (value != '。' && value != '.' && value != ' ' && value != '，' && value != ',') {
+                break;
+            }
+            index--;
+        }
+        if (index < end) {
+            body.delete(index, end);
+        }
+        return index;
+    }
+
+    private static boolean hasContentAfterLabel(CharSequence body, int labelAt, int end) {
+        int colon = indexOf(body, '：', labelAt, end);
+        if (colon < 0) {
+            colon = indexOf(body, ':', labelAt, end);
+        }
+        int start = colon < 0 ? end : colon + 1;
+        for (int i = start; i < end; i++) {
+            char value = body.charAt(i);
+            if (value != ' ' && value != '。' && value != '.' && value != '，' && value != ',') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int indexOf(CharSequence text, char value, int from, int end) {
+        for (int i = Math.max(from, 0); i < end && i < text.length(); i++) {
+            if (text.charAt(i) == value) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 出片拼装：可见正文作画面和台词核心，叙述里的 {@code @名字} 换成 Picture，台词保持普通名字。
+     * 不追加上一镜尾帧。
+     */
+    public static Result assemble(String stylePrefix, List<ActiveReference> references,
+                                  List<AudioReference> audioReferences, String visiblePrompt, ShotContent shot) {
+        CompileOptions opts = CompileOptions.r2v();
+        List<ActiveReference> refs = references == null ? List.of() : references;
+        List<AudioReference> audioRefs = audioReferences == null ? List.of() : audioReferences;
+        ShotContent content = shot == null
+                ? new ShotContent(null, null, null, null, null, DramaContract.DEFAULT_DURATION_SEC, List.of(), 0)
+                : shot;
+        String prefix = DramaStyles.withVideoSceneClause(StringUtils.hasText(stylePrefix)
+                ? stylePrefix.trim()
+                : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
+        String visible = visiblePrompt == null ? "" : visiblePrompt.trim();
+        Map<String, Integer> pictures = pictureIndexByName(refs);
+
+        StringBuilder prompt = new StringBuilder();
+        if (!refs.isEmpty()) {
+            for (int i = 1; i <= refs.size(); i++) {
+                if (i > 1) {
+                    prompt.append(' ');
+                }
+                prompt.append("<Picture ").append(i).append('>');
+            }
+            prompt.append('\n');
+        }
+        prompt.append(prefix);
+        if (!prefix.endsWith("。") && !prefix.endsWith(".")) {
+            prompt.append('。');
+        }
+        prompt.append('\n');
+        appendReferenceDeclaration(prompt, refs);
+        if (!refs.isEmpty()) {
+            prompt.append('\n').append("Active References:\n");
+            for (int i = 0; i < refs.size(); i++) {
+                ActiveReference ref = refs.get(i);
+                int picture = i + 1;
+                prompt.append("<Picture ").append(picture).append("> ");
+                prompt.append(blank(ref.name()));
+                prompt.append('。');
+                String identity = fullIdentity(ref);
+                if (StringUtils.hasText(identity)) {
+                    prompt.append(identity);
+                    if (!identity.endsWith("。") && !identity.endsWith(".")) {
+                        prompt.append('。');
+                    }
+                }
+                prompt.append(' ');
+                prompt.append("<Picture ").append(picture).append("> ");
+                prompt.append(pictureHint(ref));
+                prompt.append('\n');
+            }
+        }
+        if (!audioRefs.isEmpty()) {
+            prompt.append('\n').append("Voice References:\n");
+            int audioIndex = 0;
+            for (AudioReference ref : audioRefs) {
+                if (!StringUtils.hasText(ref.storageKey())) {
+                    continue;
+                }
+                audioIndex++;
+                prompt.append("<Audio ").append(audioIndex).append("> 只定义角色“")
+                        .append(blank(ref.name())).append("”的音色身份，不复述参考音频文字，不继承底噪。\n");
+            }
+        }
+        prompt.append('\n').append(MOVIE_SCENE_MUST).append('\n');
+        prompt.append(CLIP_EDGE_STABILITY).append('\n');
+        if (needsLiveActionCoverage(prefix)) {
+            prompt.append(LIVE_ACTION_COVERAGE).append('\n');
+        }
+        if (StringUtils.hasText(visible)) {
+            prompt.append(bindAtMentions(visible, pictures)).append('\n');
+        }
+        boolean beats = DramaShotBeats.hasBeats(content.shotBeats());
+        boolean beatsSpeak = beats && beatsHaveSpoken(content.shotBeats());
+        appendLine(prompt, "Continuity in", bindPictureNames(content.continuityIn(), pictures));
+        appendLine(prompt, "Continuity out", bindPictureNames(content.continuityOut(), pictures));
+        prompt.append(castConstraint(content, refs, false, beats)).append('\n');
+        prompt.append("Duration: ").append(content.durationSec()).append(" seconds.");
+        String spoken = beatsSpeak
+                ? beatDialogueGlobalRule(content.shotBeats())
+                : spokenDialogueConstraint(plainDialogue(content.dialogue()), false);
+        if (StringUtils.hasText(spoken)) {
+            String voices = voiceConstraint(audioRefs);
+            if (StringUtils.hasText(voices)) {
+                prompt.append('\n').append(voices);
+            }
+            prompt.append('\n').append(spoken);
+        }
+        return new Result(prompt.toString().trim(), fingerprintVisible(prefix, refs, audioRefs, content, visible));
+    }
+
+    public static String fingerprintVisible(String stylePrefix, List<ActiveReference> references,
+                                            List<AudioReference> audioReferences, ShotContent shot,
+                                            String visiblePrompt) {
+        String base = fingerprint(stylePrefix, references, audioReferences, shot, CompileOptions.r2v());
+        return sha256(base + "\nvisible:" + blank(visiblePrompt));
+    }
+
+    /** 叙述部分按首次 {@code @} 去重。{@code knownNames} 用于最长匹配，可为空。 */
+    public static List<String> narrativeAtNames(String text, List<String> knownNames) {
+        List<String> names = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return names;
+        }
+        List<String> known = normalizeNames(knownNames);
+        for (TextSpan span : splitSpans(text)) {
+            if (span.dialogue()) {
+                continue;
+            }
+            collectAtNames(span.text(), known, names);
+        }
+        return names;
+    }
+
+    public static boolean hasShotLabels(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return Pattern.compile("镜头\\d+\\s*[:：]").matcher(text).find();
+    }
+
+    /** 去掉全部 {@code @} 前缀，名字本身保留。台词框保存前使用。 */
+    public static String stripMentionMarks(String text) {
+        return stripAtPrefix(text);
+    }
+
+    /** 去掉台词段里的 {@code @}，名字本身保留。 */
+    public static String stripDialogueMentions(String text) {
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+        StringBuilder out = new StringBuilder();
+        for (TextSpan span : splitSpans(text)) {
+            out.append(span.dialogue() ? stripAtPrefix(span.text()) : span.text());
+        }
+        return out.toString();
+    }
+
+    /** 正文里有镜头序列，或有「说：」/旁白/画外音口播位。 */
+    public static boolean hasDialogueSlots(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return hasShotLabels(text) || !saySlots(text).isEmpty();
+    }
+
+    /** 有镜头序列或口播位时按出现顺序汇总台词；否则返回空，交给台词框。 */
+    public static String extractDialogue(String visiblePrompt) {
+        if (!hasDialogueSlots(visiblePrompt)) {
+            return null;
+        }
+        List<TextSpan> spans = splitSpans(visiblePrompt);
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < spans.size(); i++) {
+            TextSpan span = spans.get(i);
+            if (!span.dialogue()) {
+                continue;
+            }
+            if (isLegacyDialogueSpan(span.text())) {
+                String body = dialogueBody(span.text());
+                if (StringUtils.hasText(body)) {
+                    lines.add(body.trim());
+                }
+                continue;
+            }
+            String words = stripAtPrefix(span.text()).trim();
+            if (!StringUtils.hasText(words)) {
+                continue;
+            }
+            String speaker = speakerFromNarrative(previousNarrative(spans, i));
+            lines.add(StringUtils.hasText(speaker) ? speaker + "：" + words : words);
+        }
+        return lines.isEmpty() ? null : String.join("\n", lines);
+    }
+
+    /**
+     * 把台词框写回核心正文里的口播位置，不加 {@code @}。
+     * 没有镜头序列、也没有「说：」时原样返回正文。
+     */
+    public static String writeDialogueBack(String visiblePrompt, String dialogue) {
+        String visible = visiblePrompt == null ? "" : visiblePrompt;
+        if (!saySlots(visible).isEmpty()) {
+            return writeSayDialogue(visible, dialogue);
+        }
+        if (!hasShotLabels(visible)) {
+            return visible;
+        }
+        List<String> lines = dialogueLines(dialogue);
+        Matcher matcher = VISIBLE_LABEL.matcher(visible);
+        List<LabelHit> labels = new ArrayList<>();
+        while (matcher.find()) {
+            labels.add(new LabelHit(matcher.start(), matcher.end(), matcher.group(1)));
+        }
+        List<Integer> dialogueLabels = new ArrayList<>();
+        for (int i = 0; i < labels.size(); i++) {
+            if ("台词".equals(labels.get(i).name())) {
+                dialogueLabels.add(i);
+            }
+        }
+        if (dialogueLabels.isEmpty()) {
+            return appendDialogueClauses(visible, labels, lines);
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (int slot = 0; slot < dialogueLabels.size(); slot++) {
+            LabelHit label = labels.get(dialogueLabels.get(slot));
+            int contentEnd = dialogueLabels.get(slot) + 1 < labels.size()
+                    ? labels.get(dialogueLabels.get(slot) + 1).start()
+                    : nextLabelAfter(labels, dialogueLabels.get(slot), visible.length());
+            out.append(visible, cursor, label.end());
+            if (slot < lines.size() && StringUtils.hasText(lines.get(slot))) {
+                out.append(lines.get(slot).trim());
+            }
+            cursor = contentEnd;
+        }
+        if (cursor < visible.length()) {
+            out.append(visible.substring(cursor));
+        }
+        if (lines.size() > dialogueLabels.size()) {
+            String extra = String.join("\n", lines.subList(dialogueLabels.size(), lines.size()));
+            if (StringUtils.hasText(extra)) {
+                out.append('\n').append("台词：").append(extra.trim());
+            }
+        }
+        return out.toString().trim();
+    }
+
+    /** 从旧的整段覆盖里抽出可读段落，不还原成结构化镜头。 */
+    public static String readableLegacyOverride(String override) {
+        if (!StringUtils.hasText(override)) {
+            return "";
+        }
+        String[] lines = override.split("\\r?\\n");
+        List<String> kept = new ArrayList<>();
+        boolean skipping = false;
+        for (String raw : lines) {
+            String line = raw == null ? "" : raw.trim();
+            if (!StringUtils.hasText(line)) {
+                skipping = false;
+                continue;
+            }
+            if (startsBlock(line)) {
+                skipping = true;
+                continue;
+            }
+            if (skipping) {
+                if (isVisibleContentLine(line)) {
+                    skipping = false;
+                } else {
+                    continue;
+                }
+            }
+            if (isTemplateLine(line)) {
+                continue;
+            }
+            kept.add(line);
+        }
+        if (!kept.isEmpty() && !isVisibleContentLine(kept.get(0)) && kept.stream().anyMatch(DramaStoryboardCompiler::isVisibleContentLine)) {
+            kept.remove(0);
+        }
+        String text = String.join("\n", kept).trim();
+        return StringUtils.hasText(text) ? text : override.trim();
+    }
+
+    static String bindAtMentions(String text, Map<String, Integer> pictures) {
+        if (!StringUtils.hasText(text) || pictures == null || pictures.isEmpty()) {
+            return text == null ? "" : text;
+        }
+        List<String> names = new ArrayList<>(pictures.keySet());
+        names.sort(Comparator.comparingInt(String::length).reversed());
+        StringBuilder out = new StringBuilder();
+        for (TextSpan span : splitSpans(text)) {
+            out.append(span.dialogue() ? span.text() : replaceAtNames(span.text(), names, pictures));
+        }
+        return out.toString();
+    }
+
+    static String markAtNames(String text, List<String> names) {
+        if (!StringUtils.hasText(text) || names == null || names.isEmpty()) {
+            return text;
+        }
+        List<String> sorted = normalizeNames(names);
+        String source = text;
+        StringBuilder out = new StringBuilder();
+        int index = 0;
+        while (index < source.length()) {
+            if (source.charAt(index) == '@') {
+                int end = index + 1;
+                while (end < source.length() && !isAtDelimiter(source.charAt(end))) {
+                    end++;
+                }
+                out.append(source, index, end);
+                index = end;
+                continue;
+            }
+            String matched = longestNameAt(source, index, sorted);
+            if (matched != null) {
+                out.append('@').append(matched);
+                index += matched.length();
+                continue;
+            }
+            out.append(source.charAt(index));
+            index++;
+        }
+        return out.toString();
+    }
+
+    private static void appendVisibleLine(StringBuilder body, String label, String value) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        if (!body.isEmpty()) {
+            body.append('\n');
+        }
+        body.append(label).append('：').append(value.trim());
+    }
+
+    private static void appendVisibleClause(StringBuilder block, String label, String value) {
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+        if (!block.isEmpty()) {
+            block.append(' ');
+        }
+        block.append(label).append('：').append(value.trim());
+        if (!value.trim().endsWith("。") && !value.trim().endsWith(".")) {
+            block.append('。');
+        }
+    }
+
+    private static String plainDialogue(String dialogue) {
+        if (!StringUtils.hasText(dialogue)) {
+            return null;
+        }
+        return stripAtPrefix(dialogue.trim());
+    }
+
+    /**
+     * 场景单独一行。地点资产已可引用、且描述里没有这个名字时，补在行首。
+     * 没有参考图的地点只写普通名字，避免出片时被当成缺失参考图。
+     */
+    private static String sceneLine(String scene, String location, List<String> names) {
+        String loc = blank(location);
+        String desc = blank(scene);
+        boolean locImaged = StringUtils.hasText(loc) && names != null && names.contains(loc);
+        if (!StringUtils.hasText(loc) && !StringUtils.hasText(desc)) {
+            return null;
+        }
+        if (!StringUtils.hasText(desc)) {
+            return locImaged ? "@" + loc : loc;
+        }
+        String marked = markAtNames(desc, names);
+        if (!StringUtils.hasText(loc) || desc.contains(loc)) {
+            return marked;
+        }
+        return (locImaged ? "@" + loc : loc) + "。" + marked;
+    }
+
+    private static String markedName(String name, List<String> names) {
+        String marked = markAtNames(name, names);
+        if (!StringUtils.hasText(marked)) {
+            return marked;
+        }
+        return marked.startsWith("@") ? marked : "@" + marked;
+    }
+
+    private static String cameraHeader(String camera, String continuity) {
+        String cam = blank(camera);
+        String cont = blank(continuity);
+        StringBuilder header = new StringBuilder();
+        if (StringUtils.hasText(cam)) {
+            header.append(stripEndPunct(cam));
+        }
+        if (StringUtils.hasText(cont)) {
+            if (!header.isEmpty()) {
+                header.append('。');
+            }
+            if (!cont.startsWith("接")) {
+                header.append('接');
+            }
+            header.append(stripEndPunct(cont));
+        }
+        if (!header.isEmpty() && !header.toString().endsWith("。") && !header.toString().endsWith(".")) {
+            header.append('。');
+        }
+        return header.toString();
+    }
+
+    /**
+     * 按动作分句顺序，把同一说话人的下一句未用台词接成「动作，说：台词」。
+     * 同一角色用逗号连着的动作留在同一句里；只有换了说话人才切开。
+     * 对不上动作的台词只补「@名字 说：」，不编造动作。旁白和画外音单独成行。
+     */
+    private static List<String> performanceLines(String action, String dialogue, List<String> names, List<String> cast) {
+        List<SpokenUtterance> pending = new ArrayList<>(spokenUtterances(dialogue));
+        boolean[] used = new boolean[pending.size()];
+        List<String> speakers = speakerCandidates(cast, pending);
+        List<String> lines = new ArrayList<>();
+        for (String clause : actionClauses(action, speakers)) {
+            String speaker = leadingSpeaker(clause, speakers);
+            int spokenIndex = takeSpoken(pending, used, speaker);
+            String marked = withSpeakerGap(markAtNames(trimEdgePunct(clause), names), speaker);
+            if (spokenIndex < 0) {
+                lines.add(ensureSentence(marked));
+                continue;
+            }
+            SpokenUtterance spoken = pending.get(spokenIndex);
+            lines.add(wovenSpeech(marked, spoken));
+        }
+        for (int i = 0; i < pending.size(); i++) {
+            if (!used[i]) {
+                lines.add(looseSpeech(pending.get(i), names));
+            }
+        }
+        return lines;
+    }
+
+    private static List<String> speakerCandidates(List<String> cast, List<SpokenUtterance> pending) {
+        List<String> speakers = new ArrayList<>();
+        if (cast != null) {
+            for (String name : cast) {
+                if (StringUtils.hasText(name) && !speakers.contains(name.trim())) {
+                    speakers.add(name.trim());
+                }
+            }
+        }
+        for (SpokenUtterance spoken : pending) {
+            if (spoken == null || spoken.narration() || spoken.voiceOver() || !StringUtils.hasText(spoken.speaker())) {
+                continue;
+            }
+            if (!speakers.contains(spoken.speaker())) {
+                speakers.add(spoken.speaker());
+            }
+        }
+        speakers.sort(Comparator.comparingInt(String::length).reversed());
+        return speakers;
+    }
+
+    /**
+     * 先按句号、分号和换行成句，再只在逗号、顿号后面换成另一个说话人时切开。
+     * 「洛白按下开关，庶流扩散」仍是洛白的一句；「洛白按下开关，夏安转身」分成两句。
+     */
+    private static List<String> actionClauses(String action, List<String> speakers) {
+        List<String> clauses = new ArrayList<>();
+        if (!StringUtils.hasText(action)) {
+            return clauses;
+        }
+        for (String sentence : action.split("[。；\\n\\r]+")) {
+            if (!StringUtils.hasText(sentence)) {
+                continue;
+            }
+            clauses.addAll(splitSpeakerTurns(sentence.trim(), speakers));
+        }
+        return clauses;
+    }
+
+    private static List<String> splitSpeakerTurns(String sentence, List<String> speakers) {
+        List<String> groups = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        String currentSpeaker = null;
+        for (String raw : sentence.split("[，、]+")) {
+            if (!StringUtils.hasText(raw)) {
+                continue;
+            }
+            String part = raw.trim();
+            String speaker = leadingSpeaker(part, speakers);
+            if (current.isEmpty()) {
+                current.append(part);
+                currentSpeaker = speaker;
+                continue;
+            }
+            if (speaker != null && !speaker.equals(currentSpeaker)) {
+                groups.add(current.toString());
+                current = new StringBuilder(part);
+                currentSpeaker = speaker;
+                continue;
+            }
+            current.append('，').append(part);
+        }
+        if (!current.isEmpty()) {
+            groups.add(current.toString());
+        }
+        return groups;
+    }
+
+    private static String leadingSpeaker(String clause, List<String> speakers) {
+        String text = clause == null ? "" : clause.trim();
+        if (text.startsWith("@")) {
+            text = text.substring(1).trim();
+        }
+        for (String speaker : speakers) {
+            if (text.startsWith(speaker)) {
+                return speaker;
+            }
+        }
+        return null;
+    }
+
+    private static int takeSpoken(List<SpokenUtterance> pending, boolean[] used, String speaker) {
+        if (!StringUtils.hasText(speaker)) {
+            return -1;
+        }
+        for (int i = 0; i < pending.size(); i++) {
+            SpokenUtterance spoken = pending.get(i);
+            if (used[i] || spoken.narration() || spoken.voiceOver()) {
+                continue;
+            }
+            if (speaker.equals(spoken.speaker())) {
+                used[i] = true;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String withSpeakerGap(String marked, String speaker) {
+        if (!StringUtils.hasText(marked) || !StringUtils.hasText(speaker)) {
+            return marked;
+        }
+        String prefix = "@" + speaker;
+        if (!marked.startsWith(prefix) || marked.length() == prefix.length()) {
+            return marked;
+        }
+        char next = marked.charAt(prefix.length());
+        if (Character.isWhitespace(next) || isAtDelimiter(next)) {
+            return marked;
+        }
+        return prefix + " " + marked.substring(prefix.length());
+    }
+
+    private static String wovenSpeech(String marked, SpokenUtterance spoken) {
+        String body = stripEndPunct(marked).trim();
+        String onlyName = "@" + spoken.speaker();
+        if (body.equals(onlyName)) {
+            return onlyName + " 说：" + spoken.words();
+        }
+        return body + "，说：" + spoken.words();
+    }
+
+    private static String looseSpeech(SpokenUtterance spoken, List<String> names) {
+        if (spoken.narration()) {
+            return "旁白：" + spoken.words();
+        }
+        if (spoken.voiceOver()) {
+            return markedName(spoken.speaker(), names) + "（画外音）：" + spoken.words();
+        }
+        return "@" + spoken.speaker() + " 说：" + spoken.words();
+    }
+
+    private static String trimEdgePunct(String text) {
+        String value = blank(text);
+        int start = 0;
+        int end = value.length();
+        while (start < end && isClausePunct(value.charAt(start))) {
+            start++;
+        }
+        while (end > start && isClausePunct(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(start, end);
+    }
+
+    private static boolean isClausePunct(char value) {
+        return value == '，' || value == '。' || value == '；' || value == '、'
+                || value == ',' || value == '.' || value == ';';
+    }
+
+    private static String stripEndPunct(String text) {
+        String value = blank(text);
+        while (!value.isEmpty()) {
+            char last = value.charAt(value.length() - 1);
+            if (last == '。' || last == '.' || last == '！' || last == '？' || last == '!' || last == '?') {
+                value = value.substring(0, value.length() - 1).trim();
+                continue;
+            }
+            break;
+        }
+        return value;
+    }
+
+    private static String ensureSentence(String text) {
+        String value = blank(text);
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        if (value.endsWith("。") || value.endsWith(".") || value.endsWith("！") || value.endsWith("？")) {
+            return value;
+        }
+        return value + "。";
+    }
+
+    private static String writeSayDialogue(String visible, String dialogue) {
+        List<String> lines = dialogueLines(dialogue);
+        List<SaySlot> slots = saySlots(visible);
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (int i = 0; i < slots.size(); i++) {
+            SaySlot slot = slots.get(i);
+            String words = i < lines.size() ? spokenWords(lines.get(i)) : "";
+            if (StringUtils.hasText(words)) {
+                out.append(visible, cursor, slot.markerEnd());
+                out.append(words);
+            } else {
+                int cut = slot.markerStart();
+                if (cut > cursor && visible.charAt(cut - 1) == '，') {
+                    cut--;
+                }
+                out.append(visible, cursor, cut);
+            }
+            cursor = slot.speechEnd();
+        }
+        if (cursor < visible.length()) {
+            out.append(visible.substring(cursor));
+        }
+        if (lines.size() > slots.size()) {
+            out.append(formatExtraSayLines(lines.subList(slots.size(), lines.size())));
+        }
+        return out.toString().trim();
+    }
+
+    private static String formatExtraSayLines(List<String> lines) {
+        StringBuilder out = new StringBuilder();
+        for (String line : lines) {
+            String words = spokenWords(line);
+            if (!StringUtils.hasText(words)) {
+                continue;
+            }
+            String speaker = speakerPrefix(line);
+            out.append('\n');
+            if (speaker.startsWith("旁白")) {
+                out.append("旁白：").append(words);
+            } else if (speaker.contains("画外音")) {
+                String name = speaker.replace("（画外音）", "").replace("(画外音)", "").trim();
+                if (name.startsWith("@")) {
+                    name = name.substring(1).trim();
+                }
+                out.append('@').append(name).append("（画外音）：").append(words);
+            } else if (StringUtils.hasText(speaker)) {
+                out.append('@').append(speaker).append(" 说：").append(words);
+            } else {
+                out.append("说：").append(words);
+            }
+        }
+        return out.toString();
+    }
+
+    private static String spokenWords(String line) {
+        if (!StringUtils.hasText(line)) {
+            return "";
+        }
+        int sep = speakerSeparator(line);
+        if (sep > 0 && sep <= 32) {
+            return line.substring(sep + 1).trim();
+        }
+        return line.trim();
+    }
+
+    private static String speakerPrefix(String line) {
+        if (!StringUtils.hasText(line)) {
+            return "";
+        }
+        int sep = speakerSeparator(line);
+        if (sep > 0 && sep <= 32) {
+            String speaker = stripAtPrefix(line.substring(0, sep)).trim();
+            return speaker;
+        }
+        return "";
+    }
+
+    private static List<SaySlot> saySlots(String text) {
+        List<SaySlot> slots = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return slots;
+        }
+        int offset = 0;
+        for (TextSpan span : splitLabelSpans(text)) {
+            if (!span.dialogue()) {
+                Matcher matcher = SAY_MARK.matcher(span.text());
+                int cursor = 0;
+                while (matcher.find(cursor)) {
+                    int speechStart = matcher.end();
+                    int speechEnd = span.text().indexOf('\n', speechStart);
+                    if (speechEnd < 0) {
+                        speechEnd = span.text().length();
+                    }
+                    slots.add(new SaySlot(offset + matcher.start(), offset + speechStart, offset + speechEnd));
+                    cursor = speechEnd;
+                }
+            }
+            offset += span.text() == null ? 0 : span.text().length();
+        }
+        return slots;
+    }
+
+    private static boolean isLegacyDialogueSpan(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        return text.trim().startsWith("台词：") || text.trim().startsWith("台词:");
+    }
+
+    private static String previousNarrative(List<TextSpan> spans, int index) {
+        for (int i = index - 1; i >= 0; i--) {
+            if (!spans.get(i).dialogue()) {
+                return spans.get(i).text();
+            }
+        }
+        return "";
+    }
+
+    private static String speakerFromNarrative(String narrative) {
+        if (!StringUtils.hasText(narrative)) {
+            return "";
+        }
+        int marker = lastSayMarker(narrative);
+        String before = marker >= 0 ? narrative.substring(0, marker) : narrative;
+        String markerText = marker >= 0 ? narrative.substring(marker) : "";
+        String clause = before.replaceAll("[，。；、\\s]+$", "");
+        int cut = Math.max(clause.lastIndexOf('\n'),
+                Math.max(clause.lastIndexOf('，'), Math.max(clause.lastIndexOf('。'), clause.lastIndexOf('；'))));
+        String tail = (cut >= 0 ? clause.substring(cut + 1) : clause).trim();
+        if (markerText.startsWith("旁白") || tail.startsWith("旁白")) {
+            return "旁白";
+        }
+        String name = atName(tail);
+        if (!StringUtils.hasText(name)) {
+            return "";
+        }
+        if (markerText.contains("画外音") || tail.contains("画外音")) {
+            return name + "（画外音）";
+        }
+        return name;
+    }
+
+    private static int lastSayMarker(String narrative) {
+        Matcher matcher = SAY_MARK.matcher(narrative);
+        int start = -1;
+        while (matcher.find()) {
+            start = matcher.start();
+        }
+        return start;
+    }
+
+    private static String atName(String tail) {
+        if (!StringUtils.hasText(tail)) {
+            return "";
+        }
+        int at = tail.indexOf('@');
+        if (at < 0) {
+            return "";
+        }
+        int end = at + 1;
+        while (end < tail.length() && !isAtDelimiter(tail.charAt(end))) {
+            end++;
+        }
+        return end > at + 1 ? tail.substring(at + 1, end) : "";
+    }
+
+    private static List<String> normalizeNames(List<String> names) {
+        List<String> sorted = new ArrayList<>();
+        if (names == null) {
+            return sorted;
+        }
+        for (String name : names) {
+            if (!StringUtils.hasText(name)) {
+                continue;
+            }
+            String trimmed = name.trim();
+            if (!sorted.contains(trimmed)) {
+                sorted.add(trimmed);
+            }
+        }
+        sorted.sort(Comparator.comparingInt(String::length).reversed());
+        return sorted;
+    }
+
+    private static void collectAtNames(String text, List<String> known, List<String> into) {
+        if (!StringUtils.hasText(text)) {
+            return;
+        }
+        int index = 0;
+        while (index < text.length()) {
+            if (text.charAt(index) != '@') {
+                index++;
+                continue;
+            }
+            String matched = longestNameAt(text, index + 1, known);
+            if (matched == null) {
+                int end = index + 1;
+                while (end < text.length() && !isAtDelimiter(text.charAt(end))) {
+                    end++;
+                }
+                matched = end > index + 1 ? text.substring(index + 1, end) : null;
+            }
+            if (!StringUtils.hasText(matched)) {
+                index++;
+                continue;
+            }
+            if (!into.contains(matched)) {
+                into.add(matched);
+            }
+            index += 1 + matched.length();
+        }
+    }
+
+    private static String replaceAtNames(String text, List<String> names, Map<String, Integer> pictures) {
+        if (!StringUtils.hasText(text)) {
+            return text == null ? "" : text;
+        }
+        StringBuilder out = new StringBuilder();
+        int index = 0;
+        while (index < text.length()) {
+            if (text.charAt(index) != '@') {
+                out.append(text.charAt(index));
+                index++;
+                continue;
+            }
+            String matched = longestNameAt(text, index + 1, names);
+            Integer picture = matched == null ? null : pictures.get(matched);
+            if (matched != null && picture != null) {
+                out.append(matched).append("（<Picture ").append(picture).append(">）");
+                index += 1 + matched.length();
+                continue;
+            }
+            out.append('@');
+            index++;
+        }
+        return out.toString();
+    }
+
+    private static String longestNameAt(String text, int offset, List<String> names) {
+        if (names == null || offset < 0 || offset > text.length()) {
+            return null;
+        }
+        String matched = null;
+        for (String name : names) {
+            if (!StringUtils.hasText(name) || offset + name.length() > text.length()) {
+                continue;
+            }
+            if (text.regionMatches(offset, name, 0, name.length())
+                    && (matched == null || name.length() > matched.length())) {
+                matched = name;
+            }
+        }
+        return matched;
+    }
+
+    private static boolean isAtDelimiter(char value) {
+        return Character.isWhitespace(value)
+                || value == '，' || value == '。' || value == '；' || value == '、'
+                || value == '：' || value == ':' || value == '（' || value == '）'
+                || value == '(' || value == ')' || value == '@' || value == '<'
+                || value == '>' || value == '！' || value == '？' || value == ','
+                || value == '.' || value == ';' || value == '!' || value == '?';
+    }
+
+    private static String stripAtPrefix(String text) {
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char current = text.charAt(i);
+            if (current == '@' && i + 1 < text.length() && !isAtDelimiter(text.charAt(i + 1))) {
+                continue;
+            }
+            out.append(current);
+        }
+        return out.toString();
+    }
+
+    private static String dialogueBody(String labeled) {
+        if (!StringUtils.hasText(labeled)) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("^台词\\s*[:：]\\s*").matcher(labeled.trim());
+        String body = matcher.find() ? labeled.trim().substring(matcher.end()) : labeled.trim();
+        return stripAtPrefix(body).trim();
+    }
+
+    private static List<String> dialogueLines(String dialogue) {
+        List<String> lines = new ArrayList<>();
+        if (!StringUtils.hasText(dialogue)) {
+            return lines;
+        }
+        for (String raw : dialogue.split("\\r?\\n")) {
+            String line = stripAtPrefix(raw == null ? "" : raw).trim();
+            if (StringUtils.hasText(line)) {
+                lines.add(line);
+            }
+        }
+        return lines;
+    }
+
+    private static String appendDialogueClauses(String visible, List<LabelHit> labels, List<String> lines) {
+        if (lines.isEmpty()) {
+            return visible;
+        }
+        List<LabelHit> shots = new ArrayList<>();
+        for (LabelHit label : labels) {
+            if (label.name().startsWith("镜头")) {
+                shots.add(label);
+            }
+        }
+        if (shots.isEmpty()) {
+            return visible;
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (int i = 0; i < shots.size(); i++) {
+            int end = i + 1 < shots.size() ? shots.get(i + 1).start() : visible.length();
+            out.append(visible, cursor, end);
+            if (i < lines.size()) {
+                if (out.length() > 0 && out.charAt(out.length() - 1) != '\n' && out.charAt(out.length() - 1) != ' ') {
+                    out.append(' ');
+                }
+                out.append("台词：").append(lines.get(i));
+            }
+            cursor = end;
+        }
+        if (lines.size() > shots.size()) {
+            out.append('\n').append("台词：").append(String.join("\n", lines.subList(shots.size(), lines.size())));
+        }
+        return out.toString().trim();
+    }
+
+    private static int nextLabelAfter(List<LabelHit> labels, int index, int fallback) {
+        return index + 1 < labels.size() ? labels.get(index + 1).start() : fallback;
+    }
+
+    private static boolean startsBlock(String line) {
+        return line.startsWith("Active References")
+                || line.startsWith("Voice References")
+                || line.startsWith("Identities");
+    }
+
+    private static boolean isVisibleContentLine(String line) {
+        return line.startsWith("Scene:")
+                || line.startsWith("Camera:")
+                || line.startsWith("Action:")
+                || line.startsWith("Dialogue:")
+                || line.startsWith("Ambiance:")
+                || line.startsWith("站位")
+                || line.startsWith("镜头")
+                || line.startsWith("场景")
+                || line.startsWith("运镜")
+                || line.startsWith("动作")
+                || line.startsWith("环境声")
+                || line.startsWith("景别")
+                || line.startsWith("接续")
+                || line.startsWith("台词");
+    }
+
+    private static boolean isTemplateLine(String line) {
+        if (line.matches("^(<Picture \\d+>\\s*)+$")) {
+            return true;
+        }
+        if (line.startsWith("参考图：")
+                || line.startsWith("Must")
+                || line.startsWith("Duration:")
+                || line.startsWith("Continuity in")
+                || line.startsWith("Continuity out")
+                || line.startsWith("衔接：")
+                || line.startsWith("对白执行")
+                || line.startsWith("对白表演")
+                || line.startsWith("出场：")
+                || line.startsWith("本镜出场")
+                || line.startsWith("未出图角色")
+                || line.contains("本镜恰好")
+                || line.contains("某一镜头没点名")
+                || line.startsWith("景别：对白和问责")
+                || line.startsWith("<Picture ")
+                || line.startsWith("<Audio ")) {
+            return true;
+        }
+        return false;
+    }
+
+    private record TextSpan(boolean dialogue, String text) {
+    }
+
+    private record LabelHit(int start, int end, String name) {
+    }
+
+    private record SaySlot(int markerStart, int markerEnd, int speechEnd) {
+    }
+
+    private static List<TextSpan> splitSpans(String text) {
+        List<TextSpan> spans = new ArrayList<>();
+        for (TextSpan span : splitLabelSpans(text)) {
+            if (span.dialogue()) {
+                spans.add(span);
+                continue;
+            }
+            spans.addAll(splitSaySpans(span.text()));
+        }
+        return spans;
+    }
+
+    private static List<TextSpan> splitLabelSpans(String text) {
+        List<TextSpan> spans = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return spans;
+        }
+        Matcher matcher = VISIBLE_LABEL.matcher(text);
+        List<LabelHit> labels = new ArrayList<>();
+        while (matcher.find()) {
+            labels.add(new LabelHit(matcher.start(), matcher.end(), matcher.group(1)));
+        }
+        if (labels.isEmpty()) {
+            spans.add(new TextSpan(false, text));
+            return spans;
+        }
+        int cursor = 0;
+        for (int i = 0; i < labels.size(); i++) {
+            LabelHit label = labels.get(i);
+            if (label.start() > cursor) {
+                spans.add(new TextSpan(false, text.substring(cursor, label.start())));
+            }
+            int contentEnd = i + 1 < labels.size() ? labels.get(i + 1).start() : text.length();
+            boolean dialogue = "台词".equals(label.name());
+            spans.add(new TextSpan(dialogue, text.substring(label.start(), contentEnd)));
+            cursor = contentEnd;
+        }
+        if (cursor < text.length()) {
+            spans.add(new TextSpan(false, text.substring(cursor)));
+        }
+        return spans;
+    }
+
+    private static List<TextSpan> splitSaySpans(String text) {
+        List<TextSpan> spans = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return spans;
+        }
+        Matcher matcher = SAY_MARK.matcher(text);
+        int cursor = 0;
+        boolean found = false;
+        while (matcher.find(cursor)) {
+            found = true;
+            int speechStart = matcher.end();
+            int speechEnd = text.indexOf('\n', speechStart);
+            if (speechEnd < 0) {
+                speechEnd = text.length();
+            }
+            if (speechStart > cursor) {
+                spans.add(new TextSpan(false, text.substring(cursor, speechStart)));
+            }
+            if (speechEnd > speechStart) {
+                spans.add(new TextSpan(true, text.substring(speechStart, speechEnd)));
+            }
+            cursor = speechEnd;
+        }
+        if (!found) {
+            spans.add(new TextSpan(false, text));
+            return spans;
+        }
+        if (cursor < text.length()) {
+            spans.add(new TextSpan(false, text.substring(cursor)));
+        }
+        return spans;
     }
 }

@@ -67,6 +67,10 @@ public class DramaShot {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String compiledFingerprint;
 
+    /** 用户可见、可编辑的核心正文。叙述里是 @名字，台词是普通名字。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String visiblePrompt;
+
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String promptOverride;
     private String status;

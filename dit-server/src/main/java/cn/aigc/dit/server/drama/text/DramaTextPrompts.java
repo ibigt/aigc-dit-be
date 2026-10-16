@@ -158,7 +158,8 @@ public final class DramaTextPrompts {
               或整段口播超过 duration_sec × 4 字、15 秒演不完（在镜头边界切开，不要为凑时长删戏）。
             - 一条分镜内部写 shot_beats，不因此新增分镜。blocking 是本镜起始站位（谁在画面左/右、门和关键道具在哪）。
               beats 写 1–3 个镜头，用来换景别和下一拍动作。每个镜头含 camera（一个景别与运镜）、
-              action（一件事）、continuity（接上一镜头的哪一个动作）、dialogue（可空，只放这一镜头要说的那一句）。
+              action（这一拍能拍出来的动作链：起势、动作、落点。同一角色的连续动作用逗号连在一句里，换一个人才断开。40～120 字。不写台词，不编造原稿没有的情节）、
+              continuity（接上一镜头的哪一个动作）、dialogue（可空，只放这一镜头要说的那一句）。
               只有一拍时就写 1 个镜头。景别变化写进这些镜头，不要为此新开分镜。
               同一条分镜内相邻镜头的景别或机位必须有变化（如中景接近景、推近接横移、正面接侧面），
               禁止每镜都写同一个景别。
@@ -184,7 +185,7 @@ public final class DramaTextPrompts {
               speaker 为「角色名（画外音）」的照原样保留该标记，禁止改写成「旁白」，发声角色也应列入 character_names。
               禁止摘要、改写、删半句、只留「关键句」或把台词揉进 action / narrative_goal。
               纯动作镜头的 dialogue 留空字符串；有对白的节拍不得因压缩体积而丢掉台词。
-            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 40 字，每个镜头 action 不超过 40 字，
+            - 长度上限（仅压缩非台词字段）：narrative_goal 不超过 40 字，每个镜头 action 40～120 字，
               scene 不超过 30 字，continuity_in / continuity_out 与每个镜头 continuity 各不超过 20 字；
               dialogue 不受上述字数上限约束。
             """;
@@ -383,7 +384,9 @@ public final class DramaTextPrompts {
                直接写画面里正在发生的动作。不写「把书改成盖在脸上」，写「双手把书压在脸上」。
             9. 输入该条已有 beats 时，改为逐镜头补可拍摄细节，不要把多个镜头收成一段 narrative_goal。
                输出 blocking 与 beats，条数和顺序与输入一致，每条只含 camera、action、continuity。
-               每个镜头的 action 保持短句，只写这一拍；人物名必须仍能对上该镜头原稿 action；台词不写进 action。
+               每个镜头的 action 写成这一拍能拍出来的动作链：起势、动作、落点，40～120 字。
+               同一角色的连续动作用逗号连在一起，换一个人才断开。
+               人物名必须仍能对上该镜头原稿 action；台词不写进 action；不要编造原稿没有的情节。
                景别写在各镜头 camera。没有 beats 的旧草稿继续用上面的 scene / camera / narrative_goal / ambiance。
             """;
 

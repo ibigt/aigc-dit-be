@@ -37,8 +37,12 @@ public class DramaShotSaveReq {
     @Size(max = 256)
     private String continuityOut;
 
-    @Schema(description = "已锁定资产 id，顺序 = Picture 序号")
+    @Schema(description = "叙述部分按 @ 首次出现去重的资产 id，顺序 = Picture 序号。台词里的名字不计入")
     private List<Long> referenceAssetIds;
+
+    @Schema(description = "用户编辑的核心正文。叙述里的资产是 @名字，台词段是普通名字。传入后清空旧的整段覆盖")
+    @Size(max = 8000)
+    private String visiblePrompt;
 
     private List<String> characterNames;
     private List<String> propNames;

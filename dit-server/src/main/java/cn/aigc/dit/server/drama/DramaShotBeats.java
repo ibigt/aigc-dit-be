@@ -142,6 +142,40 @@ public class DramaShotBeats {
         return texts;
     }
 
+    /**
+     * 道具可能出现的画面说明：场景、站位、运镜、动作、接续、环境声。
+     * 不含台词，只在口播里点到的道具不算被用到。
+     */
+    public static List<String> propMentionTexts(DramaShot shot) {
+        List<String> texts = new ArrayList<>();
+        if (shot == null) {
+            return texts;
+        }
+        addText(texts, shot.getScene());
+        addText(texts, shot.getNarrativeGoal());
+        addText(texts, shot.getCameraMotion());
+        addText(texts, shot.getAmbianceAudio());
+        addText(texts, shot.getContinuityIn());
+        addText(texts, shot.getContinuityOut());
+        DramaShotBeats beats = shot.getShotBeats();
+        if (beats == null) {
+            return texts;
+        }
+        addText(texts, beats.getBlocking());
+        if (beats.getBeats() == null) {
+            return texts;
+        }
+        for (Beat beat : beats.getBeats()) {
+            if (beat == null) {
+                continue;
+            }
+            addText(texts, beat.getCamera());
+            addText(texts, beat.getAction());
+            addText(texts, beat.getContinuity());
+        }
+        return texts;
+    }
+
     public static Beat copyBeat(Beat beat) {
         if (beat == null) {
             return null;

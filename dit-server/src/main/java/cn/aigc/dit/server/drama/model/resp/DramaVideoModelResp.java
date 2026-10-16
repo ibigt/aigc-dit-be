@@ -20,6 +20,8 @@ public class DramaVideoModelResp {
     private Boolean supportsNativeAudio;
     private Boolean supportsAudioReference;
     private Integer maxAudioReferences;
+    @Schema(description = "单镜最多可携带的参考图张数，与厂商校验一致")
+    private Integer maxImageReferences;
     private Boolean supportsAudioOnlyReference;
     private String audioMode;
     @Schema(description = "是否支持参考生视频")

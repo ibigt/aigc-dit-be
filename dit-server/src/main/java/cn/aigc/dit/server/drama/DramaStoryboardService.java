@@ -10,6 +10,7 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.ImageReferenceCapabilities;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
@@ -386,13 +387,20 @@ public class DramaStoryboardService {
         }
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         String prefix = stylePrefix(shot.getSeriesId());
-        boolean autoBind = req.getReferenceAssetIds() == null || req.getReferenceAssetIds().isEmpty();
-
-        boolean overrideActive = applyPromptOverride(shot, req);
-        if (overrideActive) {
-            rebindReferencesOnly(shot, assets, false, autoBind);
+        if (req.getVisiblePrompt() != null) {
+            applyVisiblePrompt(shot, req, assets);
+            assembleStored(shot, assets, prefix, false);
+        } else if (isDialogueEdit(req)) {
+            applyDialogueEdit(shot, req, assets);
+            assembleStored(shot, assets, prefix, false);
         } else {
-            rebindAndCompile(shot, assets, prefix, false, autoBind);
+            boolean autoBind = req.getReferenceAssetIds() == null || req.getReferenceAssetIds().isEmpty();
+            boolean overrideActive = applyPromptOverride(shot, req);
+            if (overrideActive || isLegacyOverride(shot)) {
+                rebindReferencesOnly(shot, assets, false, autoBind);
+            } else {
+                rebindAndCompile(shot, assets, prefix, false, autoBind);
+            }
         }
 
         if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())
@@ -411,7 +419,7 @@ public class DramaStoryboardService {
         requireNotRecompiling(shot);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         shot.setPromptOverride(null);
-        rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, true, requireOwnedSeries(shot.getSeriesId()));
+        rebindAndCompile(shot, assets, stylePrefix(shot.getSeriesId()), false, true, requireOwnedSeries(shot.getSeriesId()), true);
         if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())) {
             shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
@@ -433,7 +441,7 @@ public class DramaStoryboardService {
                 continue;
             }
             shot.setPromptOverride(null);
-            rebindAndCompile(shot, assets, prefix, false, true, series);
+            rebindAndCompile(shot, assets, prefix, false, true, series, true);
             if (DramaContract.STATUS_EXPIRED.equals(shot.getStatus())) {
                 shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
             }
@@ -832,50 +840,39 @@ public class DramaStoryboardService {
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         DramaSeries series = requireOwnedSeries(shot.getSeriesId());
-        DramaStoryboardCompiler.CompileOptions options = compileOptionsOf(series, shot);
-        AiModel model = requireBoundVideoModel(series, options.videoGenerateMode());
+        AiModel model = requireBoundVideoModel(series, DramaVideoGenerateModes.R2V);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         String prefix = stylePrefixOf(series);
-        boolean i2v = options.i2v();
+        shot.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        boolean legacy = isLegacyOverride(shot);
         List<DramaAsset> refs;
-        if (StringUtils.hasText(shot.getPromptOverride())) {
-            refs = resolveReferences(shot, assets, !i2v, true);
+        String prompt;
+        if (legacy) {
+            boolean named = idsOf(shot.getReferenceAssetIds()).isEmpty();
+            refs = resolveReferences(shot, assets, true, named);
+            prompt = shot.getPromptOverride().trim();
         } else {
-            rebindAndCompile(shot, assets, prefix, !i2v, true, series);
-            refs = resolveReferences(shot, assets, !i2v, true);
-            if (!StringUtils.hasText(shot.getCompiledPrompt())) {
+            if (!StringUtils.hasText(shot.getVisiblePrompt())) {
+                shot.setVisiblePrompt(blankToNull(renderVisible(shot, assets)));
+            }
+            refs = resolveNarrativeReferences(shot, assets, shot.getVisiblePrompt(), true);
+            shot.setReferenceAssetIds(refs.stream().map(DramaAsset::getId).toList());
+            storeAssembled(shot, assets, prefix, refs, shot.getVisiblePrompt(), series);
+            prompt = shot.getCompiledPrompt();
+            if (!StringUtils.hasText(prompt)) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
             }
         }
-        if (!i2v && refs.isEmpty()) {
+        if (refs.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先准备资产参考图再出片");
         }
-        DramaShot prev = previousSameChapterShot(shot);
-        if (i2v) {
-            ensureVideoTail(prev);
-        }
-        boolean chainPrevTail = i2v && canChainPrevTail(shot, prev);
-        String firstFrameKey = i2v ? resolveFirstFrameKey(shot, prev, chainPrevTail) : null;
-        String prevTailKey = prev == null ? null : blankToNull(prev.getVideoTailKey());
-        boolean chainPrev = !i2v && options.chainPrevTail() && StringUtils.hasText(prevTailKey);
-        if (i2v && !StringUtils.hasText(firstFrameKey)) {
-            assertCanStartOpeningStill(shot, prev);
-            if (!StringUtils.hasText(shot.getPromptOverride())) {
-                shotMapper.updateById(shot);
-            }
-            List<DramaAsset> stillRefs = resolveReferences(shot, assets, true, true);
-            return startOpeningStill(shot, series, assets, prefix, stillRefs, true);
+        int maxImages = ImageReferenceCapabilities.maxImages(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (refs.size() > maxImages) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前模型最多支持 " + maxImages + " 张");
         }
         String adapter = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
-        List<DramaAsset> sendRefs = i2v ? List.of() : refs;
-        String prompt = effectivePrompt(shot);
-        boolean includePrevTailPicture = chainPrev && !StringUtils.hasText(shot.getPromptOverride());
-        if (includePrevTailPicture) {
-            prompt = compileSubmitPrompt(shot, assets, prefix, sendRefs, options, true);
-        } else if (i2v && !StringUtils.hasText(shot.getPromptOverride())) {
-            prompt = compileSubmitPrompt(shot, assets, prefix, refs, options, false);
-        }
         shotMapper.updateById(shot);
 
         abandonPreviousTask(shot);
@@ -890,46 +887,33 @@ public class DramaStoryboardService {
                 shot.getDurationSec(), series.getVideoAdapterKey(), model.getAdapterKey(), model.getModelKey()));
         req.setCopies(1);
         List<GenerateSubmitReq.ReferenceInput> inputs = new ArrayList<>();
-        if (!i2v) {
-            for (DramaAsset asset : sendRefs) {
+        for (DramaAsset asset : refs) {
+            GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
+            input.setType(AssetKind.IMAGE);
+            if (StringUtils.hasText(asset.getImageStorageKey())) {
+                input.setStorageKey(asset.getImageStorageKey());
+            } else if (asset.getImageAssetId() != null) {
+                input.setAssetId(asset.getImageAssetId());
+            }
+            inputs.add(input);
+        }
+        if (supportsAudioReference(model)) {
+            AudioReferenceCapabilities capability = audioCapabilities(model);
+            List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(shot, refs, true).stream()
+                    .filter(item -> StringUtils.hasText(item.storageKey()))
+                    .toList();
+            if (audioRefs.size() > capability.maxReferences()) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "当前视频模型单镜最多引用 " + capability.maxReferences() + " 个角色音色，请拆分镜头");
+            }
+            for (DramaStoryboardCompiler.AudioReference audioRef : audioRefs) {
                 GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
-                input.setType(AssetKind.IMAGE);
-                if (StringUtils.hasText(asset.getImageStorageKey())) {
-                    input.setStorageKey(asset.getImageStorageKey());
-                } else if (asset.getImageAssetId() != null) {
-                    input.setAssetId(asset.getImageAssetId());
-                }
+                input.setType(AssetKind.AUDIO);
+                input.setStorageKey(audioRef.storageKey());
                 inputs.add(input);
-            }
-            if (chainPrev) {
-                GenerateSubmitReq.ReferenceInput tail = new GenerateSubmitReq.ReferenceInput();
-                tail.setType(AssetKind.IMAGE);
-                tail.setStorageKey(prevTailKey);
-                inputs.add(tail);
-            }
-            if (supportsAudioReference(model)) {
-                AudioReferenceCapabilities capability = audioCapabilities(model);
-                List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(shot, refs, true).stream()
-                        .filter(item -> StringUtils.hasText(item.storageKey()))
-                        .toList();
-                if (audioRefs.size() > capability.maxReferences()) {
-                    throw new BizException(ErrorCode.BAD_REQUEST,
-                            "当前视频模型单镜最多引用 " + capability.maxReferences() + " 个角色音色，请拆分镜头");
-                }
-                for (DramaStoryboardCompiler.AudioReference audioRef : audioRefs) {
-                    GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
-                    input.setType(AssetKind.AUDIO);
-                    input.setStorageKey(audioRef.storageKey());
-                    inputs.add(input);
-                }
             }
         }
         req.setReferences(inputs.isEmpty() ? null : inputs);
-        if (i2v) {
-            GenerateSubmitReq.FrameInput frames = new GenerateSubmitReq.FrameInput();
-            frames.setFirstFrameKey(firstFrameKey);
-            req.setFrames(frames);
-        }
 
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("source", GenerateRequests.SOURCE_DRAMA);
@@ -937,15 +921,11 @@ public class DramaStoryboardService {
         extra.put("episodeId", shot.getEpisodeId());
         extra.put("shotId", shot.getId());
         extra.put("adapterKey", adapter);
-        extra.put("videoGenerateMode", options.videoGenerateMode());
-        extra.put("chainPrevTail", chainPrev);
-        if (i2v && chainPrevTail && StringUtils.hasText(prevTailKey) && prevTailKey.equals(firstFrameKey) && prev != null) {
-            extra.put("chainedFromShotId", prev.getId());
-            extra.put("chainedFromTailKey", prevTailKey);
-        }
-        log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={} mode={} sendRefs={} firstFrame={}",
+        extra.put("videoGenerateMode", DramaVideoGenerateModes.R2V);
+        extra.put("chainPrevTail", false);
+        log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={} mode={} sendRefs={}",
                 shot.getId(), series.getId(), model.getId(), extra.get("adapterKey"), model.getModelKey(),
-                extra.get("videoGenerateMode"), sendRefs.size(), firstFrameKey);
+                extra.get("videoGenerateMode"), refs.size());
         GenerateTaskResp task = generateService.submit(req, extra);
         shot.setGenTaskId(task.getId());
         shotMapper.updateById(shot);
@@ -1178,7 +1158,7 @@ public class DramaStoryboardService {
             DramaVideoGenerateModes.applyProductDefault(shot);
             // 仅草稿落库时补齐正文点名但 Cast 漏写的角色；之后用户侧栏增删不再被覆盖。
             alignMentionedCharacters(shot, byId);
-            rebindAndCompile(shot, byId, prefix, false, true);
+            rebindAndCompile(shot, byId, prefix, false, true, series, true);
             shotMapper.insert(shot);
         }
         if (shotIndex == 0) {
@@ -1276,31 +1256,353 @@ public class DramaStoryboardService {
 
     private void rebindAndCompile(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
                                  boolean requireLocked, boolean autoBindIfEmpty) {
-        rebindAndCompile(shot, assets, stylePrefix, requireLocked, autoBindIfEmpty, seriesOf(shot));
+        rebindAndCompile(shot, assets, stylePrefix, requireLocked, autoBindIfEmpty, seriesOf(shot), false);
     }
 
     private void rebindAndCompile(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
                                  boolean requireLocked, boolean autoBindIfEmpty, DramaSeries series) {
-        // 不在此回填正文点名角色：侧栏增删名单以用户为准，保存/编译不得把已删角色加回来。
-        List<DramaAsset> ordered = resolveReferences(shot, assets, requireLocked, autoBindIfEmpty);
+        rebindAndCompile(shot, assets, stylePrefix, requireLocked, autoBindIfEmpty, series, false);
+    }
+
+    private void rebindAndCompile(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
+                                 boolean requireLocked, boolean autoBindIfEmpty, DramaSeries series,
+                                 boolean overwriteVisible) {
+        if (isLegacyOverride(shot) && !overwriteVisible) {
+            return;
+        }
+        String visible = visibleForCompile(shot, assets, overwriteVisible);
+        if (overwriteVisible) {
+            shot.setVisiblePrompt(blankToNull(visible));
+            shot.setPromptOverride(null);
+        }
+        List<DramaAsset> ordered = resolveNarrativeReferences(shot, assets, visible, requireLocked);
+        if (ordered.isEmpty() && !StringUtils.hasText(visible) && autoBindIfEmpty) {
+            ordered = resolveReferences(shot, assets, requireLocked, true);
+        }
         shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
         shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
-        DramaStoryboardCompiler.CompileOptions options = compileOptionsOf(series, shot);
-        List<DramaStoryboardCompiler.ActiveReference> refs = new ArrayList<>();
-        for (DramaAsset asset : ordered) {
-            refs.add(toActive(asset));
+        storeAssembled(shot, assets, stylePrefix, ordered, visible, series);
+    }
+
+    private void applyVisiblePrompt(DramaShot shot, DramaShotSaveReq req, Map<Long, DramaAsset> assets) {
+        String visible = DramaStoryboardCompiler.stripDialogueMentions(req.getVisiblePrompt());
+        shot.setVisiblePrompt(blankToNull(visible));
+        shot.setPromptOverride(null);
+        if (DramaStoryboardCompiler.hasDialogueSlots(visible)) {
+            shot.setDialogue(blankToNull(DramaStoryboardCompiler.extractDialogue(visible)));
+        } else if (req.getDialogue() != null) {
+            shot.setDialogue(blankToNull(DramaStoryboardCompiler.stripMentionMarks(req.getDialogue())));
         }
-        List<DramaStoryboardCompiler.AudioReference> audioRefs = options.i2v()
-                ? List.of()
-                : voiceReferences(shot, ordered, supportsAudioReference(shot.getSeriesId()));
-        DramaStoryboardCompiler.Result compiled = DramaStoryboardCompiler.compile(
+        if (req.getReferenceAssetIds() != null) {
+            shot.setReferenceAssetIds(new ArrayList<>(req.getReferenceAssetIds()));
+        }
+        List<DramaAsset> ordered = orderedReferences(shot, assets, visible, false);
+        shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
+        backfillCast(shot, ordered);
+    }
+
+    private void applyDialogueEdit(DramaShot shot, DramaShotSaveReq req, Map<Long, DramaAsset> assets) {
+        String base = shot.getVisiblePrompt();
+        if (!StringUtils.hasText(base) && isLegacyOverride(shot)) {
+            base = DramaStoryboardCompiler.readableLegacyOverride(shot.getPromptOverride());
+        }
+        if (!StringUtils.hasText(base)) {
+            base = renderVisible(shot, assets);
+        }
+        if (DramaStoryboardCompiler.hasDialogueSlots(base)) {
+            base = DramaStoryboardCompiler.writeDialogueBack(base, req.getDialogue());
+        }
+        base = DramaStoryboardCompiler.stripDialogueMentions(base);
+        shot.setVisiblePrompt(blankToNull(base));
+        shot.setPromptOverride(null);
+        if (DramaStoryboardCompiler.hasDialogueSlots(base)) {
+            shot.setDialogue(blankToNull(DramaStoryboardCompiler.extractDialogue(base)));
+        } else {
+            shot.setDialogue(blankToNull(DramaStoryboardCompiler.stripMentionMarks(req.getDialogue())));
+        }
+        List<DramaAsset> ordered = resolveNarrativeReferences(shot, assets, base, false);
+        shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
+    }
+
+    private boolean isDialogueEdit(DramaShotSaveReq req) {
+        return req.getDialogue() != null
+                && req.getVisiblePrompt() == null
+                && req.getPromptOverride() == null
+                && req.getNarrativeGoal() == null
+                && req.getShotBeats() == null
+                && req.getScene() == null
+                && req.getCameraMotion() == null
+                && req.getAmbianceAudio() == null
+                && req.getCharacterNames() == null
+                && req.getPropNames() == null
+                && req.getLocationName() == null
+                && req.getReferenceAssetIds() == null
+                && req.getContinuityIn() == null
+                && req.getContinuityOut() == null;
+    }
+
+    private String visibleForCompile(DramaShot shot, Map<Long, DramaAsset> assets, boolean overwriteVisible) {
+        if (!overwriteVisible && StringUtils.hasText(shot.getVisiblePrompt())) {
+            return shot.getVisiblePrompt();
+        }
+        return renderVisible(shot, assets);
+    }
+
+    private String renderVisible(DramaShot shot, Map<Long, DramaAsset> assets) {
+        return DramaStoryboardCompiler.renderVisiblePrompt(
+                toShotContent(shot, assets, List.of()),
+                mentionNames(shot, assets),
+                shot.getLocationName(),
+                cleanNames(shot.getPropNames()));
+    }
+
+    private void assembleStored(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix, boolean requireImage) {
+        String visible = shot.getVisiblePrompt();
+        List<DramaAsset> ordered = orderedReferences(shot, assets, visible, requireImage);
+        shot.setReferenceAssetIds(ordered.stream().map(DramaAsset::getId).toList());
+        shot.setCastCount(cleanNames(shot.getCharacterNames()).size());
+        storeAssembled(shot, assets, stylePrefix, ordered, visible, seriesOf(shot));
+    }
+
+    private void storeAssembled(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix,
+                                List<DramaAsset> ordered, String visible, DramaSeries series) {
+        List<DramaStoryboardCompiler.ActiveReference> refs = new ArrayList<>();
+        if (ordered != null) {
+            for (DramaAsset asset : ordered) {
+                refs.add(toActive(asset));
+            }
+        }
+        Long seriesId = shot.getSeriesId() != null ? shot.getSeriesId() : (series == null ? null : series.getId());
+        List<DramaStoryboardCompiler.AudioReference> audioRefs = voiceReferences(
+                shot, ordered == null ? List.of() : ordered, supportsAudioReference(seriesId));
+        DramaStoryboardCompiler.Result compiled = DramaStoryboardCompiler.assemble(
                 stylePrefix,
                 refs,
                 audioRefs,
-                toShotContent(shot, assets, options.i2v() ? List.of() : ordered),
-                options);
+                visible,
+                toShotContent(shot, assets, ordered));
         shot.setCompiledPrompt(compiled.prompt());
         shot.setCompiledFingerprint(compiled.fingerprint());
+    }
+
+    private List<DramaAsset> orderedReferences(DramaShot shot, Map<Long, DramaAsset> assets,
+                                               String visible, boolean requireImage) {
+        if (shot.getReferenceAssetIds() != null && !shot.getReferenceAssetIds().isEmpty()
+                && requestPrefersExplicitIds(shot, visible)) {
+            List<DramaAsset> explicit = resolveReferences(shot, assets, requireImage, false);
+            if (!explicit.isEmpty() || !requireImage) {
+                List<String> mentions = DramaStoryboardCompiler.narrativeAtNames(visible, assetNames(assets));
+                if (explicitCoversMentions(explicit, mentions) || mentions.isEmpty()) {
+                    return explicit;
+                }
+            }
+        }
+        return resolveNarrativeReferences(shot, assets, visible, requireImage);
+    }
+
+    private boolean requestPrefersExplicitIds(DramaShot shot, String visible) {
+        return shot.getReferenceAssetIds() != null && !idsOf(shot.getReferenceAssetIds()).isEmpty()
+                && StringUtils.hasText(visible);
+    }
+
+    private boolean explicitCoversMentions(List<DramaAsset> explicit, List<String> mentions) {
+        if (mentions == null || mentions.isEmpty()) {
+            return true;
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (DramaAsset asset : explicit) {
+            if (asset != null && StringUtils.hasText(asset.getName())) {
+                names.add(asset.getName().trim());
+            }
+        }
+        for (String mention : mentions) {
+            if (!names.contains(mention)) {
+                return false;
+            }
+        }
+        return explicit.size() == mentions.size();
+    }
+
+    private void backfillCast(DramaShot shot, List<DramaAsset> ordered) {
+        List<String> characters = new ArrayList<>();
+        List<String> props = new ArrayList<>();
+        String location = null;
+        for (DramaAsset asset : ordered) {
+            if (asset == null || !StringUtils.hasText(asset.getName())) {
+                continue;
+            }
+            String name = asset.getName().trim();
+            if (DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+                if (!characters.contains(name)) {
+                    characters.add(name);
+                }
+            } else if (DramaContract.ASSET_TYPE_PROP.equals(asset.getType())) {
+                if (!props.contains(name)) {
+                    props.add(name);
+                }
+            } else if (DramaContract.ASSET_TYPE_SCENE.equals(asset.getType()) && location == null) {
+                location = name;
+            }
+        }
+        shot.setCharacterNames(characters);
+        shot.setPropNames(props);
+        shot.setLocationName(location);
+        shot.setCastCount(characters.size());
+    }
+
+    private List<String> mentionNames(DramaShot shot, Map<Long, DramaAsset> assets) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        if (assets != null) {
+            for (Long id : idsOf(shot.getReferenceAssetIds())) {
+                DramaAsset asset = assets.get(id);
+                if (isReferenceEligible(asset) && StringUtils.hasText(asset.getName())) {
+                    names.add(asset.getName().trim());
+                }
+            }
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.addAll(cleanNames(shot.getCharacterNames()));
+        candidates.addAll(cleanNames(shot.getPropNames()));
+        if (StringUtils.hasText(shot.getLocationName())) {
+            candidates.add(shot.getLocationName().trim());
+        }
+        boolean dream = isDreamContext(shot);
+        for (String name : candidates) {
+            DramaAsset asset = findEligibleNamed(assets, name, dream);
+            if (isReferenceEligible(asset)) {
+                names.add(asset.getName().trim());
+            }
+        }
+        for (String name : mentionedEligibleProps(assets, shot)) {
+            names.add(name);
+        }
+        return new ArrayList<>(names);
+    }
+
+    /** 画面说明里点到、且已有参考图的道具。不看台词。 */
+    private List<String> mentionedEligibleProps(Map<Long, DramaAsset> assets, DramaShot shot) {
+        List<String> pool = new ArrayList<>();
+        if (assets != null) {
+            for (DramaAsset asset : assets.values()) {
+                if (asset == null
+                        || !DramaContract.ASSET_TYPE_PROP.equals(asset.getType())
+                        || !isReferenceEligible(asset)
+                        || !StringUtils.hasText(asset.getName())) {
+                    continue;
+                }
+                String name = asset.getName().trim();
+                if (!pool.contains(name)) {
+                    pool.add(name);
+                }
+            }
+        }
+        return DramaNameMentions.mentionedExactInOrder(
+                pool, DramaShotBeats.propMentionTexts(shot).toArray(String[]::new));
+    }
+
+    private List<DramaAsset> resolveNarrativeReferences(
+            DramaShot shot, Map<Long, DramaAsset> assets, String visible, boolean requireImage) {
+        List<String> mentions = DramaStoryboardCompiler.narrativeAtNames(visible, assetNames(assets));
+        List<Long> preferred = idsOf(shot.getReferenceAssetIds());
+        Set<Long> used = new HashSet<>();
+        List<DramaAsset> ordered = new ArrayList<>();
+        boolean dream = isDreamContext(shot);
+        for (String name : mentions) {
+            DramaAsset picked = null;
+            for (Long id : preferred) {
+                if (id == null || used.contains(id)) {
+                    continue;
+                }
+                DramaAsset asset = assets.get(id);
+                if (asset != null && nameEquals(asset.getName(), name)) {
+                    picked = asset;
+                    break;
+                }
+            }
+            if (picked == null) {
+                picked = findEligibleNamed(assets, name, dream);
+            }
+            if (picked == null || !isReferenceEligible(picked)) {
+                if (requireImage) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "缺少参考图：" + name);
+                }
+                continue;
+            }
+            if (used.add(picked.getId())) {
+                ordered.add(picked);
+            }
+        }
+        return ordered;
+    }
+
+    private DramaAsset findEligibleNamed(Map<Long, DramaAsset> assets, String name, boolean dream) {
+        DramaAsset character = findAsset(assets, name, DramaContract.ASSET_TYPE_CHARACTER, dream);
+        DramaAsset prop = findAsset(assets, name, DramaContract.ASSET_TYPE_PROP, false);
+        DramaAsset scene = findAsset(assets, name, DramaContract.ASSET_TYPE_SCENE, false);
+        DramaAsset eligible = firstEligible(character, prop, scene);
+        if (eligible != null) {
+            return eligible;
+        }
+        if (character != null) {
+            return character;
+        }
+        if (prop != null) {
+            return prop;
+        }
+        return scene;
+    }
+
+    private static DramaAsset firstEligible(DramaAsset... assets) {
+        if (assets == null) {
+            return null;
+        }
+        for (DramaAsset asset : assets) {
+            if (isReferenceEligible(asset)) {
+                return asset;
+            }
+        }
+        return null;
+    }
+
+    private static List<String> assetNames(Map<Long, DramaAsset> assets) {
+        List<String> names = new ArrayList<>();
+        if (assets == null) {
+            return names;
+        }
+        for (DramaAsset asset : assets.values()) {
+            if (asset != null && StringUtils.hasText(asset.getName()) && !names.contains(asset.getName().trim())) {
+                names.add(asset.getName().trim());
+            }
+        }
+        return names;
+    }
+
+    private static boolean isLegacyOverride(DramaShot shot) {
+        return shot != null
+                && StringUtils.hasText(shot.getPromptOverride())
+                && !StringUtils.hasText(shot.getVisiblePrompt());
+    }
+
+    private String displayVisiblePrompt(DramaShot shot, Map<Long, DramaAsset> assets) {
+        if (StringUtils.hasText(shot.getVisiblePrompt())) {
+            return shot.getVisiblePrompt();
+        }
+        if (isLegacyOverride(shot)) {
+            return DramaStoryboardCompiler.readableLegacyOverride(shot.getPromptOverride());
+        }
+        return renderVisible(shot, assets);
+    }
+
+    private List<String> missingNarrativeMentions(DramaShot shot, String visible, Map<Long, DramaAsset> assets) {
+        List<String> missing = new ArrayList<>();
+        boolean dream = isDreamContext(shot);
+        for (String name : DramaStoryboardCompiler.narrativeAtNames(visible, assetNames(assets))) {
+            DramaAsset asset = findEligibleNamed(assets, name, dream);
+            if (!isReferenceEligible(asset) && !missing.contains(name)) {
+                missing.add(name);
+            }
+        }
+        return missing;
     }
 
     private static String effectivePrompt(DramaShot shot) {
@@ -1464,7 +1766,7 @@ public class DramaStoryboardService {
     }
 
     private boolean refreshStale(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix, DramaSeries series) {
-        if (StringUtils.hasText(shot.getPromptOverride())) {
+        if (StringUtils.hasText(shot.getPromptOverride()) && !StringUtils.hasText(shot.getVisiblePrompt())) {
             return false;
         }
         boolean empty = !StringUtils.hasText(shot.getCompiledPrompt());
@@ -1485,25 +1787,26 @@ public class DramaStoryboardService {
     }
 
     private boolean isStale(DramaShot shot, Map<Long, DramaAsset> assets, String stylePrefix, DramaSeries series) {
+        if (isLegacyOverride(shot)) {
+            return false;
+        }
         if (!StringUtils.hasText(shot.getCompiledFingerprint())) {
             return StringUtils.hasText(shot.getCompiledPrompt()) || StringUtils.hasText(shot.getPromptOverride());
         }
-        DramaStoryboardCompiler.CompileOptions options = compileOptionsOf(series, shot);
-        List<DramaAsset> pictured = new ArrayList<>();
+        String visible = StringUtils.hasText(shot.getVisiblePrompt())
+                ? shot.getVisiblePrompt()
+                : renderVisible(shot, assets);
+        List<DramaAsset> pictured = resolveNarrativeReferences(shot, assets, visible, false);
         List<DramaStoryboardCompiler.ActiveReference> refs = new ArrayList<>();
-        for (Long id : idsOf(shot.getReferenceAssetIds())) {
-            DramaAsset asset = assets.get(id);
-            if (asset != null) {
-                pictured.add(asset);
-                refs.add(toActive(asset));
-            }
+        for (DramaAsset asset : pictured) {
+            refs.add(toActive(asset));
         }
-        String current = DramaStoryboardCompiler.fingerprint(
+        String current = DramaStoryboardCompiler.fingerprintVisible(
                 stylePrefix,
                 refs,
-                options.i2v() ? List.of() : voiceReferences(shot, pictured, supportsAudioReference(shot.getSeriesId())),
-                toShotContent(shot, assets, options.i2v() ? List.of() : pictured),
-                options);
+                voiceReferences(shot, pictured, supportsAudioReference(shot.getSeriesId())),
+                toShotContent(shot, assets, pictured),
+                visible);
         return !current.equals(shot.getCompiledFingerprint());
     }
 
@@ -1714,7 +2017,11 @@ public class DramaStoryboardService {
         resp.setDialogue(shot.getDialogue());
         resp.setContinuityIn(shot.getContinuityIn());
         resp.setContinuityOut(shot.getContinuityOut());
-        List<DramaAsset> bound = resolveReferences(shot, assets, false, true);
+        boolean legacy = isLegacyOverride(shot);
+        String displayPrompt = displayVisiblePrompt(shot, assets);
+        List<DramaAsset> bound = legacy
+                ? resolveReferences(shot, assets, false, idsOf(shot.getReferenceAssetIds()).isEmpty())
+                : resolveNarrativeReferences(shot, assets, displayPrompt, false);
         List<Long> ids = bound.stream().map(DramaAsset::getId).toList();
         resp.setReferenceAssetIds(ids);
         List<DramaShotReferenceResp> refs = new ArrayList<>();
@@ -1739,8 +2046,12 @@ public class DramaStoryboardService {
         resp.setCompiledPrompt(shot.getCompiledPrompt());
         resp.setCompiledFingerprint(shot.getCompiledFingerprint());
         resp.setCompiledStale(isStale(shot, assets, stylePrefix));
+        resp.setVisiblePrompt(displayPrompt);
+        resp.setLegacyOverride(legacy);
         resp.setPromptOverride(shot.getPromptOverride());
-        resp.setUnboundNames(unboundLockedRequired(shot, assets));
+        resp.setUnboundNames(legacy
+                ? unboundLockedRequired(shot, assets)
+                : missingNarrativeMentions(shot, displayPrompt, assets));
         resp.setStatus(shot.getStatus());
         resp.setGenTaskId(shot.getGenTaskId());
         resp.setVideoKey(shot.getVideoKey());
@@ -2318,7 +2629,7 @@ public class DramaStoryboardService {
             }
         }
         List<String> mentioned = DramaNameMentions.mentionedExactInOrder(
-                pool, DramaShotBeats.actionTexts(shot).toArray(String[]::new));
+                pool, DramaShotBeats.propMentionTexts(shot).toArray(String[]::new));
         List<String> merged = new ArrayList<>(cleanNames(shot.getPropNames()));
         for (String name : mentioned) {
             if (!merged.contains(name)) {

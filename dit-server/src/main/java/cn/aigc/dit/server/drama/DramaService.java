@@ -6,6 +6,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.AudioReferenceCapabilities;
+import cn.aigc.dit.generate.ImageReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -834,6 +835,8 @@ public class DramaService {
         resp.setSupportsNativeAudio(h3 || agnes || ark);
         resp.setSupportsAudioReference(audio.supported());
         resp.setMaxAudioReferences(audio.maxReferences());
+        resp.setMaxImageReferences(ImageReferenceCapabilities.maxImages(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey()));
         resp.setSupportsAudioOnlyReference(audio.audioOnly());
         resp.setAudioMode(h3 || agnes || ark ? "native" : "unknown");
         resp.setSupportsR2v(supportsVideoMode(model, GenerateMode.R2V));

@@ -535,6 +535,173 @@ class DramaStoryboardCompilerTest {
         assertEquals(1, prompt.split("难道是他", -1).length - 1);
     }
 
+    @Test
+    void visiblePromptOmitsTemplateAndKeepsDialogueNamesPlain() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("宴安站在客厅门口。");
+        beats.setBeats(List.of(
+                beat("中近景", "宴安推门，客厅里没人。", "从门口进入", "宴安：这里有人来过。"),
+                beat("特写", "宴安又看向客厅。", "接推门", "宴安：客厅是空的。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "客厅", "宴安进门", "宴安：这里有人来过。\n宴安：客厅是空的。",
+                "门外", "站在客厅", 8, List.of("宴安"), 1, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(shot, List.of("宴安", "客厅"));
+
+        assertTrue(visible.startsWith("场景：@客厅\n站位：@宴安站在@客厅门口。"));
+        assertTrue(visible.contains("镜头1：中近景。接从门口进入。\n@宴安 推门，@客厅里没人，说：这里有人来过。"));
+        assertTrue(visible.contains("说：这里有人来过。\n\n镜头2：特写。接推门。\n@宴安 又看向@客厅，说：客厅是空的。"));
+        assertFalse(visible.contains("台词："));
+        assertFalse(visible.contains("说：@"));
+        assertFalse(visible.contains("<Picture"));
+        assertFalse(visible.contains("Must"));
+        assertFalse(visible.contains("Active References"));
+        assertFalse(visible.contains("Duration"));
+        assertFalse(visible.contains("Cast"));
+        assertFalse(visible.contains("@宴安："));
+    }
+
+    @Test
+    void visiblePromptPutsSceneOnItsOwnLineAndMarksPropsOutsideSpeech() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("宴安站在白板前。");
+        beats.setBeats(List.of(
+                beat("近景", "宴安拿起档案袋，夏安转身。", "接落桌",
+                        "宴安：档案袋是空的。\n夏安：没外伤。\n宴安：那就走。\n旁白：夜色已深。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "风扇对着白板", "拿档案", null, null, null, 8,
+                List.of("宴安", "夏安"), 2, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(
+                shot, List.of("宴安", "夏安", "白板", "档案袋", "幻梦侦探社"), "幻梦侦探社");
+
+        assertTrue(visible.startsWith("场景：@幻梦侦探社。风扇对着@白板"));
+        assertTrue(visible.contains("@宴安 拿起@档案袋，说：档案袋是空的。"));
+        assertTrue(visible.contains("@夏安 转身，说：没外伤。"));
+        assertTrue(visible.contains("@宴安 说：那就走。"));
+        assertTrue(visible.contains("旁白：夜色已深。"));
+        assertFalse(visible.contains("说：@档案袋"));
+        assertFalse(visible.contains("起身"));
+        assertEquals("宴安：档案袋是空的。\n夏安：没外伤。\n宴安：那就走。\n旁白：夜色已深。",
+                DramaStoryboardCompiler.extractDialogue(visible));
+
+        String rewritten = DramaStoryboardCompiler.writeDialogueBack(
+                visible, "宴安：袋子是空的。\n夏安：没有外伤。\n宴安：走吧。\n旁白：天快亮了。");
+        assertTrue(rewritten.contains("说：袋子是空的。"));
+        assertTrue(rewritten.contains("说：没有外伤。"));
+        assertTrue(rewritten.contains("@宴安 说：走吧。"));
+        assertTrue(rewritten.contains("旁白：天快亮了。"));
+        assertFalse(rewritten.contains("档案袋是空的"));
+    }
+
+    @Test
+    void visiblePromptJoinsSameSpeakerActionAndBlanksBeforeNextShot() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("洛白在病床旁，夏安在门口，心电监护仪在床头。");
+        beats.setBeats(List.of(
+                beat("近景。下降", "洛白按下怀表开关，庶流从怀表扩散。洛白单手按住怀表，意识沉入梦境深渊。",
+                        "接松下针头", "洛白：以梦为桥，意识下潜。入梦！"),
+                beat("全景。环绕", "怪物化作代码浪潮，圆形扑向洛白。", "接逐渐扩散",
+                        "怪物：不梦……还不梦！\n洛白：代码涌进……不对劲。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "医院ICU，心电监护仪滴答", "入梦", null, null, null, 10,
+                List.of("洛白", "夏安"), 2, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(
+                shot, List.of("洛白", "夏安", "心电监护仪", "怀表", "市中心医院ICU"), "市中心医院ICU");
+
+        assertEquals("""
+                场景：@市中心医院ICU。医院ICU，@心电监护仪滴答
+                站位：@洛白在病床旁，@夏安在门口，@心电监护仪在床头。
+                镜头1：近景。下降。接松下针头。
+                @洛白 按下@怀表开关，庶流从@怀表扩散，说：以梦为桥，意识下潜。入梦！
+                @洛白 单手按住@怀表，意识沉入梦境深渊。
+
+                镜头2：全景。环绕。接逐渐扩散。
+                怪物化作代码浪潮，圆形扑向@洛白，说：不梦……还不梦！
+                @洛白 说：代码涌进……不对劲。
+                """.stripTrailing(), visible);
+    }
+
+    @Test
+    void visiblePromptCitesPropMissingFromActionOnBlockingLine() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("洛白在病床旁");
+        beats.setBeats(List.of(beat("近景", "洛白按下开关。", "接松手", "洛白：入梦。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "医院ICU", "入梦", null, null, null, 8,
+                List.of("洛白"), 1, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(
+                shot, List.of("洛白", "怀表"), "医院ICU", List.of("怀表", "没有图的杯子"));
+
+        assertTrue(visible.contains("站位：@洛白在病床旁，@怀表。"));
+        assertTrue(visible.contains("@洛白 按下开关，说：入梦。"));
+        assertFalse(visible.contains("@没有图的杯子"));
+        assertFalse(visible.contains("说：@"));
+    }
+
+    @Test
+    void visiblePromptDoesNotRepeatPropAlreadyMarkedInAction() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("洛白在病床旁。");
+        beats.setBeats(List.of(beat("近景", "洛白按下怀表。", "接松手", "洛白：怀表开启。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "医院ICU", "入梦", null, null, null, 8,
+                List.of("洛白"), 1, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(
+                shot, List.of("洛白", "怀表"), "医院ICU", List.of("怀表"));
+
+        assertTrue(visible.contains("站位：@洛白在病床旁。"));
+        assertFalse(visible.contains("站位：@洛白在病床旁，@怀表"));
+        assertTrue(visible.contains("@洛白 按下@怀表，说：怀表开启。"));
+    }
+
+    @Test
+    void assembleBindsNarrativeMentionsOnceAndLeavesDialoguePlain() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "宴安", DramaContract.ASSET_TYPE_CHARACTER, "青年女性", "设定图"),
+                ref(2, "客厅", DramaContract.ASSET_TYPE_SCENE, "室内", "客厅"));
+        String visible = """
+                站位：@宴安站在@客厅门口。
+                镜头1：景别：中近景。 动作：@宴安推门。 接续：门口。 台词：宴安：这里有人来过。""";
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "客厅", "推门", "宴安：这里有人来过。", "门外", "站定", 8,
+                List.of("宴安"), 1, List.of(), null, null, beatsOf(visible));
+
+        String prompt = DramaStoryboardCompiler.assemble(prefix, refs, List.of(), visible, shot).prompt();
+        String core = prompt.substring(prompt.indexOf("站位："), prompt.indexOf("Continuity in"));
+
+        assertTrue(prompt.contains("<Picture 1> <Picture 2>"));
+        assertTrue(prompt.contains("Active References"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.MOVIE_SCENE_MUST));
+        assertTrue(core.contains("宴安（<Picture 1>）"));
+        assertTrue(core.contains("客厅（<Picture 2>）"));
+        assertTrue(core.indexOf("宴安（<Picture 1>）") < core.lastIndexOf("宴安（<Picture 1>）"));
+        assertFalse(core.contains("<Picture 3>"));
+        assertTrue(core.contains("台词：宴安：这里有人来过。"));
+        assertFalse(core.contains("台词：宴安（<Picture"));
+        assertFalse(visible.contains("Must"));
+    }
+
+    @Test
+    void narrativeMentionsSkipDialogueAndDuplicateNames() {
+        String visible = "动作：@宴安走向@宴安的桌子。 台词：@宴安：我到了。";
+        assertEquals(List.of("宴安"), DramaStoryboardCompiler.narrativeAtNames(visible, List.of("宴安")));
+        assertEquals("动作：@宴安走向@宴安的桌子。 台词：宴安：我到了。",
+                DramaStoryboardCompiler.stripDialogueMentions(visible));
+        assertEquals("宴安：我到了。", DramaStoryboardCompiler.extractDialogue("镜头1：" + visible));
+    }
+
+    private static DramaShotBeats beatsOf(String ignored) {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("宴安站在客厅门口。");
+        beats.setBeats(List.of(beat("中近景", "宴安推门。", "门口", "宴安：这里有人来过。")));
+        return beats;
+    }
+
     private static DramaShotBeats.Beat beat(String camera, String action, String continuity, String dialogue) {
         DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
         beat.setCamera(camera);

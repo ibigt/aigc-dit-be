@@ -21,9 +21,9 @@ import java.util.Set;
  */
 public final class DramaShotEnrichment {
 
-    /** 硬上限；提示词目标无镜头时 narrative_goal 60~150。有镜头时每个 action 保持短句，超限整镜回退。 */
+    /** 硬上限；提示词目标无镜头时 narrative_goal 60~150。有镜头时每个 action 目标 40～120 字，超限整镜回退。 */
     static final int MAX_NARRATIVE_GOAL_LENGTH = 200;
-    static final int MAX_BEAT_ACTION_LENGTH = 80;
+    static final int MAX_BEAT_ACTION_LENGTH = 160;
     static final int MAX_BLOCKING_LENGTH = 120;
     static final int MAX_SCENE_LENGTH = 120;
     static final int MAX_CAMERA_LENGTH = 48;

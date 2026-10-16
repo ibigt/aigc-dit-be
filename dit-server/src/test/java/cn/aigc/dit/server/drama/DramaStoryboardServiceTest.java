@@ -182,7 +182,7 @@ class DramaStoryboardServiceTest {
         assertTrue(first.getCompiledPrompt().contains(DramaStyles.require(DramaStyles.ANIME_COMIC).prefix()));
         assertTrue(first.getCompiledPrompt().startsWith("<Picture 1>"));
         assertTrue(first.getReferenceAssetIds().contains(1L));
-        assertEquals(2L, first.getReferenceAssetIds().get(0));
+        assertEquals(5L, first.getReferenceAssetIds().get(0));
         assertFalse(first.getReferenceAssetIds().contains(3L));
         assertTrue(first.getCompiledPrompt().contains("<Picture 1>"));
         assertEquals(first.getCastCount(), first.getCharacterNames().size());
@@ -553,17 +553,17 @@ class DramaStoryboardServiceTest {
         assertTrue(req.getReferences() != null && !req.getReferences().isEmpty());
         org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
         org.junit.jupiter.api.Assertions.assertNull(req.getReferences().get(0).getAssetId());
-        assertEquals("users/7/assets/1.png", req.getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/5.png", req.getReferences().get(0).getStorageKey());
         assertEquals(GenerateRequests.SOURCE_DRAMA, extraCaptor.getValue().get("source"));
         assertEquals(201L, extraCaptor.getValue().get("shotId"));
         assertEquals(500L, shot.getGenTaskId());
         assertTrue(Boolean.TRUE.equals(resp.getShot().getGenerating()));
         assertEquals(500L, resp.getTask().getId());
-        assertEquals(List.of(1L, 5L), shot.getReferenceAssetIds());
+        assertEquals(List.of(5L, 1L), shot.getReferenceAssetIds());
         assertEquals(2, resp.getShot().getReferences().size());
         assertEquals(1, resp.getShot().getReferences().get(0).getPictureIndex());
-        assertEquals("洛白", resp.getShot().getReferences().get(0).getName());
-        assertEquals("幻梦侦探社", resp.getShot().getReferences().get(1).getName());
+        assertEquals("幻梦侦探社", resp.getShot().getReferences().get(0).getName());
+        assertEquals("洛白", resp.getShot().getReferences().get(1).getName());
     }
 
     @Test
@@ -602,14 +602,16 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
         GenerateSubmitReq req = reqCaptor.getValue();
-        assertNotNull(req.getFrames());
-        assertEquals("users/7/gen/shot1-tail.webp", req.getFrames().getFirstFrameKey());
-        assertTrue(req.getReferences() == null || req.getReferences().isEmpty());
-        assertTrue(req.getPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
+        assertTrue(req.getReferences() != null && !req.getReferences().isEmpty());
+        assertTrue(req.getReferences().stream().noneMatch(item -> "users/7/gen/shot1-tail.webp".equals(item.getStorageKey())));
         assertTrue(req.getPrompt().contains("洛白身份不变量"));
-        assertFalse(req.getPrompt().contains("<Picture"));
-        assertEquals(DramaVideoGenerateModes.I2V, extraCaptor.getValue().get("videoGenerateMode"));
-        assertEquals(200L, extraCaptor.getValue().get("chainedFromShotId"));
+        assertTrue(req.getPrompt().contains("<Picture"));
+        assertFalse(req.getPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
+        assertEquals(Boolean.FALSE, extraCaptor.getValue().get("chainPrevTail"));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("chainedFromShotId"));
+        assertEquals(DramaVideoGenerateModes.R2V, second.getVideoGenerateMode());
     }
 
     @Test
@@ -638,7 +640,6 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp still = new GenerateTaskResp();
         still.setId(603L);
         still.setStatus("PENDING");
@@ -648,10 +649,11 @@ class DramaStoryboardServiceTest {
 
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
-        assertEquals("image", reqCaptor.getValue().getCategory());
+        assertEquals("video", reqCaptor.getValue().getCategory());
         org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
         assertTrue(reqCaptor.getValue().getPrompt().contains("推门将档案摔桌"));
         assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture"));
+        assertFalse(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
     }
 
     @Test
@@ -687,7 +689,9 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
         assertEquals("video", reqCaptor.getValue().getCategory());
-        assertEquals("users/7/gen/shot1-tail.webp", reqCaptor.getValue().getFrames().getFirstFrameKey());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertTrue(reqCaptor.getValue().getReferences().stream()
+                .noneMatch(item -> "users/7/gen/shot1-tail.webp".equals(item.getStorageKey())));
         assertEquals("users/7/gen/shot1-tail.webp", first.getVideoTailKey());
     }
 
@@ -776,14 +780,17 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        GenTask live = new GenTask();
-        live.setId(499L);
-        live.setStatus(TaskStatus.RUNNING);
-        when(genTaskMapper.selectById(499L)).thenReturn(live);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
 
-        BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
-        assertTrue(error.getMessage().contains("上一镜"));
-        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertEquals("video", reqCaptor.getValue().getCategory());
     }
 
     @Test
@@ -811,9 +818,11 @@ class DramaStoryboardServiceTest {
         service.compileShot(201L);
         String prompt = shot.getCompiledPrompt();
         assertNotNull(prompt);
-        assertTrue(prompt.contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertFalse(prompt.contains(DramaStoryboardCompiler.I2V_MUST_START));
         assertTrue(prompt.contains("洛白身份不变量"));
-        assertFalse(prompt.contains("<Picture"));
+        assertTrue(prompt.contains("<Picture"));
+        assertNotNull(shot.getVisiblePrompt());
+        assertNull(shot.getPromptOverride());
 
         DramaStoryboardResp board = service.getStoryboard(31L);
         DramaShotResp visible = board.getChapters().get(0).getShots().get(1);
@@ -872,9 +881,9 @@ class DramaStoryboardServiceTest {
         shot.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         DramaStoryboardResp board = service.getStoryboard(31L);
         DramaShotResp visible = board.getChapters().get(0).getShots().get(1);
-        assertFalse(visible.getCompiledPrompt().contains("<Picture"));
-        assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
-        assertTrue(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
+        assertTrue(visible.getCompiledPrompt().contains("<Picture"));
+        assertFalse(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertFalse(visible.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_IDENTITIES_HEADER));
         assertFalse(Boolean.TRUE.equals(visible.getCompiledStale()));
     }
 
@@ -903,8 +912,8 @@ class DramaStoryboardServiceTest {
 
         DramaShotResp resp = service.compileShot(201L);
 
-        assertFalse(shot.getCompiledPrompt().contains("<Picture"));
-        assertTrue(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertTrue(shot.getCompiledPrompt().contains("<Picture"));
+        assertFalse(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
         assertEquals(DramaVideoGenerateModes.I2V, resp.getEffectiveVideoGenerateMode());
         assertEquals(DramaVideoGenerateModes.I2V, resp.getVideoGenerateMode());
         assertEquals(Boolean.FALSE, resp.getVideoModeInherited());
@@ -947,10 +956,11 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertNotNull(reqCaptor.getValue().getFrames());
-        assertEquals("users/7/gen/shot1-tail.webp", reqCaptor.getValue().getFrames().getFirstFrameKey());
-        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
-        assertEquals(DramaVideoGenerateModes.I2V, extraCaptor.getValue().get("videoGenerateMode"));
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
+        assertTrue(reqCaptor.getValue().getReferences().stream()
+                .noneMatch(item -> "users/7/gen/shot1-tail.webp".equals(item.getStorageKey())));
+        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
     }
 
     @Test
@@ -1073,8 +1083,8 @@ class DramaStoryboardServiceTest {
         DramaShotResp resp = service.compileShot(201L);
 
         assertEquals(DramaVideoGenerateModes.I2V, resp.getEffectiveVideoGenerateMode());
-        assertFalse(shot.getCompiledPrompt().contains("<Picture"));
-        assertTrue(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
+        assertTrue(shot.getCompiledPrompt().contains("<Picture"));
+        assertFalse(shot.getCompiledPrompt().contains(DramaStoryboardCompiler.I2V_MUST_START));
     }
 
     @Test
@@ -1123,7 +1133,7 @@ class DramaStoryboardServiceTest {
 
         assertEquals(null, second.getVideoChainPrevTail());
         assertEquals(Boolean.TRUE, resp.getEffectiveVideoChainPrevTail());
-        assertTrue(second.getCompiledPrompt().contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
+        assertFalse(second.getCompiledPrompt().contains(DramaStoryboardCompiler.R2V_CHAIN_HINT));
     }
 
     @Test
@@ -1182,7 +1192,6 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(gptImageModel());
         GenerateTaskResp still = new GenerateTaskResp();
         still.setId(610L);
         still.setStatus("PENDING");
@@ -1194,20 +1203,18 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("image", reqCaptor.getValue().getCategory());
-        assertEquals(5, reqCaptor.getValue().getReferences().size());
+        assertEquals("video", reqCaptor.getValue().getCategory());
         var keys = reqCaptor.getValue().getReferences().stream()
                 .map(item -> item.getStorageKey())
                 .toList();
         assertTrue(keys.containsAll(List.of(
                 "users/7/assets/1.png",
-                "users/7/assets/2.png",
-                "users/7/assets/3.png",
-                "users/7/assets/4.png",
-                "users/7/gen/shot1-tail.webp")));
-        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture 1>"));
-        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture 4>"));
-        assertEquals(GenerateMode.I2I, extraCaptor.getValue().get("stillMode"));
+                "users/7/assets/2.png")));
+        assertFalse(keys.contains("users/7/gen/shot1-tail.webp"));
+        assertTrue(keys.contains("users/7/assets/3.png"));
+        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture"));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("stillMode"));
+        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
     }
 
     @Test
@@ -1237,7 +1244,6 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(t2iOnlyImageModel());
         GenerateTaskResp still = new GenerateTaskResp();
         still.setId(611L);
         still.setStatus("PENDING");
@@ -1249,10 +1255,10 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("image", reqCaptor.getValue().getCategory());
-        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
-        assertFalse(reqCaptor.getValue().getPrompt().contains("<Picture"));
-        assertEquals(GenerateMode.T2I, extraCaptor.getValue().get("stillMode"));
+        assertEquals("video", reqCaptor.getValue().getCategory());
+        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
+        assertTrue(reqCaptor.getValue().getPrompt().contains("<Picture"));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("stillMode"));
     }
 
     @Test
@@ -1282,7 +1288,6 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp still = new GenerateTaskResp();
         still.setId(600L);
         still.setStatus("PENDING");
@@ -1295,13 +1300,14 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("image", reqCaptor.getValue().getCategory());
-        assertTrue(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_MUST));
-        assertTrue(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
-        assertEquals(3, reqCaptor.getValue().getReferences().size());
-        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("openingStill"));
-        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillForI2v"));
-        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillChainPrevTail"));
+        assertEquals("video", reqCaptor.getValue().getCategory());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertTrue(reqCaptor.getValue().getReferences() != null && reqCaptor.getValue().getReferences().size() >= 1);
+        assertTrue(reqCaptor.getValue().getReferences().stream()
+                .noneMatch(item -> item.getStorageKey() != null && item.getStorageKey().contains("tail")));
+        assertFalse(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_MUST));
+        assertEquals(Boolean.FALSE, extraCaptor.getValue().get("chainPrevTail"));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("openingStill"));
         assertEquals(600L, second.getGenTaskId());
         assertTrue(Boolean.TRUE.equals(resp.getShot().getGeneratingStill())
                 || Boolean.TRUE.equals(resp.getShot().getGenerating()));
@@ -1333,10 +1339,17 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
 
-        BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
-        assertTrue(error.getMessage().contains("图像模型"));
-        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        assertEquals("video", reqCaptor.getValue().getCategory());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
     }
 
     @Test
@@ -1369,7 +1382,6 @@ class DramaStoryboardServiceTest {
         series.setAspectRatio("16:9");
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp task = new GenerateTaskResp();
         task.setId(601L);
         task.setStatus("PENDING");
@@ -1381,9 +1393,10 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        // 新场第一镜可走 i2v 开场静帧，但不跨场接上一场尾帧
-        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("openingStill"));
+        assertEquals("video", reqCaptor.getValue().getCategory());
         assertNull(reqCaptor.getValue().getFrames());
+        assertEquals(Boolean.FALSE, extraCaptor.getValue().get("chainPrevTail"));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("openingStill"));
         assertFalse(String.valueOf(extraCaptor.getValue()).contains("shot1-tail"));
     }
 
@@ -1412,7 +1425,6 @@ class DramaStoryboardServiceTest {
         series.setVideoGenerateMode(DramaVideoGenerateModes.I2V);
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp still = new GenerateTaskResp();
         still.setId(602L);
         still.setStatus("PENDING");
@@ -1424,14 +1436,13 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("image", reqCaptor.getValue().getCategory());
+        assertEquals("video", reqCaptor.getValue().getCategory());
         org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
-        assertEquals(2, reqCaptor.getValue().getReferences().size());
-        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
-        assertEquals("users/7/gen/shot1-tail.webp", reqCaptor.getValue().getReferences().get(1).getStorageKey());
-        assertTrue(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
-        assertFalse(reqCaptor.getValue().getPrompt().contains("必须从该站位起幅"));
-        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillChainPrevTail"));
+        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
+        assertTrue(reqCaptor.getValue().getReferences().stream()
+                .noneMatch(item -> "users/7/gen/shot1-tail.webp".equals(item.getStorageKey())));
+        assertFalse(reqCaptor.getValue().getPrompt().contains(DramaStoryboardCompiler.STILL_PREV_TAIL_HINT));
+        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("stillChainPrevTail"));
     }
 
     @Test
@@ -1504,7 +1515,6 @@ class DramaStoryboardServiceTest {
         series.setAspectRatio("16:9");
         when(seriesMapper.selectById(21L)).thenReturn(series);
         when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
-        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
         GenerateTaskResp stillPending = new GenerateTaskResp();
         stillPending.setId(600L);
         stillPending.setStatus("PENDING");
@@ -1530,9 +1540,9 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService, org.mockito.Mockito.times(2)).submit(reqCaptor.capture(), any());
         List<GenerateSubmitReq> reqs = reqCaptor.getAllValues();
-        assertEquals("image", reqs.get(0).getCategory());
+        assertEquals("video", reqs.get(0).getCategory());
+        org.junit.jupiter.api.Assertions.assertNull(reqs.get(0).getFrames());
         assertEquals("video", reqs.get(1).getCategory());
-        assertEquals("users/7/drama/21/frames/auto.webp", reqs.get(1).getFrames().getFirstFrameKey());
         assertEquals("auto", shot.getFirstFrameOrigin());
         assertEquals(500L, shot.getGenTaskId());
     }
@@ -1571,9 +1581,11 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertEquals("users/7/drama/21/frames/open.webp", reqCaptor.getValue().getFrames().getFirstFrameKey());
-        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
-        org.junit.jupiter.api.Assertions.assertNull(extraCaptor.getValue().get("chainedFromShotId"));
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
+        assertTrue(reqCaptor.getValue().getReferences().stream()
+                .noneMatch(item -> "users/7/drama/21/frames/open.webp".equals(item.getStorageKey())));
+        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
     }
 
     @Test
@@ -1610,9 +1622,9 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
         GenerateSubmitReq req = reqCaptor.getValue();
-        assertEquals(3, req.getReferences().size());
-        assertEquals("users/7/gen/shot1-tail.webp", req.getReferences().get(2).getStorageKey());
-        assertTrue(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
+        assertEquals(2, req.getReferences().size());
+        assertTrue(req.getReferences().stream().noneMatch(item -> "users/7/gen/shot1-tail.webp".equals(item.getStorageKey())));
+        assertFalse(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
         org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
     }
 
@@ -1649,8 +1661,8 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
         GenerateSubmitReq req = reqCaptor.getValue();
-        assertEquals(3, req.getReferences().size());
-        assertTrue(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
+        assertEquals(2, req.getReferences().size());
+        assertFalse(req.getPrompt().contains(DramaStoryboardCompiler.PREV_TAIL_NAME));
         org.junit.jupiter.api.Assertions.assertNull(req.getFrames());
     }
 
@@ -1662,6 +1674,7 @@ class DramaStoryboardServiceTest {
         shot.setChapterId(chapter.getId());
         storedShots.add(shot);
         shot.setPropNames(List.of("古铜怀表"));
+        shot.setNarrativeGoal("洛白拿着古铜怀表交代空间");
         when(assetMapper.selectList(any())).thenReturn(List.of(
                 lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
                 lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE),
@@ -1683,16 +1696,16 @@ class DramaStoryboardServiceTest {
         verify(generateService).submit(reqCaptor.capture(), any());
         GenerateSubmitReq req = reqCaptor.getValue();
         assertEquals(3, req.getReferences().size());
-        assertEquals("users/7/assets/1.png", req.getReferences().get(0).getStorageKey());
-        assertEquals("users/7/assets/8.png", req.getReferences().get(1).getStorageKey());
-        assertEquals("users/7/assets/5.png", req.getReferences().get(2).getStorageKey());
-        assertTrue(req.getPrompt().contains("<Picture 1> 洛白"));
-        assertTrue(req.getPrompt().contains("<Picture 2> 古铜怀表"));
-        assertTrue(req.getPrompt().contains("<Picture 3> 幻梦侦探社"));
+        assertEquals("users/7/assets/5.png", req.getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/1.png", req.getReferences().get(1).getStorageKey());
+        assertEquals("users/7/assets/8.png", req.getReferences().get(2).getStorageKey());
+        assertTrue(req.getPrompt().contains("<Picture 1> 幻梦侦探社"));
+        assertTrue(req.getPrompt().contains("<Picture 2> 洛白"));
+        assertTrue(req.getPrompt().contains("<Picture 3> 古铜怀表"));
         assertFalse(req.getPrompt().contains("真实人脸"));
         assertFalse(req.getPrompt().contains("真人照片"));
         assertFalse(req.getPrompt().contains("real people"));
-        assertEquals(List.of(1L, 8L, 5L), shot.getReferenceAssetIds());
+        assertEquals(List.of(5L, 1L, 8L), shot.getReferenceAssetIds());
     }
 
     @Test
@@ -1703,6 +1716,7 @@ class DramaStoryboardServiceTest {
         shot.setChapterId(chapter.getId());
         shot.setCharacterNames(List.of("赵王", "秦国使臣"));
         shot.setCastCount(2);
+        shot.setNarrativeGoal("赵王看着秦国使臣");
         shot.setDialogue("秦国使臣：秦王愿以十五座城，换赵国和氏璧。");
         storedShots.add(shot);
 
@@ -1836,9 +1850,9 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
         verify(generateService).submit(reqCaptor.capture(), any());
         assertEquals(2, reqCaptor.getValue().getReferences().size());
-        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
-        assertEquals("users/7/assets/5.png", reqCaptor.getValue().getReferences().get(1).getStorageKey());
-        assertEquals(List.of(1L, 5L), shot.getReferenceAssetIds());
+        assertEquals("users/7/assets/5.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
+        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(1).getStorageKey());
+        assertEquals(List.of(5L, 1L), shot.getReferenceAssetIds());
     }
 
     @Test
@@ -2333,8 +2347,8 @@ class DramaStoryboardServiceTest {
 
         assertEquals("中景。夏安往白板贴照片。", resp.getNarrativeGoal());
         assertEquals("幻梦侦探社 日 内", resp.getScene());
-        assertTrue(resp.getCompiledPrompt().contains("Action: 中景。夏安往白板贴照片。"));
-        assertTrue(resp.getCompiledPrompt().contains("Scene: 幻梦侦探社 日 内"));
+        assertTrue(resp.getCompiledPrompt().contains("动作：中景。夏安往白板贴照片。"));
+        assertTrue(resp.getCompiledPrompt().contains("场景：幻梦侦探社 日 内"));
         assertFalse(resp.getCompiledPrompt().contains("交代空间"));
     }
 
@@ -2356,9 +2370,9 @@ class DramaStoryboardServiceTest {
         DramaShotResp resp = service.updateShot(201L, req);
 
         assertEquals(List.of("洛白", "夏安"), resp.getCharacterNames());
-        assertEquals(List.of(1L, 2L), resp.getReferenceAssetIds());
+        assertEquals(List.of(1L), resp.getReferenceAssetIds());
         assertEquals("洛白", resp.getReferences().get(0).getName());
-        assertEquals("夏安", resp.getReferences().get(1).getName());
+        assertEquals(1, resp.getReferences().size());
     }
 
     @Test
@@ -2383,9 +2397,47 @@ class DramaStoryboardServiceTest {
 
         assertEquals(List.of("局长"), resp.getCharacterNames());
         assertEquals(1, resp.getCastCount());
-        assertEquals(List.of("局长", "幻梦侦探社"),
+        assertEquals(List.of("幻梦侦探社", "局长"),
                 resp.getReferences().stream().map(ref -> ref.getName()).toList());
         assertTrue(resp.getCompiledPrompt().contains("本镜恰好 1 人"));
+    }
+
+    @Test
+    void compileCitesPropsUsedInActionAndListedOnTheShot() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("洛白"));
+        shot.setPropNames(List.of("怀表", "手电筒", "没有图的杯子"));
+        shot.setNarrativeGoal("入梦");
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("洛白在病床旁");
+        DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
+        beat.setCamera("近景");
+        beat.setAction("洛白按下怀表开关，又瞥见档案袋。");
+        beat.setContinuity("接松手");
+        beat.setDialogue("洛白：杯子在桌上。");
+        beats.setBeats(List.of(beat));
+        shot.setShotBeats(beats);
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        DramaAsset unimaged = pendingAsset(9L, "没有图的杯子", DramaContract.ASSET_TYPE_PROP);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(6L, "怀表", DramaContract.ASSET_TYPE_PROP),
+                lockedAsset(7L, "档案袋", DramaContract.ASSET_TYPE_PROP),
+                lockedAsset(8L, "手电筒", DramaContract.ASSET_TYPE_PROP),
+                unimaged));
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertTrue(resp.getVisiblePrompt().contains("站位：@洛白在病床旁，@手电筒。"));
+        assertTrue(resp.getVisiblePrompt().contains("@洛白 按下@怀表开关，又瞥见@档案袋，说：杯子在桌上。"));
+        assertFalse(resp.getVisiblePrompt().contains("@没有图的杯子"));
+        assertFalse(resp.getVisiblePrompt().contains("说：@"));
+        assertEquals(List.of("洛白", "手电筒", "怀表", "档案袋"),
+                resp.getReferences().stream().map(ref -> ref.getName()).toList());
     }
 
     @Test
@@ -2442,6 +2494,135 @@ class DramaStoryboardServiceTest {
         ArgumentCaptor<DramaShot> captor = ArgumentCaptor.forClass(DramaShot.class);
         verify(shotMapper, org.mockito.Mockito.atLeastOnce()).updateById(captor.capture());
         assertNull(captor.getValue().getLocationName());
+    }
+
+    @Test
+    void saveVisiblePromptKeepsDialoguePlainAndClearsLegacyOverride() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setPromptOverride("整段旧覆盖，不要拆。");
+        shot.setVisiblePrompt(null);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaShotSaveReq req = new DramaShotSaveReq();
+        req.setVisiblePrompt("场景：@幻梦侦探社\n镜头1：景别：中景。 动作：@洛白推门。 台词：@洛白：我来了。");
+        req.setReferenceAssetIds(List.of(5L, 1L));
+        DramaShotResp resp = service.updateShot(201L, req);
+
+        assertNull(shot.getPromptOverride());
+        assertFalse(Boolean.TRUE.equals(resp.getLegacyOverride()));
+        assertTrue(resp.getVisiblePrompt().contains("台词：洛白：我来了。"));
+        assertFalse(resp.getVisiblePrompt().contains("@洛白："));
+        assertEquals("洛白：我来了。", resp.getDialogue());
+        assertEquals(List.of(5L, 1L), resp.getReferenceAssetIds());
+        assertTrue(resp.getCompiledPrompt().contains("洛白（<Picture 2>）"));
+        int dialogueAt = resp.getCompiledPrompt().indexOf("台词：洛白：我来了。");
+        assertTrue(dialogueAt >= 0);
+        int nextLine = resp.getCompiledPrompt().indexOf('\n', dialogueAt);
+        String clause = nextLine < 0
+                ? resp.getCompiledPrompt().substring(dialogueAt)
+                : resp.getCompiledPrompt().substring(dialogueAt, nextLine);
+        assertFalse(clause.contains("<Picture"));
+        assertFalse(clause.contains("@"));
+    }
+
+    @Test
+    void legacyOverrideSubmitsRawPromptUntilEdited() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setChapterId(pendingChapter().getId());
+        shot.setPromptOverride("整段旧覆盖，不要拆。");
+        shot.setReferenceAssetIds(List.of(1L));
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(seedanceModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.generateShot(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        assertEquals("整段旧覆盖，不要拆。", reqCaptor.getValue().getPrompt());
+        org.junit.jupiter.api.Assertions.assertNull(reqCaptor.getValue().getFrames());
+        assertEquals("users/7/assets/1.png", reqCaptor.getValue().getReferences().get(0).getStorageKey());
+
+        DramaShotSaveReq edit = new DramaShotSaveReq();
+        edit.setVisiblePrompt("动作：@洛白回头。");
+        edit.setReferenceAssetIds(List.of(1L));
+        service.updateShot(201L, edit);
+        service.generateShot(201L);
+
+        verify(generateService, org.mockito.Mockito.times(2)).submit(reqCaptor.capture(), any());
+        String edited = reqCaptor.getAllValues().get(reqCaptor.getAllValues().size() - 1).getPrompt();
+        assertTrue(edited.contains("洛白（<Picture 1>）"));
+        assertFalse(edited.contains("整段旧覆盖"));
+        assertNull(shot.getPromptOverride());
+    }
+
+    @Test
+    void generateRejectsWhenImageReferencesExceedModelCap() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setChapterId(pendingChapter().getId());
+        StringBuilder visible = new StringBuilder("动作：");
+        java.util.List<DramaAsset> assets = new java.util.ArrayList<>();
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            assets.add(lockedAsset((long) i, "角色" + i, DramaContract.ASSET_TYPE_CHARACTER));
+            ids.add((long) i);
+            visible.append("@角色").append(i).append("出场。");
+        }
+        shot.setVisiblePrompt(visible.toString());
+        shot.setReferenceAssetIds(ids);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(assets);
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel model = new AiModel();
+        model.setId(88L);
+        model.setName("Agnes Flash");
+        model.setCategory("video");
+        model.setEnabled(true);
+        model.setAdapterKey("agnes-video-2.5");
+        model.setProvider("官方API");
+        model.setModelKey("agnes-video-2.5-flash");
+        model.setCapabilities(java.util.List.of("video", "t2v", "r2v"));
+        when(aiModelMapper.selectById(88L)).thenReturn(model);
+
+        BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
+        assertEquals("当前模型最多支持 5 张", error.getMessage());
+    }
+
+    @Test
+    void compileOverwritesVisiblePromptAndClearsOverride() {
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setVisiblePrompt("手改动作：@洛白不动。");
+        shot.setPromptOverride("旧覆盖");
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertNull(shot.getPromptOverride());
+        assertFalse(resp.getVisiblePrompt().contains("手改动作"));
+        assertTrue(resp.getVisiblePrompt().contains("@洛白"));
+        assertTrue(resp.getCompiledPrompt().contains("<Picture"));
+        assertFalse(Boolean.TRUE.equals(resp.getLegacyOverride()));
     }
 
     private void stubLlmDrafts() {
@@ -2526,7 +2707,7 @@ class DramaStoryboardServiceTest {
         shot.setTitle("侦探社开场");
         shot.setDurationSec(5);
         shot.setScene("幻梦侦探社");
-        shot.setNarrativeGoal("交代空间");
+        shot.setNarrativeGoal("洛白交代空间");
         shot.setCharacterNames(List.of("洛白"));
         shot.setPropNames(List.of());
         shot.setLocationName("幻梦侦探社");
