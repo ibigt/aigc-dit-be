@@ -75,15 +75,27 @@ public class DramaShotResp {
     @Schema(description = "成片落幅预览地址")
     private String videoTailUrl;
     @Schema(description = "开场静帧对象 key（自动 i2i 或上传）")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     private String firstFrameKey;
     @Schema(description = "开场静帧预览地址")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     private String firstFrameUrl;
     @Schema(description = "本镜实际提交用的首帧 key（本镜静帧优先，否则同场上一镜落幅）")
     private String effectiveFirstFrameKey;
     @Schema(description = "本镜实际提交用的首帧预览地址")
     private String effectiveFirstFrameUrl;
-    @Schema(description = "首帧来源：upload / auto / prev-tail / none")
+    @Schema(description = "首帧来源：upload / asset / auto / prev-tail / prev-end / none")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     private String firstFrameSource;
+    @Schema(description = "用户设置的尾帧对象 key")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private String endFrameKey;
+    @Schema(description = "用户设置的尾帧预览地址")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private String endFrameUrl;
+    @Schema(description = "尾帧来源：upload / asset / none")
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    private String endFrameSource;
     @Schema(description = "无有效首帧时的原因：no-prev / chapter-change / close-cut / prev-pending / prev-empty / tail-missing / ffmpeg-missing")
     private String firstFrameGap;
     @Schema(description = "同场上一镜已出片，可手动改用其落幅")

@@ -92,6 +92,13 @@ public class DramaShot {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String firstFrameOrigin;
 
+    /** 用户设置的尾帧，不是出片落幅 videoTailKey。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String endFrameKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String endFrameOrigin;
+
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String videoGenerateMode;
 

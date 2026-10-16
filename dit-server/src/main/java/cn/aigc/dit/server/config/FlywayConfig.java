@@ -346,6 +346,8 @@ public class FlywayConfig {
                     video_tail_key          VARCHAR(512),
                     first_frame_key         VARCHAR(512),
                     first_frame_origin      VARCHAR(16),
+                    end_frame_key           VARCHAR(512),
+                    end_frame_origin        VARCHAR(16),
                     video_generate_mode     VARCHAR(16),
                     video_chain_prev_tail   BOOLEAN,
                     video_generated_mode    VARCHAR(16),
@@ -419,6 +421,14 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS end_frame_key VARCHAR(512)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
+                ADD COLUMN IF NOT EXISTS end_frame_origin VARCHAR(16)
+                """);
+        statement.execute("""
+                ALTER TABLE drama_shot
                 ADD COLUMN IF NOT EXISTS video_generate_mode VARCHAR(16)
                 """);
         statement.execute("""
@@ -447,7 +457,15 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_shot.first_frame_origin
-                IS '开场静帧来源：auto 自动 i2i / upload 用户上传'
+                IS '开场静帧来源：auto 自动 i2i / upload 用户上传 / asset 素材库 / prev-end 上一镜尾帧 / prev-tail 上一镜落幅'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.end_frame_key
+                IS '用户设置的尾帧对象 key：本地上传或素材库图片'
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_shot.end_frame_origin
+                IS '尾帧来源：upload 本地上传 / asset 素材库图片'
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_shot.video_generate_mode

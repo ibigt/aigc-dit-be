@@ -12,6 +12,7 @@ import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotBatchGenerateReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotCreateReq;
+import cn.aigc.dit.server.drama.model.req.DramaShotFrameAssetReq;
 import cn.aigc.dit.server.drama.model.req.DramaShotSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaSeriesUpdateReq;
 import cn.aigc.dit.server.drama.model.req.DramaVideoModelBindReq;
@@ -397,7 +398,7 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.confirmShot(id));
     }
 
-    @Operation(summary = "单镜出片；走项目全局生成方式（参考图 r2v 或首尾帧 i2v）")
+    @Operation(summary = "单镜出片；按镜头 videoGenerateMode 走参考图或首尾帧")
     @PostMapping("/shots/{id}/generate")
     public CommonResult<DramaShotGenerateResp> generateShot(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.generateShot(id));
@@ -437,10 +438,46 @@ public class DramaController {
         return CommonResult.success(dramaStoryboardService.uploadFirstFrame(id, file));
     }
 
+    @Operation(summary = "把账号素材库图片设为本镜首帧")
+    @PostMapping("/shots/{id}/first-frame/from-asset")
+    public CommonResult<DramaShotResp> useAssetShotFirstFrame(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaShotFrameAssetReq req) {
+        return CommonResult.success(dramaStoryboardService.useAssetFirstFrame(id, req.getAssetId()));
+    }
+
     @Operation(summary = "清除本镜开场静帧，改回同场上一镜落幅或下次自动重画")
     @DeleteMapping("/shots/{id}/first-frame")
     public CommonResult<DramaShotResp> clearShotFirstFrame(@PathVariable Long id) {
         return CommonResult.success(dramaStoryboardService.clearFirstFrame(id));
+    }
+
+    @Operation(summary = "把上一镜尾帧复制到本镜首帧；没有用户尾帧时用成片落幅")
+    @PostMapping("/shots/{id}/first-frame/from-prev-end")
+    public CommonResult<DramaShotResp> usePrevEndFirstFrame(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.usePrevEndFrame(id));
+    }
+
+    @Operation(summary = "上传本镜尾帧")
+    @PostMapping("/shots/{id}/end-frame")
+    public CommonResult<DramaShotResp> uploadShotEndFrame(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file) {
+        return CommonResult.success(dramaStoryboardService.uploadEndFrame(id, file));
+    }
+
+    @Operation(summary = "把账号素材库图片设为本镜尾帧")
+    @PostMapping("/shots/{id}/end-frame/from-asset")
+    public CommonResult<DramaShotResp> useAssetShotEndFrame(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaShotFrameAssetReq req) {
+        return CommonResult.success(dramaStoryboardService.useAssetEndFrame(id, req.getAssetId()));
+    }
+
+    @Operation(summary = "清除本镜用户尾帧")
+    @DeleteMapping("/shots/{id}/end-frame")
+    public CommonResult<DramaShotResp> clearShotEndFrame(@PathVariable Long id) {
+        return CommonResult.success(dramaStoryboardService.clearEndFrame(id));
     }
 
     @Operation(summary = "改用同场上一镜落幅作本镜首帧（换场不可用）")

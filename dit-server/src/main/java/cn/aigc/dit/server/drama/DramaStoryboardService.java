@@ -38,6 +38,7 @@ import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptDocs;
 import cn.aigc.dit.server.drama.text.ShotDraftList;
 import cn.aigc.dit.server.entity.AiModel;
+import cn.aigc.dit.server.entity.Asset;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.generate.GenerateTaskViews;
@@ -119,8 +120,21 @@ public class DramaStoryboardService {
         boolean dirty = false;
         boolean recompiling = recompileLock.isActive(episode.getSeriesId());
         if (!recompiling) {
+            ScriptDoc script = ScriptDocs.fromMap(episode.getScript());
+            Map<Long, DramaChapter> chaptersById = new HashMap<>();
+            for (DramaChapter chapter : chapters) {
+                if (chapter != null && chapter.getId() != null) {
+                    chaptersById.put(chapter.getId(), chapter);
+                }
+            }
             for (DramaShot shot : shots) {
-                if (refreshStale(shot, assets, stylePrefix, series)) {
+                boolean restored = restoreMissingSceneMention(
+                        shot, chaptersById.get(shot.getChapterId()), script, assets);
+                boolean refreshed = refreshStale(shot, assets, stylePrefix, series);
+                if (restored && !refreshed) {
+                    shotMapper.updateById(shot);
+                }
+                if (restored || refreshed) {
                     dirty = true;
                 }
             }
@@ -485,38 +499,75 @@ public class DramaStoryboardService {
 
     @Transactional
     public DramaShotResp uploadFirstFrame(Long shotId, MultipartFile file) {
-        DramaShot shot = requireShot(shotId);
-        assertNotBatchLocked(shotId);
-        requireNotDrafting(shot.getEpisodeId());
-        requireNotRecompiling(shot);
-        if (file == null || file.isEmpty()) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请选择首帧图片");
-        }
-        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
-        if (!mime.startsWith("image/")) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "首帧仅支持图片");
-        }
-        String key = assetService.putOwnedFile(file, "drama/" + shot.getSeriesId() + "/frames");
-        shot.setFirstFrameKey(key);
+        DramaShot shot = requireEditableFrameShot(shotId);
+        shot.setFirstFrameKey(storeFrameFile(shot, file, "首帧"));
         shot.setFirstFrameOrigin("upload");
-        shotMapper.updateById(shot);
-        touchSeries(shot.getSeriesId());
-        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
+        return finishFrameEdit(shot);
+    }
+
+    @Transactional
+    public DramaShotResp uploadEndFrame(Long shotId, MultipartFile file) {
+        DramaShot shot = requireEditableFrameShot(shotId);
+        shot.setEndFrameKey(storeFrameFile(shot, file, "尾帧"));
+        shot.setEndFrameOrigin("upload");
+        return finishFrameEdit(shot);
+    }
+
+    @Transactional
+    public DramaShotResp useAssetFirstFrame(Long shotId, Long assetId) {
+        DramaShot shot = requireEditableFrameShot(shotId);
+        shot.setFirstFrameKey(imageKeyOfLibraryAsset(assetId));
+        shot.setFirstFrameOrigin("asset");
+        return finishFrameEdit(shot);
+    }
+
+    @Transactional
+    public DramaShotResp useAssetEndFrame(Long shotId, Long assetId) {
+        DramaShot shot = requireEditableFrameShot(shotId);
+        shot.setEndFrameKey(imageKeyOfLibraryAsset(assetId));
+        shot.setEndFrameOrigin("asset");
+        return finishFrameEdit(shot);
     }
 
     @Transactional
     public DramaShotResp clearFirstFrame(Long shotId) {
-        DramaShot shot = requireShot(shotId);
-        assertNotBatchLocked(shotId);
-        requireNotDrafting(shot.getEpisodeId());
-        requireNotRecompiling(shot);
+        DramaShot shot = requireEditableFrameShot(shotId);
         shot.setFirstFrameKey(null);
         shot.setFirstFrameOrigin(null);
-        shotMapper.updateById(shot);
-        touchSeries(shot.getSeriesId());
-        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
-        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
+        return finishFrameEdit(shot);
+    }
+
+    @Transactional
+    public DramaShotResp clearEndFrame(Long shotId) {
+        DramaShot shot = requireEditableFrameShot(shotId);
+        shot.setEndFrameKey(null);
+        shot.setEndFrameOrigin(null);
+        return finishFrameEdit(shot);
+    }
+
+    /** 把上一镜尾帧复制到本镜首帧。优先用户设置的尾帧，没有时用上一镜成片落幅。不限同一场。 */
+    @Transactional
+    public DramaShotResp usePrevEndFrame(Long shotId) {
+        DramaShot shot = requireEditableFrameShot(shotId);
+        DramaShot prev = previousEpisodeShot(shot);
+        if (prev == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "没有上一镜");
+        }
+        if (StringUtils.hasText(prev.getEndFrameKey())) {
+            shot.setFirstFrameKey(prev.getEndFrameKey());
+            shot.setFirstFrameOrigin("prev-end");
+            return finishFrameEdit(shot);
+        }
+        if (isShotInFlight(prev)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请等上一镜出片完成后再加载尾帧");
+        }
+        String tail = ensureVideoTail(prev);
+        if (!StringUtils.hasText(tail)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "上一镜还没有尾帧");
+        }
+        shot.setFirstFrameKey(tail);
+        shot.setFirstFrameOrigin("prev-tail");
+        return finishFrameEdit(shot);
     }
 
     @Transactional
@@ -826,28 +877,51 @@ public class DramaStoryboardService {
     @Transactional
     public DramaShotGenerateResp generateShot(Long shotId) {
         assertNotBatchLocked(shotId);
-        return doGenerateShot(shotId);
+        return doGenerateShot(shotId, false);
     }
 
-    /** 批次编排内部出片；静帧续跑也走此路径，避免批次锁误拦。 */
+    /** 批次编排内部出片；这轮仍强制参考图，避免和用户尾帧搅在一起。 */
     @Transactional
     public DramaShotGenerateResp generateShotForBatch(Long shotId) {
-        return doGenerateShot(shotId);
+        return doGenerateShot(shotId, true);
     }
 
-    private DramaShotGenerateResp doGenerateShot(Long shotId) {
+    private DramaShotGenerateResp doGenerateShot(Long shotId, boolean forceR2v) {
         DramaShot shot = requireShot(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         DramaSeries series = requireOwnedSeries(shot.getSeriesId());
-        AiModel model = requireBoundVideoModel(series, DramaVideoGenerateModes.R2V);
+        String mode = forceR2v
+                ? DramaVideoGenerateModes.R2V
+                : modeForSingleGenerate(series, shot);
+        if (forceR2v) {
+            shot.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        }
+        boolean i2v = DramaVideoGenerateModes.isI2v(mode);
+        AiModel model = requireBoundVideoModel(series, mode);
         Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
         String prefix = stylePrefixOf(series);
-        shot.setVideoGenerateMode(DramaVideoGenerateModes.R2V);
+        if (i2v && !StringUtils.hasText(shot.getFirstFrameKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先设置首帧");
+        }
         boolean legacy = isLegacyOverride(shot);
         List<DramaAsset> refs;
         String prompt;
-        if (legacy) {
+        if (i2v) {
+            refs = List.of();
+            if (legacy) {
+                prompt = shot.getPromptOverride().trim();
+            } else {
+                if (!StringUtils.hasText(shot.getVisiblePrompt())) {
+                    shot.setVisiblePrompt(blankToNull(renderVisible(shot, assets)));
+                }
+                storeAssembled(shot, assets, prefix, List.of(), shot.getVisiblePrompt(), series);
+                prompt = shot.getCompiledPrompt();
+                if (!StringUtils.hasText(prompt)) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
+                }
+            }
+        } else if (legacy) {
             boolean named = idsOf(shot.getReferenceAssetIds()).isEmpty();
             refs = resolveReferences(shot, assets, true, named);
             prompt = shot.getPromptOverride().trim();
@@ -863,13 +937,15 @@ public class DramaStoryboardService {
                 throw new BizException(ErrorCode.BAD_REQUEST, "请先编译分镜再出片");
             }
         }
-        if (refs.isEmpty()) {
+        if (!i2v && refs.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先准备资产参考图再出片");
         }
-        int maxImages = ImageReferenceCapabilities.maxImages(
-                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
-        if (refs.size() > maxImages) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "当前模型最多支持 " + maxImages + " 张");
+        if (!i2v) {
+            int maxImages = ImageReferenceCapabilities.maxImages(
+                    model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+            if (refs.size() > maxImages) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "当前模型最多支持 " + maxImages + " 张");
+            }
         }
         String adapter = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
@@ -914,6 +990,14 @@ public class DramaStoryboardService {
             }
         }
         req.setReferences(inputs.isEmpty() ? null : inputs);
+        if (i2v) {
+            GenerateSubmitReq.FrameInput frames = new GenerateSubmitReq.FrameInput();
+            frames.setFirstFrameKey(shot.getFirstFrameKey());
+            if (StringUtils.hasText(shot.getEndFrameKey())) {
+                frames.setLastFrameKey(shot.getEndFrameKey());
+            }
+            req.setFrames(frames);
+        }
 
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("source", GenerateRequests.SOURCE_DRAMA);
@@ -921,7 +1005,7 @@ public class DramaStoryboardService {
         extra.put("episodeId", shot.getEpisodeId());
         extra.put("shotId", shot.getId());
         extra.put("adapterKey", adapter);
-        extra.put("videoGenerateMode", DramaVideoGenerateModes.R2V);
+        extra.put("videoGenerateMode", mode);
         extra.put("chainPrevTail", false);
         log.info("drama generate shot {} series={} modelId={} adapter={} modelKey={} mode={} sendRefs={}",
                 shot.getId(), series.getId(), model.getId(), extra.get("adapterKey"), model.getModelKey(),
@@ -1238,9 +1322,6 @@ public class DramaStoryboardService {
         if (req.getVideoGenerateMode() != null) {
             boolean inherit = DramaVideoGenerateModes.isInherit(req.getVideoGenerateMode());
             String stored = DramaVideoGenerateModes.stored(req.getVideoGenerateMode());
-            if (DramaVideoGenerateModes.isI2v(stored) && isFirstShotInChapter(shot)) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "场内第一镜不可用首尾帧，请用参考图");
-            }
             shot.setVideoGenerateMode(stored);
             if (inherit) {
                 shot.setVideoChainPrevTail(null);
@@ -1446,8 +1527,91 @@ public class DramaStoryboardService {
         }
         shot.setCharacterNames(characters);
         shot.setPropNames(props);
-        shot.setLocationName(location);
+        // 正文里没有场景 @ 时保留镜头已有地点。清空后，画面描述若只写「侦探社」
+        // 而不是资产名「幻梦侦探社」，下次编译就补不回场景引用。
+        if (location != null) {
+            shot.setLocationName(location);
+        }
         shot.setCastCount(characters.size());
+    }
+
+    /**
+     * 地点为空时用本场剧本地点。对应场景已有参考图、而提示词场景行没有 @ 时补上。
+     * 地点对不上已出图的场景资产时不动，避免给还没出图的场景硬加引用。
+     */
+    private boolean restoreMissingSceneMention(
+            DramaShot shot, DramaChapter chapter, ScriptDoc script, Map<Long, DramaAsset> assets) {
+        if (shot == null || isLegacyOverride(shot)) {
+            return false;
+        }
+        String location = StringUtils.hasText(shot.getLocationName())
+                ? shot.getLocationName().trim()
+                : scriptLocation(chapter, script);
+        if (!StringUtils.hasText(location)) {
+            return false;
+        }
+        DramaAsset scene = findAsset(assets, location, DramaContract.ASSET_TYPE_SCENE, false);
+        if (!isReferenceEligible(scene) || !StringUtils.hasText(scene.getName())) {
+            return false;
+        }
+        String name = scene.getName().trim();
+        boolean changed = false;
+        if (!name.equals(StringUtils.hasText(shot.getLocationName()) ? shot.getLocationName().trim() : null)) {
+            shot.setLocationName(name);
+            changed = true;
+        }
+        String visible = shot.getVisiblePrompt();
+        if (!StringUtils.hasText(visible) || visible.contains("@" + name)) {
+            return changed;
+        }
+        String cited = citeScene(visible, name);
+        if (cited.equals(visible)) {
+            return changed;
+        }
+        shot.setVisiblePrompt(cited);
+        return true;
+    }
+
+    private static String scriptLocation(DramaChapter chapter, ScriptDoc doc) {
+        if (chapter == null || doc == null || doc.getScenes() == null) {
+            return null;
+        }
+        Integer sceneIndex = chapter.getSceneIndex();
+        if (sceneIndex != null) {
+            for (ScriptDoc.Scene scene : doc.getScenes()) {
+                if (scene != null && sceneIndex.equals(scene.getIndex()) && StringUtils.hasText(scene.getLocation())) {
+                    return scene.getLocation().trim();
+                }
+            }
+            return null;
+        }
+        int chapterIndex = chapter.getChapterIndex() == null ? -1 : chapter.getChapterIndex();
+        if (chapterIndex > 0 && chapterIndex <= doc.getScenes().size()) {
+            ScriptDoc.Scene scene = doc.getScenes().get(chapterIndex - 1);
+            if (scene != null && StringUtils.hasText(scene.getLocation())) {
+                return scene.getLocation().trim();
+            }
+        }
+        return null;
+    }
+
+    /** 在「场景：」后补上已出图的场景名，画面描述原样保留。 */
+    static String citeScene(String visible, String name) {
+        if (!StringUtils.hasText(visible) || !StringUtils.hasText(name) || visible.contains("@" + name)) {
+            return visible;
+        }
+        String label = "场景：";
+        int at = visible.indexOf(label);
+        if (at < 0) {
+            label = "场景:";
+            at = visible.indexOf(label);
+        }
+        String mark = "@" + name.trim() + "。";
+        if (at < 0) {
+            return "场景：" + mark + "\n" + visible;
+        }
+        int insertAt = at + label.length();
+        return visible.substring(0, insertAt) + mark + visible.substring(insertAt);
     }
 
     private List<String> mentionNames(DramaShot shot, Map<Long, DramaAsset> assets) {
@@ -2098,13 +2262,7 @@ public class DramaStoryboardService {
         resp.setEffectiveFirstFrameKey(firstFrameKey);
         resp.setEffectiveFirstFrameUrl(MediaUrls.of(firstFrameKey));
         if (StringUtils.hasText(shot.getFirstFrameKey())) {
-            if ("prev-tail".equalsIgnoreCase(shot.getFirstFrameOrigin())) {
-                resp.setFirstFrameSource("prev-tail");
-            } else if ("auto".equalsIgnoreCase(shot.getFirstFrameOrigin())) {
-                resp.setFirstFrameSource("auto");
-            } else {
-                resp.setFirstFrameSource("upload");
-            }
+            resp.setFirstFrameSource(frameSourceOf(shot.getFirstFrameOrigin()));
             resp.setFirstFrameGap(null);
         } else if (StringUtils.hasText(firstFrameKey)) {
             resp.setFirstFrameSource("prev-tail");
@@ -2113,6 +2271,11 @@ public class DramaStoryboardService {
             resp.setFirstFrameSource("none");
             resp.setFirstFrameGap(describeFirstFrameGap(shot, prev));
         }
+        resp.setEndFrameKey(shot.getEndFrameKey());
+        resp.setEndFrameUrl(MediaUrls.of(shot.getEndFrameKey()));
+        resp.setEndFrameSource(StringUtils.hasText(shot.getEndFrameKey())
+                ? ("asset".equalsIgnoreCase(shot.getEndFrameOrigin()) ? "asset" : "upload")
+                : "none");
         resp.setCanUsePrevTail(canUsePrevTail(shot, prev));
         resp.setGeneratingStill(task != null
                 && GenerateRequests.isOpeningStill(task.getParams())
@@ -2931,6 +3094,75 @@ public class DramaStoryboardService {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
+    private DramaShot requireEditableFrameShot(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        assertNotBatchLocked(shotId);
+        requireNotDrafting(shot.getEpisodeId());
+        requireNotRecompiling(shot);
+        return shot;
+    }
+
+    private DramaShotResp finishFrameEdit(DramaShot shot) {
+        shotMapper.updateById(shot);
+        touchSeries(shot.getSeriesId());
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets, stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
+    }
+
+    private String storeFrameFile(DramaShot shot, MultipartFile file, String label) {
+        if (file == null || file.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择" + label + "图片");
+        }
+        String mime = file.getContentType() == null ? "" : file.getContentType().toLowerCase();
+        if (!mime.startsWith("image/")) {
+            throw new BizException(ErrorCode.BAD_REQUEST, label + "仅支持图片");
+        }
+        return assetService.putOwnedFile(file, "drama/" + shot.getSeriesId() + "/frames");
+    }
+
+    private String imageKeyOfLibraryAsset(Long assetId) {
+        if (assetId == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请选择素材");
+        }
+        Asset asset = assetService.requireOwned(assetId);
+        if (asset == null
+                || !AssetKind.IMAGE.equalsIgnoreCase(asset.getKind())
+                || !StringUtils.hasText(asset.getStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "只能引用素材库里的图片");
+        }
+        assetService.assertOwnedStorageKey(asset.getStorageKey());
+        return asset.getStorageKey();
+    }
+
+    private static String frameSourceOf(String origin) {
+        if ("prev-tail".equalsIgnoreCase(origin)) {
+            return "prev-tail";
+        }
+        if ("prev-end".equalsIgnoreCase(origin)) {
+            return "prev-end";
+        }
+        if ("auto".equalsIgnoreCase(origin)) {
+            return "auto";
+        }
+        if ("asset".equalsIgnoreCase(origin)) {
+            return "asset";
+        }
+        return "upload";
+    }
+
+    /** 单镜出片：已保存的方式优先；没保存过按参考图，模型只有首尾帧时改走首尾帧。 */
+    private String modeForSingleGenerate(DramaSeries series, DramaShot shot) {
+        String mode = shot != null && StringUtils.hasText(shot.getVideoGenerateMode())
+                ? DramaVideoGenerateModes.canonical(shot.getVideoGenerateMode())
+                : DramaVideoGenerateModes.R2V;
+        if (DramaVideoGenerateModes.isR2v(mode)
+                && !supportsBoundVideoMode(series, GenerateMode.R2V)
+                && supportsBoundVideoMode(series, GenerateMode.I2V)) {
+            return DramaVideoGenerateModes.I2V;
+        }
+        return mode;
+    }
+
     private void assertNotBatchLocked(Long shotId) {
         if (batchGenerateService != null) {
             batchGenerateService.assertNotBatchLocked(shotId);
@@ -2974,7 +3206,7 @@ public class DramaStoryboardService {
         return DramaVideoGenerateModes.effectiveChainPrevTail(series, shot);
     }
 
-    /** 同场无上一镜时不能接尾帧，首尾帧不可用。 */
+    /** 同场没有上一镜时，参考图模式不衔接落幅。首尾帧模式不受此限制。 */
     private boolean isFirstShotInChapter(DramaShot shot) {
         return previousSameChapterShot(shot) == null;
     }
@@ -3254,7 +3486,7 @@ public class DramaStoryboardService {
         applyOpeningStillResult(shot, task);
         if (GenerateRequests.continueStillToI2v(task.getParams())) {
             if (shot.getGenTaskId() == null || shot.getGenTaskId().equals(task.getId())) {
-                return doGenerateShot(shot.getId());
+                return doGenerateShot(shot.getId(), false);
             }
             GenerateTaskResp video = generateService.getMine(shot.getGenTaskId());
             applyTaskResult(shot, video);

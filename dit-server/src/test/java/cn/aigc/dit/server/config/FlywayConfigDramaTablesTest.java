@@ -44,6 +44,8 @@ class FlywayConfigDramaTablesTest {
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS video_tail_key"), "应补 video_tail_key");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS first_frame_key"), "应补 first_frame_key");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS first_frame_origin"), "应补 first_frame_origin");
+        assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS end_frame_key"), "应补 end_frame_key");
+        assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS end_frame_origin"), "应补 end_frame_origin");
         assertTrue(joined.contains("COMMENT ON COLUMN drama_shot.video_generate_mode"), "应补本镜 video_generate_mode");
         assertTrue(joined.contains("COMMENT ON COLUMN drama_shot.video_chain_prev_tail"), "应补本镜 video_chain_prev_tail");
         assertTrue(joined.contains("ck_drama_shot_video_mode"), "应补本镜生成方式约束");
