@@ -16,6 +16,7 @@ COPY dit-common dit-common
 COPY dit-storage dit-storage
 COPY dit-generate dit-generate
 COPY dit-server dit-server
+COPY version version
 
 RUN mvn -B -pl dit-server -am package -Dmaven.test.skip=true
 
