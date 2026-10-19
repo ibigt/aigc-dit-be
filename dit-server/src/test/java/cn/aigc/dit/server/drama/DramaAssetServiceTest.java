@@ -24,7 +24,9 @@ import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
+import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
+import cn.aigc.dit.server.service.MediaRetentionService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -75,6 +78,10 @@ class DramaAssetServiceTest {
     private DramaStoryboardService storyboardService;
     @Mock
     private ArkCharacterReview characterReview;
+    @Mock
+    private CreationService creationService;
+    @Mock
+    private MediaRetentionService mediaRetention;
 
     private DramaAssetService service;
     private final AtomicLong generationIds = new AtomicLong(500);
@@ -83,7 +90,8 @@ class DramaAssetServiceTest {
     void setUp() {
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
-                textService, generateService, libraryAssetService, storyboardService, characterReview);
+                textService, generateService, libraryAssetService, storyboardService, characterReview,
+                creationService, mediaRetention);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
@@ -620,6 +628,40 @@ class DramaAssetServiceTest {
         assertEquals(249L, asset.getGenTaskId());
         assertEquals("users/7/outputs/249/1.png", asset.getImageStorageKey());
         verify(assetGenerationMapper).deleteById(2L);
+        verify(creationService).removeDramaOutputs(7L, 287L, "users/7/outputs/287/1.png");
+        verify(creationService, never()).removeDramaOutputs(7L, 249L, "users/7/outputs/249/1.png");
+    }
+
+    @Test
+    void deleteUploadedGenerationDoesNotRemoveCreation() {
+        DramaAsset asset = ownedAsset();
+        asset.setSelectedGenerationId(2L);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaAssetGeneration uploaded = generation(2L, null, "upload", "上传 1", "up.png");
+        when(assetGenerationMapper.selectById(2L)).thenReturn(uploaded);
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of());
+
+        service.deleteGeneration(9L, 2L);
+
+        verify(assetGenerationMapper).deleteById(2L);
+        verify(creationService, never()).removeDramaOutputs(any(), any(), any());
+    }
+
+    @Test
+    void deleteAssetRemovesGeneratedCreationsButKeepsUploads() {
+        DramaAsset asset = ownedAsset();
+        asset.setGenTaskId(null);
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaAssetGeneration generated = generation(1L, 100L, "generate", "生成方案 1", "gen.png");
+        DramaAssetGeneration uploaded = generation(2L, null, "upload", "上传 1", "up.png");
+        when(assetGenerationMapper.selectList(any())).thenReturn(List.of(generated, uploaded));
+
+        service.delete(9L);
+
+        verify(assetMapper).deleteById(9L);
+        verify(creationService).removeDramaOutputs(7L, 100L, "gen.png");
+        verify(creationService, times(1)).removeDramaOutputs(any(), any(), any());
+        verify(mediaRetention).purgeAfterCommit(7L, java.util.List.of("gen.png", "up.png"));
     }
 
     @Test

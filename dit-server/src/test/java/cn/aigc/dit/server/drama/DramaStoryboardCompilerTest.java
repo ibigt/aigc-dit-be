@@ -549,8 +549,8 @@ class DramaStoryboardCompilerTest {
         String visible = DramaStoryboardCompiler.renderVisiblePrompt(shot, List.of("宴安", "客厅"));
 
         assertTrue(visible.startsWith("场景：@客厅\n站位：@宴安站在@客厅门口。"));
-        assertTrue(visible.contains("镜头1：中近景。接从门口进入。\n@宴安 推门，@客厅里没人，说：这里有人来过。"));
-        assertTrue(visible.contains("说：这里有人来过。\n\n镜头2：特写。接推门。\n@宴安 又看向@客厅，说：客厅是空的。"));
+        assertTrue(visible.contains("镜头1：中近景。接从门口进入。\n@宴安 推门，@客厅里没人，说：“这里有人来过。”"));
+        assertTrue(visible.contains("说：“这里有人来过。”\n\n镜头2：特写。接推门。\n@宴安 又看向@客厅，说：“客厅是空的。”"));
         assertFalse(visible.contains("台词："));
         assertFalse(visible.contains("说：@"));
         assertFalse(visible.contains("<Picture"));
@@ -576,10 +576,11 @@ class DramaStoryboardCompilerTest {
                 shot, List.of("宴安", "夏安", "白板", "档案袋", "幻梦侦探社"), "幻梦侦探社");
 
         assertTrue(visible.startsWith("场景：@幻梦侦探社。风扇对着@白板"));
-        assertTrue(visible.contains("@宴安 拿起@档案袋，说：档案袋是空的。"));
-        assertTrue(visible.contains("@夏安 转身，说：没外伤。"));
-        assertTrue(visible.contains("@宴安 说：那就走。"));
+        assertTrue(visible.contains("@宴安 拿起@档案袋，说：“档案袋是空的。”"));
+        assertTrue(visible.contains("@夏安 转身，说：“没外伤。”"));
+        assertTrue(visible.contains("@宴安 说：“那就走。”"));
         assertTrue(visible.contains("旁白：夜色已深。"));
+        assertFalse(visible.contains("旁白：“"));
         assertFalse(visible.contains("说：@档案袋"));
         assertFalse(visible.contains("起身"));
         assertEquals("宴安：档案袋是空的。\n夏安：没外伤。\n宴安：那就走。\n旁白：夜色已深。",
@@ -587,10 +588,11 @@ class DramaStoryboardCompilerTest {
 
         String rewritten = DramaStoryboardCompiler.writeDialogueBack(
                 visible, "宴安：袋子是空的。\n夏安：没有外伤。\n宴安：走吧。\n旁白：天快亮了。");
-        assertTrue(rewritten.contains("说：袋子是空的。"));
-        assertTrue(rewritten.contains("说：没有外伤。"));
-        assertTrue(rewritten.contains("@宴安 说：走吧。"));
+        assertTrue(rewritten.contains("说：“袋子是空的。”"));
+        assertTrue(rewritten.contains("说：“没有外伤。”"));
+        assertTrue(rewritten.contains("@宴安 说：“走吧。”"));
         assertTrue(rewritten.contains("旁白：天快亮了。"));
+        assertFalse(rewritten.contains("旁白：“"));
         assertFalse(rewritten.contains("档案袋是空的"));
     }
 
@@ -614,12 +616,12 @@ class DramaStoryboardCompilerTest {
                 场景：@市中心医院ICU。医院ICU，@心电监护仪滴答
                 站位：@洛白在病床旁，@夏安在门口，@心电监护仪在床头。
                 镜头1：近景。下降。接松下针头。
-                @洛白 按下@怀表开关，庶流从@怀表扩散，说：以梦为桥，意识下潜。入梦！
+                @洛白 按下@怀表开关，庶流从@怀表扩散，说：“以梦为桥，意识下潜。入梦！”
                 @洛白 单手按住@怀表，意识沉入梦境深渊。
 
                 镜头2：全景。环绕。接逐渐扩散。
-                怪物化作代码浪潮，圆形扑向@洛白，说：不梦……还不梦！
-                @洛白 说：代码涌进……不对劲。
+                怪物化作代码浪潮，圆形扑向@洛白，说：“不梦……还不梦！”
+                @洛白 说：“代码涌进……不对劲。”
                 """.stripTrailing(), visible);
     }
 
@@ -636,7 +638,7 @@ class DramaStoryboardCompilerTest {
                 shot, List.of("洛白", "怀表"), "医院ICU", List.of("怀表", "没有图的杯子"));
 
         assertTrue(visible.contains("站位：@洛白在病床旁，@怀表。"));
-        assertTrue(visible.contains("@洛白 按下开关，说：入梦。"));
+        assertTrue(visible.contains("@洛白 按下开关，说：“入梦。”"));
         assertFalse(visible.contains("@没有图的杯子"));
         assertFalse(visible.contains("说：@"));
     }
@@ -655,7 +657,7 @@ class DramaStoryboardCompilerTest {
 
         assertTrue(visible.contains("站位：@洛白在病床旁。"));
         assertFalse(visible.contains("站位：@洛白在病床旁，@怀表"));
-        assertTrue(visible.contains("@洛白 按下@怀表，说：怀表开启。"));
+        assertTrue(visible.contains("@洛白 按下@怀表，说：“怀表开启。”"));
     }
 
     @Test
@@ -684,6 +686,21 @@ class DramaStoryboardCompilerTest {
         assertTrue(core.contains("台词：宴安：这里有人来过。"));
         assertFalse(core.contains("台词：宴安（<Picture"));
         assertFalse(visible.contains("Must"));
+    }
+
+    @Test
+    void sayLinesAreQuotedButDialogueBoxAndNarrationStayPlain() {
+        String stored = "@宴安 拿起杯子，说：杯子是空的。\n旁白：夜色已深。\n@夏安（画外音）：门外有人。";
+        String quoted = DramaStoryboardCompiler.quoteSpokenLines(stored);
+
+        assertEquals("@宴安 拿起杯子，说：“杯子是空的。”\n旁白：夜色已深。\n@夏安（画外音）：门外有人。", quoted);
+        assertEquals(quoted, DramaStoryboardCompiler.quoteSpokenLines(quoted));
+        assertEquals("宴安：杯子是空的。\n旁白：夜色已深。\n夏安（画外音）：门外有人。",
+                DramaStoryboardCompiler.extractDialogue("镜头1：" + quoted));
+
+        String outside = DramaStoryboardCompiler.quoteSpokenLines("@宴安 说：“杯子是空的”。");
+        assertEquals("@宴安 说：“杯子是空的”。", outside);
+        assertEquals("宴安：杯子是空的。", DramaStoryboardCompiler.extractDialogue("镜头1：" + outside));
     }
 
     @Test

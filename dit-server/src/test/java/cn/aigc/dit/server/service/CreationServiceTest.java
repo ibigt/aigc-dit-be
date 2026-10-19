@@ -1,6 +1,9 @@
 package cn.aigc.dit.server.service;
 
+import cn.aigc.dit.common.security.LoginUser;
+import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
+import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.mapper.AiModelMapper;
@@ -8,6 +11,7 @@ import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.CreationSessionMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.resp.CreationSessionResp;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +25,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,13 +45,20 @@ class CreationServiceTest {
     private DramaSeriesMapper dramaSeriesMapper;
     @Mock
     private CreationMapper creationMapper;
+    @Mock
+    private MediaRetentionService mediaRetention;
 
     private CreationService service;
 
     @BeforeEach
     void setUp() {
-        service = new CreationService(sessionMapper, genTaskMapper, aiModelMapper, assetService, dramaSeriesMapper);
+        service = new CreationService(sessionMapper, genTaskMapper, aiModelMapper, assetService, dramaSeriesMapper, mediaRetention);
         ReflectionTestUtils.setField(service, "baseMapper", creationMapper);
+    }
+
+    @AfterEach
+    void tearDown() {
+        UserContext.clear();
     }
 
     @Test
@@ -112,5 +126,33 @@ class CreationServiceTest {
         assertEquals(false, dramaKind.all());
         assertEquals(true, none.none());
         assertEquals(true, invalid.all());
+    }
+
+    @Test
+    void deleteMineRemovesOnlyTheCreationRow() {
+        UserContext.set(new LoginUser(1L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
+        Creation creation = new Creation();
+        creation.setId(3L);
+        creation.setUserId(1L);
+        creation.setTaskId(9L);
+        creation.setStorageKey("users/1/drama/a.png");
+        when(creationMapper.selectById(3L)).thenReturn(creation);
+
+        service.deleteMine(3L);
+
+        verify(creationMapper).deleteById(3L);
+        verify(mediaRetention).purgeAfterCommit(1L, java.util.List.of("users/1/drama/a.png"));
+        verifyNoInteractions(assetService, dramaSeriesMapper);
+    }
+
+    @Test
+    void removeDramaOutputsMatchesTaskAndFile() {
+        service.removeDramaOutputs(null, 9L, "users/1/a.png");
+        service.removeDramaOutputs(1L, null, "users/1/a.png");
+        service.removeDramaOutputs(1L, 9L, " ");
+        verify(creationMapper, never()).delete(any());
+
+        service.removeDramaOutputs(1L, 9L, "users/1/a.png");
+        verify(creationMapper).delete(any());
     }
 }

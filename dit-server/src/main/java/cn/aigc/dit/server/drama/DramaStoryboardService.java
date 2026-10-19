@@ -48,7 +48,9 @@ import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
+import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
+import cn.aigc.dit.server.service.MediaRetentionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -98,6 +100,8 @@ public class DramaStoryboardService {
     private final DramaFilmService filmService;
     private final DramaStoryboardDraftLock draftLock;
     private final DramaPromptRecompileLock recompileLock;
+    private final CreationService creationService;
+    private final MediaRetentionService mediaRetention;
     @Autowired
     private ObjectProvider<DramaStoryboardService> self;
     @Autowired(required = false)
@@ -721,7 +725,9 @@ public class DramaStoryboardService {
         }
         Long episodeId = shot.getEpisodeId();
         Long seriesId = shot.getSeriesId();
+        List<String> mediaKeys = detachShotMedia(shot);
         shotMapper.deleteById(shotId);
+        mediaRetention.purgeAfterCommit(shot.getUserId(), mediaKeys);
 
         List<DramaShot> rest = listShots(episodeId).stream()
                 .filter(item -> !shotId.equals(item.getId()))
@@ -871,7 +877,51 @@ public class DramaStoryboardService {
             shotMapper.updateById(shot);
         }
         shotGenerationMapper.deleteById(generation.getId());
+        forgetCreation(generation.getUserId(), generation.getGenTaskId(), generation.getVideoKey());
+        mediaRetention.purgeAfterCommit(generation.getUserId(), java.util.stream.Stream.of(
+                generation.getVideoKey(), generation.getVideoPosterKey(), generation.getVideoTailKey())
+                .filter(StringUtils::hasText)
+                .toList());
         touchSeries(shot.getSeriesId());
+    }
+
+    private List<String> detachShotMedia(DramaShot shot) {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        if (shot != null) {
+            addMediaKey(keys, shot.getVideoKey());
+            addMediaKey(keys, shot.getVideoPosterKey());
+            addMediaKey(keys, shot.getVideoTailKey());
+            addMediaKey(keys, shot.getFirstFrameKey());
+            addMediaKey(keys, shot.getEndFrameKey());
+            List<DramaShotGeneration> generations = shot.getId() == null ? List.of() : listGenerationEntities(shot.getId());
+            if (generations != null) {
+                for (DramaShotGeneration generation : generations) {
+                    if (generation == null) {
+                        continue;
+                    }
+                    addMediaKey(keys, generation.getVideoKey());
+                    addMediaKey(keys, generation.getVideoPosterKey());
+                    addMediaKey(keys, generation.getVideoTailKey());
+                    forgetCreation(generation.getUserId(), generation.getGenTaskId(), generation.getVideoKey());
+                }
+            }
+        }
+        List<String> withCaptions = mediaRetention.withCaptionKeys(
+                shot == null ? null : shot.getUserId(), shot == null ? null : shot.getId(), keys);
+        return withCaptions == null ? List.copyOf(keys) : withCaptions;
+    }
+
+    private static void addMediaKey(Set<String> keys, String key) {
+        if (StringUtils.hasText(key)) {
+            keys.add(key);
+        }
+    }
+
+    private void forgetCreation(Long userId, Long taskId, String storageKey) {
+        if (userId == null || taskId == null || !StringUtils.hasText(storageKey)) {
+            return;
+        }
+        creationService.removeDramaOutputs(userId, taskId, storageKey);
     }
 
     @Transactional
@@ -1144,9 +1194,12 @@ public class DramaStoryboardService {
         ShotDraftList drafts = resolveDrafts(
                 episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec, visualStyleOf(series));
 
+        List<String> replacedMedia = new ArrayList<>();
         for (DramaShot shot : listShots(episode.getId())) {
+            replacedMedia.addAll(detachShotMedia(shot));
             shotMapper.deleteById(shot.getId());
         }
+        mediaRetention.purgeAfterCommit(userId, replacedMedia);
         for (DramaChapter chapter : listChapters(episode.getId())) {
             chapterMapper.deleteById(chapter.getId());
         }
@@ -1749,12 +1802,13 @@ public class DramaStoryboardService {
 
     private String displayVisiblePrompt(DramaShot shot, Map<Long, DramaAsset> assets) {
         if (StringUtils.hasText(shot.getVisiblePrompt())) {
-            return shot.getVisiblePrompt();
+            return DramaStoryboardCompiler.quoteSpokenLines(shot.getVisiblePrompt());
         }
         if (isLegacyOverride(shot)) {
-            return DramaStoryboardCompiler.readableLegacyOverride(shot.getPromptOverride());
+            return DramaStoryboardCompiler.quoteSpokenLines(
+                    DramaStoryboardCompiler.readableLegacyOverride(shot.getPromptOverride()));
         }
-        return renderVisible(shot, assets);
+        return DramaStoryboardCompiler.quoteSpokenLines(renderVisible(shot, assets));
     }
 
     private List<String> missingNarrativeMentions(DramaShot shot, String visible, Map<Long, DramaAsset> assets) {

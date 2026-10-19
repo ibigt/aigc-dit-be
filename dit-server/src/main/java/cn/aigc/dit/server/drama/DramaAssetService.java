@@ -37,7 +37,9 @@ import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
+import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
+import cn.aigc.dit.server.service.MediaRetentionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -72,6 +74,8 @@ public class DramaAssetService {
     private final AssetService assetService;
     private final DramaStoryboardService storyboardService;
     private final ArkCharacterReview characterReview;
+    private final CreationService creationService;
+    private final MediaRetentionService mediaRetention;
 
     @Transactional
     public List<DramaAssetResp> listByEpisode(Long episodeId) {
@@ -199,15 +203,28 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "生图进行中，请稍后再删");
         }
         List<DramaAssetGeneration> generations = listGenerationEntities(asset.getId());
-        List<String> storageKeys = generations == null ? List.of() : generations.stream()
-                .filter(item -> item != null && StringUtils.hasText(item.getStorageKey()))
-                .map(DramaAssetGeneration::getStorageKey)
-                .toList();
+        java.util.LinkedHashSet<String> storageKeys = new java.util.LinkedHashSet<>();
+        if (generations != null) {
+            for (DramaAssetGeneration generation : generations) {
+                if (generation != null && StringUtils.hasText(generation.getStorageKey())) {
+                    storageKeys.add(generation.getStorageKey());
+                }
+            }
+        }
+        if (StringUtils.hasText(asset.getImageStorageKey())) {
+            storageKeys.add(asset.getImageStorageKey());
+        }
+        if (StringUtils.hasText(asset.getVoiceReferenceKey())) {
+            storageKeys.add(asset.getVoiceReferenceKey());
+        }
+        forgetAssetCreations(generations);
         assetMapper.deleteById(asset.getId());
         // 删除资产后同步解除分镜参考绑定，保留分镜文字中的道具描述。
         storyboardService.detachAssetReference(asset.getEpisodeId(), asset.getId());
         touchSeries(asset.getSeriesId());
-        afterCommit(() -> storageKeys.forEach(characterReview::release));
+        List<String> releasedKeys = List.copyOf(storageKeys);
+        afterCommit(() -> releasedKeys.forEach(characterReview::release));
+        mediaRetention.purgeAfterCommit(asset.getUserId(), releasedKeys);
     }
 
     @Transactional
@@ -433,8 +450,29 @@ public class DramaAssetService {
             assetMapper.updateById(asset);
         }
         assetGenerationMapper.deleteById(generation.getId());
+        forgetCreation(generation.getUserId(), generation.getGenTaskId(), storageKey);
         afterCommit(() -> characterReview.release(storageKey));
+        mediaRetention.purgeAfterCommit(generation.getUserId(), List.of(storageKey));
         touchSeries(asset.getSeriesId());
+    }
+
+    private void forgetAssetCreations(List<DramaAssetGeneration> generations) {
+        if (generations == null) {
+            return;
+        }
+        for (DramaAssetGeneration generation : generations) {
+            if (generation == null) {
+                continue;
+            }
+            forgetCreation(generation.getUserId(), generation.getGenTaskId(), generation.getStorageKey());
+        }
+    }
+
+    private void forgetCreation(Long userId, Long taskId, String storageKey) {
+        if (userId == null || taskId == null || !StringUtils.hasText(storageKey)) {
+            return;
+        }
+        creationService.removeDramaOutputs(userId, taskId, storageKey);
     }
 
     @Transactional

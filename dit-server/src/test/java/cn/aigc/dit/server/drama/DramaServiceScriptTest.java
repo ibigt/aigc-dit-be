@@ -58,6 +58,10 @@ class DramaServiceScriptTest {
     @Mock
     private DramaFilmService filmService;
     @Mock
+    private cn.aigc.dit.server.service.CreationService creationService;
+    @Mock
+    private cn.aigc.dit.server.service.MediaRetentionService mediaRetention;
+    @Mock
     private DramaAssetService assetService;
     @Mock
     private DramaScriptAnalyzeLock analyzeLock;
@@ -66,7 +70,7 @@ class DramaServiceScriptTest {
 
     @BeforeEach
     void setUp() {
-        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService);
+        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService, creationService, mediaRetention);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "assetService", assetService);
         org.springframework.test.util.ReflectionTestUtils.setField(service, "analyzeLock", analyzeLock);
         org.mockito.Mockito.lenient().when(filmService.preview(any())).thenReturn(new cn.aigc.dit.server.drama.model.resp.DramaFilmResp());

@@ -58,12 +58,16 @@ class DramaServiceTest {
     private DramaStoryboardService storyboardService;
     @Mock
     private DramaFilmService filmService;
+    @Mock
+    private cn.aigc.dit.server.service.CreationService creationService;
+    @Mock
+    private cn.aigc.dit.server.service.MediaRetentionService mediaRetention;
 
     private DramaService service;
 
     @BeforeEach
     void setUp() {
-        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService);
+        service = new DramaService(seriesMapper, episodeMapper, assetMapper, aiModelMapper, textService, textChatGateway, storyboardService, filmService, creationService, mediaRetention);
         org.mockito.Mockito.lenient().when(filmService.preview(any())).thenReturn(new cn.aigc.dit.server.drama.model.resp.DramaFilmResp());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(aiModelMapper.selectCount(any())).thenReturn(0L);
@@ -351,8 +355,11 @@ class DramaServiceTest {
         existing.setId(21L);
         existing.setUserId(7L);
         when(seriesMapper.selectById(21L)).thenReturn(existing);
+        when(mediaRetention.collectSeriesMediaKeys(7L, 21L)).thenReturn(java.util.List.of("users/7/gen/a.png", "users/7/videos/1.mp4"));
         service.deleteSeries(21L);
+        verify(creationService).removeDramaProject(7L, 21L);
         verify(seriesMapper).deleteById(21L);
+        verify(mediaRetention).purgeAfterCommit(7L, java.util.List.of("users/7/gen/a.png", "users/7/videos/1.mp4"));
     }
 
     @Test

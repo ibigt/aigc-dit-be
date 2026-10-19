@@ -40,6 +40,8 @@ import cn.aigc.dit.server.drama.text.TextChatGateway;
 import cn.aigc.dit.server.drama.text.TextChatGatewayImpl;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.service.CreationService;
+import cn.aigc.dit.server.service.MediaRetentionService;
 import cn.aigc.dit.server.media.MediaUrls;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
@@ -75,6 +77,8 @@ public class DramaService {
     private final TextChatGateway textChatGateway;
     private final DramaStoryboardService storyboardService;
     private final DramaFilmService filmService;
+    private final CreationService creationService;
+    private final MediaRetentionService mediaRetention;
     @Autowired
     private DramaAssetService assetService;
     @Autowired
@@ -184,7 +188,10 @@ public class DramaService {
         if (remaining <= 1) {
             throw new BizException(ErrorCode.BAD_REQUEST, "至少保留一集，无法删除最后一集");
         }
+        List<String> mediaKeys = mediaRetention.collectEpisodeMediaKeys(episode.getUserId(), episode.getId());
+        creationService.removeDramaMedia(episode.getUserId(), mediaKeys);
         episodeMapper.deleteById(episode.getId());
+        mediaRetention.purgeAfterCommit(episode.getUserId(), mediaKeys);
         touchSeries(seriesId);
         return getSeries(seriesId);
     }
@@ -236,10 +243,15 @@ public class DramaService {
         DramaSeries series = requireSeries(id);
         List<DramaEpisode> episodes = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
                 .eq(DramaEpisode::getSeriesId, series.getId()));
-        for (DramaEpisode episode : episodes) {
-            assertEpisodeIdle(episode);
+        if (episodes != null) {
+            for (DramaEpisode episode : episodes) {
+                assertEpisodeIdle(episode);
+            }
         }
+        List<String> mediaKeys = mediaRetention.collectSeriesMediaKeys(series.getUserId(), series.getId());
+        creationService.removeDramaProject(series.getUserId(), series.getId());
         seriesMapper.deleteById(series.getId());
+        mediaRetention.purgeAfterCommit(series.getUserId(), mediaKeys);
     }
 
     public DramaEpisodeResp getEpisode(Long id) {

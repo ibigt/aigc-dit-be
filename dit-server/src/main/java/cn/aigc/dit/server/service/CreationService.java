@@ -51,6 +51,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     private final AiModelMapper aiModelMapper;
     private final AssetService assetService;
     private final DramaSeriesMapper dramaSeriesMapper;
+    private final MediaRetentionService mediaRetention;
 
     public List<CreationSessionResp> listSessions() {
         Long userId = UserContext.requireUserId();
@@ -255,6 +256,50 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 .eq(Creation::getStorageKey, storageKey));
     }
 
+    /**
+     * 短剧资产图或分镜视频从项目里删除时，同步去掉「我的创作」里同一条成品。
+     * 只删创作记录，不删对象文件，也不改资产、分镜或成片。
+     * 必须同时命中用户、生成任务和文件，避免误删上传图、素材库引用，或其他创作。
+     */
+    @Transactional
+    public void removeDramaOutputs(Long userId, Long taskId, String storageKey) {
+        if (userId == null || taskId == null || !StringUtils.hasText(storageKey)) {
+            return;
+        }
+        remove(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getTaskId, taskId)
+                .eq(Creation::getStorageKey, storageKey));
+    }
+
+    /** 删除整个短剧项目时，去掉该项目在「我的创作」里的图片、视频和成片。 */
+    @Transactional
+    public void removeDramaProject(Long userId, Long seriesId) {
+        if (userId == null || seriesId == null) {
+            return;
+        }
+        remove(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getProjectKind, "drama")
+                .eq(Creation::getProjectId, seriesId));
+    }
+
+    /** 删除单集时，只去掉该集媒体对应的短剧创作，不影响其他项目或快速创作。 */
+    @Transactional
+    public void removeDramaMedia(Long userId, java.util.Collection<String> storageKeys) {
+        List<String> keys = storageKeys == null ? List.of() : storageKeys.stream()
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+        if (userId == null || keys.isEmpty()) {
+            return;
+        }
+        remove(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getProjectKind, "drama")
+                .in(Creation::getStorageKey, keys));
+    }
+
     public cn.aigc.dit.server.model.resp.AssetResp saveToAsset(Long creationId) {
         Creation creation = requireMine(creationId);
         String name = StringUtils.hasText(creation.getTitle()) ? creation.getTitle() : "作品 " + creation.getId();
@@ -262,10 +307,18 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 creation.getStorageKey(), creation.getPosterKey());
     }
 
+    /**
+     * 只从「我的创作」移除这条记录，不改短剧资产、分镜和成片。
+     * 若短剧和素材库都不再引用同一文件，再清理对象存储。
+     */
     @Transactional
     public void deleteMine(Long id) {
         Creation creation = requireMine(id);
         removeById(creation.getId());
+        mediaRetention.purgeAfterCommit(creation.getUserId(),
+                java.util.stream.Stream.of(creation.getStorageKey(), creation.getPosterKey())
+                        .filter(StringUtils::hasText)
+                        .toList());
     }
 
     private Creation requireMine(Long id) {

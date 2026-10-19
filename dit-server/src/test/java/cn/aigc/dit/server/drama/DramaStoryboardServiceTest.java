@@ -34,6 +34,8 @@ import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import cn.aigc.dit.server.service.AssetService;
+import cn.aigc.dit.server.service.CreationService;
+import cn.aigc.dit.server.service.MediaRetentionService;
 import cn.aigc.dit.server.service.GenerateService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -88,6 +90,10 @@ class DramaStoryboardServiceTest {
     private ObjectProvider<DramaTextService> textService;
     @Mock
     private DramaFilmService filmService;
+    @Mock
+    private CreationService creationService;
+    @Mock
+    private MediaRetentionService mediaRetention;
 
     private DramaStoryboardService service;
     private final List<DramaChapter> storedChapters = new ArrayList<>();
@@ -100,7 +106,8 @@ class DramaStoryboardServiceTest {
                 seriesMapper, episodeMapper, assetMapper, chapterMapper, shotMapper, shotGenerationMapper,
                 aiModelMapper, genTaskMapper, generateService, assetService, posterExtractor, textService, filmService,
                 new DramaStoryboardDraftLock(episodeMapper),
-                new DramaPromptRecompileLock());
+                new DramaPromptRecompileLock(),
+                creationService, mediaRetention);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         storedChapters.clear();
         storedShots.clear();
@@ -1875,6 +1882,33 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void deleteShotGenerationRemovesMatchingCreation() {
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(1L);
+        shot.setVideoKey("users/7/gen/keep.mp4");
+        storedShots.add(shot);
+        DramaShotGeneration selected = new DramaShotGeneration();
+        selected.setId(1L);
+        selected.setShotId(201L);
+        selected.setUserId(7L);
+        selected.setGenTaskId(400L);
+        selected.setVideoKey("users/7/gen/keep.mp4");
+        DramaShotGeneration dropped = new DramaShotGeneration();
+        dropped.setId(2L);
+        dropped.setShotId(201L);
+        dropped.setUserId(7L);
+        dropped.setGenTaskId(500L);
+        dropped.setVideoKey("users/7/gen/drop.mp4");
+        when(shotGenerationMapper.selectById(2L)).thenReturn(dropped);
+
+        service.deleteGeneration(201L, 2L);
+
+        verify(shotGenerationMapper).deleteById(2L);
+        verify(creationService).removeDramaOutputs(7L, 500L, "users/7/gen/drop.mp4");
+        verify(creationService, never()).removeDramaOutputs(7L, 400L, "users/7/gen/keep.mp4");
+    }
+
+    @Test
     void listGenerationsRenumbersLabelsByChronologicalOrder() {
         DramaShot shot = pendingShot();
         shot.setSelectedGenerationId(3L);
@@ -2146,6 +2180,42 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void deleteShotRemovesGeneratedCreations() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        storedChapters.add(pendingChapter());
+        DramaShot generated = pendingShot();
+        generated.setId(201L);
+        generated.setShotIndex(1);
+        generated.setVideoKey("users/7/videos/1.mp4");
+        generated.setGenTaskId(500L);
+        storedShots.add(generated);
+        DramaShot other = pendingShot();
+        other.setId(202L);
+        other.setShotIndex(2);
+        storedShots.add(other);
+        GenTask done = new GenTask();
+        done.setId(500L);
+        done.setStatus(TaskStatus.SUCCEEDED);
+        when(genTaskMapper.selectById(500L)).thenReturn(done);
+        DramaShotGeneration generation = new DramaShotGeneration();
+        generation.setShotId(201L);
+        generation.setUserId(7L);
+        generation.setGenTaskId(500L);
+        generation.setVideoKey("users/7/videos/1.mp4");
+        DramaShotGeneration uploaded = new DramaShotGeneration();
+        uploaded.setShotId(201L);
+        uploaded.setUserId(7L);
+        uploaded.setVideoKey("users/7/videos/upload.mp4");
+        when(shotGenerationMapper.selectList(any())).thenReturn(List.of(generation, uploaded));
+
+        service.deleteShot(201L);
+
+        verify(creationService).removeDramaOutputs(7L, 500L, "users/7/videos/1.mp4");
+        verify(creationService, org.mockito.Mockito.times(1)).removeDramaOutputs(any(), any(), any());
+    }
+
+    @Test
     void deleteShotRejectsWhileGenerating() {
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
         storedChapters.add(pendingChapter());
@@ -2308,7 +2378,7 @@ class DramaStoryboardServiceTest {
         DramaShotResp resp = service.compileShot(201L);
 
         assertTrue(resp.getVisiblePrompt().contains("站位：@洛白在病床旁，@手电筒。"));
-        assertTrue(resp.getVisiblePrompt().contains("@洛白 按下@怀表开关，又瞥见@档案袋，说：杯子在桌上。"));
+        assertTrue(resp.getVisiblePrompt().contains("@洛白 按下@怀表开关，又瞥见@档案袋，说：“杯子在桌上。”"));
         assertFalse(resp.getVisiblePrompt().contains("@没有图的杯子"));
         assertFalse(resp.getVisiblePrompt().contains("说：@"));
         assertEquals(List.of("洛白", "手电筒", "怀表", "档案袋"),

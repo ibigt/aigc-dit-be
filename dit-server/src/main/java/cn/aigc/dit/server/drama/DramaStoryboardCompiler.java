@@ -1009,7 +1009,7 @@ public final class DramaStoryboardCompiler {
 
     /**
      * 给用户看的核心正文。场景单独一行；站位、景别和接续留在镜头说明里。
-     * 动作和该角色的下一句台词写成「@名字 动作，说：台词」。口播里的名字不加 {@code @}。
+     * 动作和该角色的下一句台词写成「@名字 动作，说：“台词”」。口播里的名字不加 {@code @}。
      * 不含风格、参考图声明和口播模板。
      */
     public static String renderVisiblePrompt(ShotContent content, List<String> imagedNames) {
@@ -1072,7 +1072,7 @@ public final class DramaStoryboardCompiler {
             appendVisibleLine(body, "环境声", markAtNames(shot.ambiance(), names));
         }
         citeMissingProps(body, propNames, names);
-        return body.toString().trim();
+        return quoteSpokenLines(body.toString().trim());
     }
 
     /**
@@ -1240,7 +1240,7 @@ public final class DramaStoryboardCompiler {
         String prefix = DramaStyles.withVideoSceneClause(StringUtils.hasText(stylePrefix)
                 ? stylePrefix.trim()
                 : DramaStyles.require(DramaStyles.ANIME_COMIC).prefix());
-        String visible = visiblePrompt == null ? "" : visiblePrompt.trim();
+        String visible = quoteSpokenLines(visiblePrompt == null ? "" : visiblePrompt.trim());
         Map<String, Integer> pictures = pictureIndexByName(refs);
 
         StringBuilder prompt = new StringBuilder();
@@ -1323,7 +1323,7 @@ public final class DramaStoryboardCompiler {
                                             List<AudioReference> audioReferences, ShotContent shot,
                                             String visiblePrompt) {
         String base = fingerprint(stylePrefix, references, audioReferences, shot, CompileOptions.r2v());
-        return sha256(base + "\nvisible:" + blank(visiblePrompt));
+        return sha256(base + "\nvisible:" + blank(unquoteSpokenLines(visiblePrompt)));
     }
 
     /** 叙述部分按首次 {@code @} 去重。{@code knownNames} 用于最长匹配，可为空。 */
@@ -1394,6 +1394,9 @@ public final class DramaStoryboardCompiler {
                 continue;
             }
             String words = stripAtPrefix(span.text()).trim();
+            if (precededBySay(previousNarrative(spans, i))) {
+                words = stripWrappingQuotes(words);
+            }
             if (!StringUtils.hasText(words)) {
                 continue;
             }
@@ -1410,7 +1413,7 @@ public final class DramaStoryboardCompiler {
     public static String writeDialogueBack(String visiblePrompt, String dialogue) {
         String visible = visiblePrompt == null ? "" : visiblePrompt;
         if (!saySlots(visible).isEmpty()) {
-            return writeSayDialogue(visible, dialogue);
+            return quoteSpokenLines(writeSayDialogue(visible, dialogue));
         }
         if (!hasShotLabels(visible)) {
             return visible;
@@ -1969,6 +1972,130 @@ public final class DramaStoryboardCompiler {
             start = matcher.start();
         }
         return start;
+    }
+
+    /**
+     * 角色「说：」后面的口播用中文引号标出台词。旁白、画外音和旧「台词：」不加引号。
+     * 已经包过一层的不再套。
+     */
+    public static String quoteSpokenLines(String text) {
+        return rewriteSaySpeech(text, true);
+    }
+
+    /** 去掉「说：」后的外层中文引号，供指纹和台词框使用。 */
+    private static String unquoteSpokenLines(String text) {
+        return rewriteSaySpeech(text, false);
+    }
+
+    private static String rewriteSaySpeech(String text, boolean quote) {
+        if (!StringUtils.hasText(text)) {
+            return text == null ? "" : text;
+        }
+        List<SaySlot> slots = saySlots(text);
+        if (slots.isEmpty()) {
+            return text;
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (SaySlot slot : slots) {
+            out.append(text, cursor, slot.markerEnd());
+            String marker = text.substring(slot.markerStart(), slot.markerEnd());
+            String speech = text.substring(slot.markerEnd(), slot.speechEnd());
+            if (isCharacterSay(marker)) {
+                out.append(quote ? quoteSpeech(speech) : unquoteSpeech(speech));
+            } else {
+                out.append(speech);
+            }
+            cursor = slot.speechEnd();
+        }
+        if (cursor < text.length()) {
+            out.append(text.substring(cursor));
+        }
+        return out.toString();
+    }
+
+    private static boolean isCharacterSay(String marker) {
+        return marker != null && marker.stripLeading().startsWith("说");
+    }
+
+    private static boolean precededBySay(String narrative) {
+        if (!StringUtils.hasText(narrative)) {
+            return false;
+        }
+        int marker = lastSayMarker(narrative);
+        return marker >= 0 && isCharacterSay(narrative.substring(marker));
+    }
+
+    private static String quoteSpeech(String speech) {
+        if (!StringUtils.hasText(speech)) {
+            return speech == null ? "" : speech;
+        }
+        int start = 0;
+        int end = speech.length();
+        while (start < end && Character.isWhitespace(speech.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isWhitespace(speech.charAt(end - 1))) {
+            end--;
+        }
+        String core = speech.substring(start, end);
+        if (wrappingQuoteClose(core) >= 0) {
+            return speech;
+        }
+        return speech.substring(0, start) + "“" + core + "”" + speech.substring(end);
+    }
+
+    private static String unquoteSpeech(String speech) {
+        if (!StringUtils.hasText(speech)) {
+            return speech == null ? "" : speech;
+        }
+        int start = 0;
+        int end = speech.length();
+        while (start < end && Character.isWhitespace(speech.charAt(start))) {
+            start++;
+        }
+        while (end > start && Character.isWhitespace(speech.charAt(end - 1))) {
+            end--;
+        }
+        String stripped = stripWrappingQuotes(speech.substring(start, end));
+        return speech.substring(0, start) + stripped + speech.substring(end);
+    }
+
+    private static String stripWrappingQuotes(String words) {
+        if (!StringUtils.hasText(words)) {
+            return words == null ? "" : words;
+        }
+        String trimmed = words.trim();
+        int close = wrappingQuoteClose(trimmed);
+        if (close < 0) {
+            return words;
+        }
+        String inner = trimmed.substring(1, close).trim();
+        String trailing = trimmed.substring(close + 1).trim();
+        if (!StringUtils.hasText(inner)) {
+            return trailing;
+        }
+        return StringUtils.hasText(trailing) ? inner + trailing : inner;
+    }
+
+    /** 以“开头，且”之后只剩句末标点时，才是包住整句台词的外层引号。 */
+    private static int wrappingQuoteClose(String trimmed) {
+        if (!StringUtils.hasText(trimmed) || !trimmed.startsWith("“")) {
+            return -1;
+        }
+        int close = trimmed.lastIndexOf('”');
+        if (close <= 0) {
+            return -1;
+        }
+        String trailing = trimmed.substring(close + 1).trim();
+        for (int i = 0; i < trailing.length(); i++) {
+            char c = trailing.charAt(i);
+            if (c != '。' && c != '！' && c != '？' && c != '…' && c != '.' && c != '!' && c != '?'
+                    && c != '，' && c != ',') {
+                return -1;
+            }
+        }
+        return close;
     }
 
     private static String atName(String tail) {
