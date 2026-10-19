@@ -25,7 +25,6 @@ import cn.aigc.dit.server.model.resp.CreationSessionResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -43,7 +42,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 public class CreationService extends ServiceImpl<CreationMapper, Creation> {
 
     private final CreationSessionMapper sessionMapper;
@@ -52,6 +50,20 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     private final AssetService assetService;
     private final DramaSeriesMapper dramaSeriesMapper;
     private final MediaRetentionService mediaRetention;
+
+    public CreationService(CreationSessionMapper sessionMapper,
+                           GenTaskMapper genTaskMapper,
+                           AiModelMapper aiModelMapper,
+                           AssetService assetService,
+                           DramaSeriesMapper dramaSeriesMapper,
+                           MediaRetentionService mediaRetention) {
+        this.sessionMapper = sessionMapper;
+        this.genTaskMapper = genTaskMapper;
+        this.aiModelMapper = aiModelMapper;
+        this.assetService = assetService;
+        this.dramaSeriesMapper = dramaSeriesMapper;
+        this.mediaRetention = mediaRetention;
+    }
 
     public List<CreationSessionResp> listSessions() {
         Long userId = UserContext.requireUserId();

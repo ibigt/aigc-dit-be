@@ -52,7 +52,6 @@ import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,7 +81,6 @@ import java.util.concurrent.Executor;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class DramaStoryboardService {
 
     private final DramaSeriesMapper seriesMapper;
@@ -112,6 +110,42 @@ public class DramaStoryboardService {
     private DramaShotBatchGenerateService batchGenerateService;
     @Autowired(required = false)
     private DramaShotCaptionPostProcessService captionPostProcessService;
+
+    public DramaStoryboardService(DramaSeriesMapper seriesMapper,
+                                  DramaEpisodeMapper episodeMapper,
+                                  DramaAssetMapper assetMapper,
+                                  DramaChapterMapper chapterMapper,
+                                  DramaShotMapper shotMapper,
+                                  DramaShotGenerationMapper shotGenerationMapper,
+                                  AiModelMapper aiModelMapper,
+                                  GenTaskMapper genTaskMapper,
+                                  GenerateService generateService,
+                                  AssetService assetService,
+                                  PosterExtractor posterExtractor,
+                                  ObjectProvider<DramaTextService> textService,
+                                  DramaFilmService filmService,
+                                  DramaStoryboardDraftLock draftLock,
+                                  DramaPromptRecompileLock recompileLock,
+                                  CreationService creationService,
+                                  MediaRetentionService mediaRetention) {
+        this.seriesMapper = seriesMapper;
+        this.episodeMapper = episodeMapper;
+        this.assetMapper = assetMapper;
+        this.chapterMapper = chapterMapper;
+        this.shotMapper = shotMapper;
+        this.shotGenerationMapper = shotGenerationMapper;
+        this.aiModelMapper = aiModelMapper;
+        this.genTaskMapper = genTaskMapper;
+        this.generateService = generateService;
+        this.assetService = assetService;
+        this.posterExtractor = posterExtractor;
+        this.textService = textService;
+        this.filmService = filmService;
+        this.draftLock = draftLock;
+        this.recompileLock = recompileLock;
+        this.creationService = creationService;
+        this.mediaRetention = mediaRetention;
+    }
 
     @Transactional
     public DramaStoryboardResp getStoryboard(Long episodeId) {

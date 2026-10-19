@@ -39,7 +39,6 @@ import cn.aigc.dit.server.service.ArkReviewCredentialService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -59,7 +58,6 @@ import java.util.List;
 @Tag(name = "漫剧")
 @RestController
 @RequestMapping("/api/drama")
-@RequiredArgsConstructor
 public class DramaController {
 
     private final DramaService dramaService;
@@ -69,6 +67,22 @@ public class DramaController {
     private final DramaFilmService dramaFilmService;
     private final DramaCaptionService dramaCaptionService;
     private final ArkReviewCredentialService arkReviewCredentialService;
+
+    public DramaController(DramaService dramaService,
+                           DramaAssetService dramaAssetService,
+                           DramaStoryboardService dramaStoryboardService,
+                           DramaShotBatchGenerateService dramaShotBatchGenerateService,
+                           DramaFilmService dramaFilmService,
+                           DramaCaptionService dramaCaptionService,
+                           ArkReviewCredentialService arkReviewCredentialService) {
+        this.dramaService = dramaService;
+        this.dramaAssetService = dramaAssetService;
+        this.dramaStoryboardService = dramaStoryboardService;
+        this.dramaShotBatchGenerateService = dramaShotBatchGenerateService;
+        this.dramaFilmService = dramaFilmService;
+        this.dramaCaptionService = dramaCaptionService;
+        this.arkReviewCredentialService = arkReviewCredentialService;
+    }
 
     @Operation(summary = "可选视觉风格（图例；不含编译前缀）")
     @GetMapping("/styles")

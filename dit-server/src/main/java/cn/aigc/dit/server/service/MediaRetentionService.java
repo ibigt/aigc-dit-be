@@ -20,7 +20,6 @@ import cn.aigc.dit.server.mapper.AssetMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -40,7 +39,6 @@ import java.util.Set;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class MediaRetentionService {
 
     private final ObjectStorage objectStorage;
@@ -53,6 +51,28 @@ public class MediaRetentionService {
     private final DramaShotGenerationMapper dramaShotGenerationMapper;
     private final DramaShotCaptionMapper dramaShotCaptionMapper;
     private final DramaEpisodeMapper dramaEpisodeMapper;
+
+    public MediaRetentionService(ObjectStorage objectStorage,
+                                 ArkCharacterReview characterReview,
+                                 CreationMapper creationMapper,
+                                 AssetMapper assetMapper,
+                                 DramaAssetMapper dramaAssetMapper,
+                                 DramaAssetGenerationMapper dramaAssetGenerationMapper,
+                                 DramaShotMapper dramaShotMapper,
+                                 DramaShotGenerationMapper dramaShotGenerationMapper,
+                                 DramaShotCaptionMapper dramaShotCaptionMapper,
+                                 DramaEpisodeMapper dramaEpisodeMapper) {
+        this.objectStorage = objectStorage;
+        this.characterReview = characterReview;
+        this.creationMapper = creationMapper;
+        this.assetMapper = assetMapper;
+        this.dramaAssetMapper = dramaAssetMapper;
+        this.dramaAssetGenerationMapper = dramaAssetGenerationMapper;
+        this.dramaShotMapper = dramaShotMapper;
+        this.dramaShotGenerationMapper = dramaShotGenerationMapper;
+        this.dramaShotCaptionMapper = dramaShotCaptionMapper;
+        this.dramaEpisodeMapper = dramaEpisodeMapper;
+    }
 
     public List<String> collectSeriesMediaKeys(Long userId, Long seriesId) {
         if (userId == null || seriesId == null) {

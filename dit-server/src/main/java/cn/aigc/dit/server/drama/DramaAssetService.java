@@ -41,7 +41,6 @@ import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -59,7 +58,6 @@ import java.util.Map;
 import java.util.Set;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class DramaAssetService {
 
@@ -76,6 +74,34 @@ public class DramaAssetService {
     private final ArkCharacterReview characterReview;
     private final CreationService creationService;
     private final MediaRetentionService mediaRetention;
+
+    public DramaAssetService(DramaAssetMapper assetMapper,
+                             DramaAssetGenerationMapper assetGenerationMapper,
+                             DramaEpisodeMapper episodeMapper,
+                             DramaSeriesMapper seriesMapper,
+                             AiModelMapper aiModelMapper,
+                             GenTaskMapper genTaskMapper,
+                             ObjectProvider<DramaTextService> textService,
+                             GenerateService generateService,
+                             AssetService assetService,
+                             DramaStoryboardService storyboardService,
+                             ArkCharacterReview characterReview,
+                             CreationService creationService,
+                             MediaRetentionService mediaRetention) {
+        this.assetMapper = assetMapper;
+        this.assetGenerationMapper = assetGenerationMapper;
+        this.episodeMapper = episodeMapper;
+        this.seriesMapper = seriesMapper;
+        this.aiModelMapper = aiModelMapper;
+        this.genTaskMapper = genTaskMapper;
+        this.textService = textService;
+        this.generateService = generateService;
+        this.assetService = assetService;
+        this.storyboardService = storyboardService;
+        this.characterReview = characterReview;
+        this.creationService = creationService;
+        this.mediaRetention = mediaRetention;
+    }
 
     @Transactional
     public List<DramaAssetResp> listByEpisode(Long episodeId) {

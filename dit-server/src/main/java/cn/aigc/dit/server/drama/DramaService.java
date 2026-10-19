@@ -45,7 +45,6 @@ import cn.aigc.dit.server.service.MediaRetentionService;
 import cn.aigc.dit.server.media.MediaUrls;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
@@ -66,7 +65,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class DramaService {
 
     private final DramaSeriesMapper seriesMapper;
@@ -86,6 +84,28 @@ public class DramaService {
     /** 走 Spring 代理，让 import/lock 各自提交。 */
     @Autowired
     private ObjectProvider<DramaService> self;
+
+    public DramaService(DramaSeriesMapper seriesMapper,
+                        DramaEpisodeMapper episodeMapper,
+                        DramaAssetMapper assetMapper,
+                        AiModelMapper aiModelMapper,
+                        ObjectProvider<DramaTextService> textService,
+                        TextChatGateway textChatGateway,
+                        DramaStoryboardService storyboardService,
+                        DramaFilmService filmService,
+                        CreationService creationService,
+                        MediaRetentionService mediaRetention) {
+        this.seriesMapper = seriesMapper;
+        this.episodeMapper = episodeMapper;
+        this.assetMapper = assetMapper;
+        this.aiModelMapper = aiModelMapper;
+        this.textService = textService;
+        this.textChatGateway = textChatGateway;
+        this.storyboardService = storyboardService;
+        this.filmService = filmService;
+        this.creationService = creationService;
+        this.mediaRetention = mediaRetention;
+    }
 
     public List<DramaSeriesResp> listSeries() {
         Long userId = UserContext.requireUserId();
