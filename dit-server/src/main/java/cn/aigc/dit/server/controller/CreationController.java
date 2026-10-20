@@ -2,6 +2,7 @@ package cn.aigc.dit.server.controller;
 
 import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.model.req.CreationSessionCreateReq;
+import cn.aigc.dit.server.model.req.CreationSessionRenameReq;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.CreationItemResp;
 import cn.aigc.dit.server.model.resp.CreationProjectResp;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -46,6 +48,13 @@ public class CreationController {
     @PostMapping("/api/sessions")
     public CommonResult<CreationSessionResp> createSession(@Valid @RequestBody CreationSessionCreateReq req) {
         return CommonResult.success(creationService.createSession(req));
+    }
+
+    @Operation(summary = "重命名会话")
+    @PutMapping("/api/sessions/{id}")
+    public CommonResult<CreationSessionResp> renameSession(
+            @PathVariable Long id, @Valid @RequestBody CreationSessionRenameReq req) {
+        return CommonResult.success(creationService.renameSession(id, req));
     }
 
     @Operation(summary = "删除会话（作品仍保留在我的创作）")

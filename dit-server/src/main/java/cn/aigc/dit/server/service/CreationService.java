@@ -19,6 +19,7 @@ import cn.aigc.dit.server.mapper.CreationSessionMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.server.model.req.CreationSessionCreateReq;
+import cn.aigc.dit.server.model.req.CreationSessionRenameReq;
 import cn.aigc.dit.server.model.resp.CreationItemResp;
 import cn.aigc.dit.server.model.resp.CreationProjectResp;
 import cn.aigc.dit.server.model.resp.CreationSessionResp;
@@ -90,6 +91,14 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         session.setTitle(StringUtils.hasText(req.getTitle()) ? req.getTitle().trim() : "未命名创作");
         session.setCategory(normalizeCategory(req.getCategory()));
         sessionMapper.insert(session);
+        return toSessionResp(session, false);
+    }
+
+    @Transactional
+    public CreationSessionResp renameSession(Long id, CreationSessionRenameReq req) {
+        CreationSession session = requireSession(id);
+        session.setTitle(req.getTitle().trim());
+        sessionMapper.updateById(session);
         return toSessionResp(session, false);
     }
 

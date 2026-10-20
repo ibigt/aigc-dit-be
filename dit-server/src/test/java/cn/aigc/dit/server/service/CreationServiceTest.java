@@ -10,6 +10,7 @@ import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.CreationMapper;
 import cn.aigc.dit.server.mapper.CreationSessionMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
+import cn.aigc.dit.server.model.req.CreationSessionRenameReq;
 import cn.aigc.dit.server.model.resp.CreationSessionResp;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,6 +127,24 @@ class CreationServiceTest {
         assertEquals(false, dramaKind.all());
         assertEquals(true, none.none());
         assertEquals(true, invalid.all());
+    }
+
+    @Test
+    void renameSessionWritesTitle() {
+        UserContext.set(new LoginUser(1L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
+        CreationSession session = new CreationSession();
+        session.setId(9L);
+        session.setUserId(1L);
+        session.setTitle("旧标题");
+        when(sessionMapper.selectById(9L)).thenReturn(session);
+        CreationSessionRenameReq req = new CreationSessionRenameReq();
+        req.setTitle("  新标题  ");
+
+        CreationSessionResp resp = service.renameSession(9L, req);
+
+        assertEquals("新标题", resp.getTitle());
+        assertEquals("新标题", session.getTitle());
+        verify(sessionMapper).updateById(session);
     }
 
     @Test
