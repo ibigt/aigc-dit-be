@@ -1021,7 +1021,7 @@ public final class DramaStoryboardCompiler {
     }
 
     /**
-     * @param propNames 本镜要用的道具。已有参考图、但画面说明里没写出名字的，补到站位行，保证出片能引用到图。
+     * @param propNames 本镜要用的道具。引用名单里有、画面说明里没写出名字的，补到站位行。
      */
     public static String renderVisiblePrompt(
             ShotContent content, List<String> imagedNames, String locationName, List<String> propNames) {
@@ -1076,8 +1076,8 @@ public final class DramaStoryboardCompiler {
     }
 
     /**
-     * 本镜道具名单里、已有参考图、正文还没有 {@code @名字} 的道具，补到站位行。
-     * 动作里已经写过的不重复补。没有参考图的不写 {@code @}。
+     * 本镜道具名单里、引用名单里有、正文还没有 {@code @名字} 的道具，补到站位行。
+     * 动作里已经写过的不重复补。不在引用名单里的不写 {@code @}。
      */
     private static void citeMissingProps(StringBuilder body, List<String> propNames, List<String> imagedNames) {
         if (propNames == null || propNames.isEmpty()) {
@@ -1518,11 +1518,17 @@ public final class DramaStoryboardCompiler {
         int index = 0;
         while (index < source.length()) {
             if (source.charAt(index) == '@') {
+                String kept = longestNameAt(source, index + 1, sorted);
+                if (kept != null) {
+                    out.append('@').append(kept);
+                    index += 1 + kept.length();
+                    continue;
+                }
                 int end = index + 1;
                 while (end < source.length() && !isAtDelimiter(source.charAt(end))) {
                     end++;
                 }
-                out.append(source, index, end);
+                out.append(source, index + 1, end);
                 index = end;
                 continue;
             }
@@ -1569,8 +1575,7 @@ public final class DramaStoryboardCompiler {
     }
 
     /**
-     * 场景单独一行。地点资产已可引用、且描述里没有这个名字时，补在行首。
-     * 没有参考图的地点只写普通名字，避免出片时被当成缺失参考图。
+     * 场景单独一行。地点在引用名单里、且描述里没有这个名字时，补在行首并加 {@code @}。
      */
     private static String sceneLine(String scene, String location, List<String> names) {
         String loc = blank(location);
@@ -1590,11 +1595,7 @@ public final class DramaStoryboardCompiler {
     }
 
     private static String markedName(String name, List<String> names) {
-        String marked = markAtNames(name, names);
-        if (!StringUtils.hasText(marked)) {
-            return marked;
-        }
-        return marked.startsWith("@") ? marked : "@" + marked;
+        return markAtNames(name, names);
     }
 
     private static String cameraHeader(String camera, String continuity) {
@@ -1777,7 +1778,19 @@ public final class DramaStoryboardCompiler {
         if (spoken.voiceOver()) {
             return markedName(spoken.speaker(), names) + "（画外音）：" + spoken.words();
         }
-        return "@" + spoken.speaker() + " 说：" + spoken.words();
+        return citedName(spoken.speaker(), names) + " 说：" + spoken.words();
+    }
+
+    /** 资产名还在引用名单里才加 @，否则保留普通名字。 */
+    private static String citedName(String name, List<String> names) {
+        String trimmed = blank(name);
+        if (!StringUtils.hasText(trimmed)) {
+            return trimmed;
+        }
+        if (names != null && names.contains(trimmed)) {
+            return "@" + trimmed;
+        }
+        return trimmed;
     }
 
     private static String trimEdgePunct(String text) {

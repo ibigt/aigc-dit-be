@@ -68,6 +68,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1623,8 +1624,8 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 地点为空时用本场剧本地点。对应场景已有参考图、而提示词场景行没有 @ 时补上。
-     * 地点对不上已出图的场景资产时不动，避免给还没出图的场景硬加引用。
+     * 地点为空时用本场剧本地点。对应场景资产已存在、而提示词场景行没有 @ 时补上。
+     * 还没有参考图也写 @，出片时仍会因缺图被拦住。对不上场景资产时不动。
      */
     private boolean restoreMissingSceneMention(
             DramaShot shot, DramaChapter chapter, ScriptDoc script, Map<Long, DramaAsset> assets) {
@@ -1638,7 +1639,7 @@ public class DramaStoryboardService {
             return false;
         }
         DramaAsset scene = findAsset(assets, location, DramaContract.ASSET_TYPE_SCENE, false);
-        if (!isReferenceEligible(scene) || !StringUtils.hasText(scene.getName())) {
+        if (!canMention(scene)) {
             return false;
         }
         String name = scene.getName().trim();
@@ -1701,14 +1702,16 @@ public class DramaStoryboardService {
         return visible.substring(0, insertAt) + mark + visible.substring(insertAt);
     }
 
+    /**
+     * 编译时要写 @ 的名字：本镜名单、正文里已经 @ 过、以及画面里点到的道具。
+     * 对应资产已经不存在的名字不进入名单，重新编译后会变成普通名字。
+     */
     private List<String> mentionNames(DramaShot shot, Map<Long, DramaAsset> assets) {
         LinkedHashSet<String> names = new LinkedHashSet<>();
+        boolean dream = isDreamContext(shot);
         if (assets != null) {
             for (Long id : idsOf(shot.getReferenceAssetIds())) {
-                DramaAsset asset = assets.get(id);
-                if (isReferenceEligible(asset) && StringUtils.hasText(asset.getName())) {
-                    names.add(asset.getName().trim());
-                }
+                addMention(names, assets.get(id));
             }
         }
         List<String> candidates = new ArrayList<>();
@@ -1717,28 +1720,34 @@ public class DramaStoryboardService {
         if (StringUtils.hasText(shot.getLocationName())) {
             candidates.add(shot.getLocationName().trim());
         }
-        boolean dream = isDreamContext(shot);
+        candidates.addAll(DramaStoryboardCompiler.narrativeAtNames(shot.getVisiblePrompt(), assetNames(assets)));
         for (String name : candidates) {
-            DramaAsset asset = findEligibleNamed(assets, name, dream);
-            if (isReferenceEligible(asset)) {
-                names.add(asset.getName().trim());
-            }
+            addMention(names, findEligibleNamed(assets, name, dream));
         }
-        for (String name : mentionedEligibleProps(assets, shot)) {
+        for (String name : mentionedExistingNames(assets, shot, DramaContract.ASSET_TYPE_CHARACTER)) {
+            names.add(name);
+        }
+        for (String name : mentionedExistingNames(assets, shot, DramaContract.ASSET_TYPE_PROP)) {
+            names.add(name);
+        }
+        for (String name : mentionedExistingNames(assets, shot, DramaContract.ASSET_TYPE_SCENE)) {
             names.add(name);
         }
         return new ArrayList<>(names);
     }
 
-    /** 画面说明里点到、且已有参考图的道具。不看台词。 */
-    private List<String> mentionedEligibleProps(Map<Long, DramaAsset> assets, DramaShot shot) {
+    private static void addMention(Set<String> names, DramaAsset asset) {
+        if (canMention(asset) && isMentionableType(asset.getType())) {
+            names.add(asset.getName().trim());
+        }
+    }
+
+    /** 画面说明里点到、且资产还在的名字。不看台词，资产已删除的不写 @。 */
+    private List<String> mentionedExistingNames(Map<Long, DramaAsset> assets, DramaShot shot, String type) {
         List<String> pool = new ArrayList<>();
         if (assets != null) {
             for (DramaAsset asset : assets.values()) {
-                if (asset == null
-                        || !DramaContract.ASSET_TYPE_PROP.equals(asset.getType())
-                        || !isReferenceEligible(asset)
-                        || !StringUtils.hasText(asset.getName())) {
+                if (!canMention(asset) || !type.equals(asset.getType())) {
                     continue;
                 }
                 String name = asset.getName().trim();
@@ -1749,6 +1758,12 @@ public class DramaStoryboardService {
         }
         return DramaNameMentions.mentionedExactInOrder(
                 pool, DramaShotBeats.propMentionTexts(shot).toArray(String[]::new));
+    }
+
+    private static boolean isMentionableType(String type) {
+        return DramaContract.ASSET_TYPE_CHARACTER.equals(type)
+                || DramaContract.ASSET_TYPE_PROP.equals(type)
+                || DramaContract.ASSET_TYPE_SCENE.equals(type);
     }
 
     private List<DramaAsset> resolveNarrativeReferences(
@@ -2163,10 +2178,7 @@ public class DramaStoryboardService {
         for (DramaShot shot : shots) {
             byChapter.computeIfAbsent(shot.getChapterId(), key -> new ArrayList<>()).add(shot);
         }
-        List<DramaAsset> locked = assets.values().stream()
-                .filter(DramaStoryboardService::isReferenceEligible)
-                .sorted(Comparator.comparing(DramaAsset::getType).thenComparing(DramaAsset::getId))
-                .toList();
+        List<DramaAsset> locked = assetsForPromptChips(assets.values());
         int stale = 0;
         Map<Long, GenTask> tasks = loadTasks(shots);
         Map<Long, GenTask> inflight = loadInFlightDramaTasks(shots);
@@ -2194,7 +2206,7 @@ public class DramaStoryboardService {
         board.setDraftingAt(Boolean.TRUE.equals(board.getDrafting()) ? episode.getStoryboardDraftingAt() : null);
         board.setDraftError(Boolean.TRUE.equals(board.getDrafting()) ? null : episode.getStoryboardDraftError());
         board.setTextServiceAvailable(textService.getIfAvailable() != null);
-        board.setLockedAssetCount(locked.size());
+        board.setLockedAssetCount((int) locked.stream().filter(DramaStoryboardService::isReferenceEligible).count());
         board.setStaleShotCount(stale);
         board.setChapters(chapterResps);
         board.setLockedAssets(locked.stream().map(this::toLockedAsset).toList());
@@ -2802,8 +2814,47 @@ public class DramaStoryboardService {
         resp.setImageStorageKey(asset.getImageStorageKey());
         resp.setImageAssetId(asset.getImageAssetId());
         resp.setImageUrl(MediaUrls.of(asset.getImageStorageKey()));
-        resp.setReferenceEligible(true);
+        resp.setReferenceEligible(isReferenceEligible(asset));
         return resp;
+    }
+
+    /**
+     * 提示词芯片用的资产。已出图的排在前面；同名还没出图的不重复放。
+     * 只有没出图的名字也放进来，这样 @ 能对上资产并显示成未出图。
+     */
+    private static List<DramaAsset> assetsForPromptChips(Collection<DramaAsset> assets) {
+        List<DramaAsset> sorted = new ArrayList<>();
+        if (assets != null) {
+            for (DramaAsset asset : assets) {
+                if (asset != null && asset.getId() != null && StringUtils.hasText(asset.getName())) {
+                    sorted.add(asset);
+                }
+            }
+        }
+        sorted.sort(Comparator.comparing(DramaAsset::getType, Comparator.nullsLast(String::compareTo))
+                .thenComparing(DramaAsset::getId));
+        List<DramaAsset> imaged = new ArrayList<>();
+        Set<String> imagedNames = new HashSet<>();
+        for (DramaAsset asset : sorted) {
+            if (!isReferenceEligible(asset)) {
+                continue;
+            }
+            imaged.add(asset);
+            imagedNames.add(asset.getName().trim());
+        }
+        List<DramaAsset> chips = new ArrayList<>(imaged);
+        Set<String> waitingNames = new HashSet<>();
+        for (DramaAsset asset : sorted) {
+            if (isReferenceEligible(asset)) {
+                continue;
+            }
+            String name = asset.getName().trim();
+            if (imagedNames.contains(name) || !waitingNames.add(name)) {
+                continue;
+            }
+            chips.add(asset);
+        }
+        return chips;
     }
 
     private static DramaStoryboardCompiler.ActiveReference toActive(DramaAsset asset) {
@@ -2959,6 +3010,11 @@ public class DramaStoryboardService {
     /** 有当前选用图即可作为分镜参考，不要求资产已锁定。 */
     private static boolean isReferenceEligible(DramaAsset asset) {
         return asset != null && StringUtils.hasText(asset.getImageStorageKey());
+    }
+
+    /** 资产记录已存在即可在提示词里写 @，不要求已经出图。 */
+    private static boolean canMention(DramaAsset asset) {
+        return asset != null && StringUtils.hasText(asset.getName());
     }
 
     private String overlayChapterName(ShotDraftList drafts, ScriptDoc.Scene scene, int index) {

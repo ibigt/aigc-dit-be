@@ -626,6 +626,24 @@ class DramaStoryboardCompilerTest {
     }
 
     @Test
+    void visiblePromptDropsMentionWhenAssetIsGone() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("@洛白在@白板旁");
+        beats.setBeats(List.of(beat("近景", "@夏安看向白板。", "接转身", "夏安：白板呢。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "医院ICU", null, null, null, null, 8,
+                List.of("洛白", "夏安"), 2, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(
+                shot, List.of("洛白", "夏安"), "医院ICU", List.of("白板"));
+
+        assertTrue(visible.contains("@洛白在白板旁"));
+        assertTrue(visible.contains("@夏安 看向白板"));
+        assertFalse(visible.contains("@白板"));
+        assertTrue(visible.contains("说：“白板呢。”"));
+    }
+
+    @Test
     void visiblePromptCitesPropMissingFromActionOnBlockingLine() {
         DramaShotBeats beats = new DramaShotBeats();
         beats.setBlocking("洛白在病床旁");

@@ -1750,7 +1750,9 @@ class DramaStoryboardServiceTest {
                 pendingAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER)));
 
         BizException error = assertThrows(BizException.class, () -> service.generateShot(201L));
-        assertTrue(error.getMessage().contains("还没有参考图") || error.getMessage().contains("请先准备资产参考图"));
+        assertTrue(error.getMessage().contains("还没有参考图")
+                || error.getMessage().contains("请先准备资产参考图")
+                || error.getMessage().contains("缺少参考图"));
         verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 
@@ -2342,9 +2344,44 @@ class DramaStoryboardServiceTest {
 
         assertEquals(List.of("局长"), resp.getCharacterNames());
         assertEquals(1, resp.getCastCount());
-        assertEquals(List.of("幻梦侦探社", "局长"),
+        assertTrue(resp.getVisiblePrompt().contains("@夏安"));
+        assertTrue(resp.getVisiblePrompt().contains("@局长"));
+        assertEquals(List.of("幻梦侦探社", "夏安", "局长"),
                 resp.getReferences().stream().map(ref -> ref.getName()).toList());
         assertTrue(resp.getCompiledPrompt().contains("本镜恰好 1 人"));
+    }
+
+    @Test
+    void compileDropsDeletedAssetMentionAndKeepsRemainingCharacters() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        shot.setCharacterNames(List.of("洛白", "夏安"));
+        shot.setPropNames(List.of("白板"));
+        shot.setVisiblePrompt("场景：侦探社\n镜头1：@洛白 站在@白板前，@夏安 抬头。");
+        shot.setNarrativeGoal("入梦");
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("洛白站在白板前");
+        DramaShotBeats.Beat beat = new DramaShotBeats.Beat();
+        beat.setCamera("近景");
+        beat.setAction("夏安抬头看白板。");
+        beats.setBeats(List.of(beat));
+        shot.setShotBeats(beats);
+        storedShots.add(shot);
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                pendingAsset(2L, "夏安", DramaContract.ASSET_TYPE_CHARACTER)));
+
+        DramaShotResp resp = service.compileShot(201L);
+
+        assertTrue(resp.getVisiblePrompt().contains("@洛白"));
+        assertTrue(resp.getVisiblePrompt().contains("@夏安"));
+        assertTrue(resp.getVisiblePrompt().contains("白板"));
+        assertFalse(resp.getVisiblePrompt().contains("@白板"));
+        assertEquals(List.of("洛白"),
+                resp.getReferences().stream().map(ref -> ref.getName()).toList());
     }
 
     @Test
@@ -2377,9 +2414,8 @@ class DramaStoryboardServiceTest {
 
         DramaShotResp resp = service.compileShot(201L);
 
-        assertTrue(resp.getVisiblePrompt().contains("站位：@洛白在病床旁，@手电筒。"));
+        assertTrue(resp.getVisiblePrompt().contains("站位：@洛白在病床旁，@手电筒，@没有图的杯子。"));
         assertTrue(resp.getVisiblePrompt().contains("@洛白 按下@怀表开关，又瞥见@档案袋，说：“杯子在桌上。”"));
-        assertFalse(resp.getVisiblePrompt().contains("@没有图的杯子"));
         assertFalse(resp.getVisiblePrompt().contains("说：@"));
         assertEquals(List.of("洛白", "手电筒", "怀表", "档案袋"),
                 resp.getReferences().stream().map(ref -> ref.getName()).toList());
