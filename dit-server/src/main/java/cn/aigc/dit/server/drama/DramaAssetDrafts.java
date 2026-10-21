@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 资产页自动提示词模板。按大类分流：
@@ -41,8 +42,8 @@ public final class DramaAssetDrafts {
             }
             addNames(unique, scene.getCharacters(), DramaContract.ASSET_TYPE_CHARACTER, style, contexts);
             addNames(unique, scene.getProps(), DramaContract.ASSET_TYPE_PROP, style, contexts);
-            if (StringUtils.hasText(scene.getLocation())) {
-                addName(unique, scene.getLocation(), DramaContract.ASSET_TYPE_SCENE, style, contexts);
+            for (String location : sceneAssetLocations(scene.getLocation())) {
+                addName(unique, location, DramaContract.ASSET_TYPE_SCENE, style, contexts);
             }
         }
         list.setAssets(new ArrayList<>(unique.values()));
@@ -126,6 +127,57 @@ public final class DramaAssetDrafts {
         }
         return "外观按该状态变化，脸与发型不变";
     }
+
+    /**
+     * 场次地点落成场景资产前拆开「甲/乙」。两边都像独立地名时各记一处，不再保留拼接名。
+     * 有一边不像地名时整段保留，避免拆开本来就带斜杠的名字。只处理地点，不扫台词。
+     */
+    public static List<String> sceneAssetLocations(String location) {
+        if (!StringUtils.hasText(location)) {
+            return List.of();
+        }
+        String trimmed = location.trim();
+        if (!trimmed.contains("/") && !trimmed.contains("／")) {
+            return List.of(trimmed);
+        }
+        List<String> parts = new ArrayList<>();
+        for (String raw : trimmed.split("[/／]")) {
+            if (!StringUtils.hasText(raw)) {
+                continue;
+            }
+            String word = raw.trim();
+            if (SCENE_HEADING_MARKERS.contains(word)) {
+                continue;
+            }
+            if (!isIndependentPlaceName(word) || parts.contains(word)) {
+                if (!isIndependentPlaceName(word)) {
+                    return List.of(trimmed);
+                }
+                continue;
+            }
+            parts.add(word);
+        }
+        if (parts.isEmpty()) {
+            return List.of(trimmed);
+        }
+        return parts;
+    }
+
+    private static boolean isIndependentPlaceName(String word) {
+        if (word.length() < 2) {
+            return false;
+        }
+        for (int i = 0; i < word.length(); i++) {
+            if (Character.UnicodeScript.of(word.charAt(i)) == Character.UnicodeScript.HAN) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final Set<String> SCENE_HEADING_MARKERS = Set.of(
+            "内", "外", "内景", "外景", "室内", "室外",
+            "日", "白天", "清晨", "晨", "上午", "中午", "下午", "傍晚", "黄昏", "夜", "晚上", "深夜", "凌晨");
 
     /** 「洛白·入梦」取本体名「洛白」。没有间隔号时返回原名。 */
     public static String baseCharacterName(String name) {
@@ -404,9 +456,7 @@ public final class DramaAssetDrafts {
             Context bit = new Context(scene.getHeading(), scene.getTime(), scene.getInterior(), scene.getAction());
             remember(contexts, scene.getCharacters(), DramaContract.ASSET_TYPE_CHARACTER, bit);
             remember(contexts, scene.getProps(), DramaContract.ASSET_TYPE_PROP, bit);
-            if (StringUtils.hasText(scene.getLocation())) {
-                remember(contexts, List.of(scene.getLocation()), DramaContract.ASSET_TYPE_SCENE, bit);
-            }
+            remember(contexts, sceneAssetLocations(scene.getLocation()), DramaContract.ASSET_TYPE_SCENE, bit);
         }
         return contexts;
     }

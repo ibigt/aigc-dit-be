@@ -734,6 +734,27 @@ class DramaAssetDraftsTest {
                 DramaContract.ASSET_TYPE_SCENE, "高二教室，前后黑板，成排课桌椅，侧窗自然光"));
     }
 
+    @Test
+    void splitsSlashLocationsIntoExistingPlacesAndDropsJoinedName() {
+        ScriptDoc doc = new ScriptDoc();
+        ScriptDoc.Scene ward = new ScriptDoc.Scene();
+        ward.setLocation("瓦卓病房");
+        ward.setAction("瓦卓说：“走廊/大门那边有人。”");
+        ScriptDoc.Scene joined = new ScriptDoc.Scene();
+        joined.setLocation("瓦卓病房/院长办公室");
+        ScriptDoc.Scene gate = new ScriptDoc.Scene();
+        gate.setLocation("监控室／精神病栋大门");
+        ScriptDoc.Scene literal = new ScriptDoc.Scene();
+        literal.setLocation("24/7便利店");
+        doc.setScenes(List.of(ward, joined, gate, literal));
+
+        List<String> scenes = DramaAssetDrafts.fromScript(doc).getAssets().stream()
+                .filter(item -> DramaContract.ASSET_TYPE_SCENE.equals(item.getType()))
+                .map(AssetDraftList.AssetDraft::getName)
+                .toList();
+        assertEquals(List.of("瓦卓病房", "院长办公室", "监控室", "精神病栋大门", "24/7便利店"), scenes);
+    }
+
     private static ScriptDoc scriptWithSceneAndProp() {
         ScriptDoc doc = new ScriptDoc();
         ScriptDoc.Scene scene = new ScriptDoc.Scene();
