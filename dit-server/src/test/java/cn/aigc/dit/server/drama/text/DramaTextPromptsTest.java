@@ -165,6 +165,10 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("最后一拍"));
         assertTrue(system.contains("优先中景、近景或特写"));
         assertTrue(system.contains("不要用全景、远景或大幅度运镜收尾"));
+        assertTrue(system.contains("中心构图"));
+        assertTrue(system.contains("16～40 字"));
+        assertTrue(system.contains("禁止只写「缓慢推近」或「中景，静止」"));
+        assertTrue(system.contains("从哪推到哪个细节"));
     }
 
     @Test
@@ -182,12 +186,24 @@ class DramaTextPromptsTest {
         assertTrue(system.contains("改成"));
         assertTrue(system.contains("duration_sec"));
         assertTrue(system.contains("另一种时代"));
+        assertTrue(system.contains("眼神、嘴角、手部、袖中物件"));
+        assertTrue(system.contains("不要写成「氛围感」「命运感」"));
+        assertTrue(system.contains("金色光柱"));
+        assertTrue(system.contains("梵音、衣袍摩擦、殿内回声"));
+        assertTrue(system.contains("不要配乐"));
+        assertTrue(system.contains("平静回应"));
+        assertTrue(system.contains("非口播不要写成冒号紧挨引号"));
+        assertTrue(system.contains("只闻其声，不出现说话人实体"));
+        assertTrue(system.contains("不另起角色小传"));
 
         String user = DramaTextPrompts.shotEnrichUser("[{\"chapter_index\":1}]", "{\"shots\":[]}");
         assertTrue(user.contains("场次上下文"));
         assertTrue(user.contains("待扩写分镜草稿"));
         assertTrue(user.contains("chapter_index 与 index 必须与输入一致"));
         assertTrue(user.contains("景别和运镜写进 camera"));
+        assertTrue(user.contains("从哪推到哪个细节"));
+        assertTrue(user.contains("主色和光质"));
+        assertTrue(user.contains("只闻其声"));
         assertFalse(user.contains("项目视觉风格"));
 
         String styled = DramaTextPrompts.shotEnrichUser("[{\"chapter_index\":1}]", "{\"shots\":[]}", "赛博朋克风。霓虹都市");

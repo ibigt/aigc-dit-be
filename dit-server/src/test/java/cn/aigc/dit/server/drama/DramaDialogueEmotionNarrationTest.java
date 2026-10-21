@@ -101,33 +101,30 @@ class DramaDialogueEmotionNarrationTest {
     }
 
     @Test
-    void compilerInjectsEmotionToneAndPerformanceWithoutEmotionInCaption() {
+    void compilerKeepsLipSyncWithoutRepeatingEmotionOrTheLine() {
         String dialogue = "局长（愤怒）：你给我站住！\n洛白：知道了。";
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
 
-        assertTrue(constraint.contains("角色“局长”以愤怒的语气逐字说出：“你给我站住！”"));
-        assertTrue(constraint.contains("口型与每个字严格同步"));
-        assertTrue(constraint.contains("对白表演："));
-        assertTrue(constraint.contains("呈现愤怒神态"));
-        assertTrue(constraint.contains("角色“洛白”逐字说出：“知道了。”"));
+        assertTrue(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
+        assertTrue(constraint.contains(DramaStoryboardCompiler.DIALOGUE_EXECUTION_TAIL));
+        assertFalse(constraint.contains("以愤怒的语气"));
+        assertFalse(constraint.contains("对白表演："));
+        assertFalse(constraint.contains("你给我站住"));
+        assertFalse(constraint.contains("知道了"));
         assertEquals(List.of("你给我站住！", "知道了。"), DramaStoryboardCompiler.captionLines(dialogue));
         assertFalse(DramaStoryboardCompiler.captionLines(dialogue).stream().anyMatch(line -> line.contains("愤怒")));
     }
 
     @Test
-    void compilerNarrationUsesNormalToneWithoutLipSyncAndKeepsMouthClosed() {
+    void compilerNarrationKeepsMouthClosedWithoutRepeatingTheLine() {
         String dialogue = "旁白：夜色渐深。\n洛白：别跟过来。";
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
 
-        assertTrue(constraint.contains("旁白解说员以全片统一的旁白音色逐字念出：“夜色渐深。”，该音色不与任何角色混淆"));
         assertTrue(constraint.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
-        assertTrue(constraint.contains("角色“洛白”逐字说出：“别跟过来。”，口型与每个字严格同步"));
+        assertTrue(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
+        assertFalse(constraint.contains("夜色渐深"));
+        assertFalse(constraint.contains("别跟过来"));
         assertFalse(constraint.contains("旁白\"逐字说出"));
-        // 旁白句本身不要求口型同步；角色句仍要求。
-        int narrationIdx = constraint.indexOf("旁白音色逐字念出");
-        int lipOnNarration = constraint.indexOf("口型与每个字严格同步", narrationIdx);
-        int characterIdx = constraint.indexOf("角色“洛白”");
-        assertTrue(lipOnNarration < 0 || lipOnNarration > characterIdx);
         assertFalse(constraint.contains("对白表演："));
     }
 
@@ -142,9 +139,10 @@ class DramaDialogueEmotionNarrationTest {
         assertTrue(utterances.get(0).narration());
 
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
-        assertTrue(constraint.contains("旁白解说员以全片统一的旁白音色逐字念出：“风雨欲来。”"));
+        assertFalse(constraint.contains("风雨欲来"));
         assertFalse(constraint.contains("以愤怒的语气"));
         assertTrue(constraint.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
+        assertFalse(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
         assertFalse(constraint.contains("对白表演："));
     }
 
@@ -178,11 +176,11 @@ class DramaDialogueEmotionNarrationTest {
         String dialogue = "张总（画外音）：难道是他？";
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
 
-        assertTrue(constraint.contains(
-                "角色“张总”的画外音（使用张总的音色，自画面外传来）逐字念出：“难道是他？”"));
         assertTrue(constraint.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
+        assertFalse(constraint.contains("自画面外传来"));
+        assertFalse(constraint.contains("难道是他"));
         // 画外音不开口，不要求口型同步，也没有情绪表演段。
-        assertFalse(constraint.contains("口型与每个字严格同步"));
+        assertFalse(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
         assertFalse(constraint.contains("对白表演："));
         assertFalse(constraint.contains("旁白解说员"));
     }
@@ -193,16 +191,19 @@ class DramaDialogueEmotionNarrationTest {
         String dialogue = "张总（画外音）：难道是他？\n李四：是我。";
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
 
-        assertTrue(constraint.contains("角色“张总”的画外音（使用张总的音色，自画面外传来）逐字念出：“难道是他？”"));
-        assertTrue(constraint.contains("角色“李四”逐字说出：“是我。”，口型与每个字严格同步"));
+        assertTrue(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
         assertTrue(constraint.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
+        assertFalse(constraint.contains("自画面外传来"));
+        assertFalse(constraint.contains("难道是他"));
+        assertFalse(constraint.contains("是我"));
     }
 
     @Test
     void neutralDialogueKeepsLegacyBehavior() {
         String dialogue = "局长：洛老弟，别睡了。";
         String constraint = DramaStoryboardCompiler.spokenDialogueConstraint(dialogue);
-        assertTrue(constraint.contains("角色“局长”逐字说出：“洛老弟，别睡了。”，口型与每个字严格同步"));
+        assertTrue(constraint.contains(DramaStoryboardCompiler.BEAT_LIP_SYNC));
+        assertFalse(constraint.contains("洛老弟"));
         assertFalse(constraint.contains("以愤怒"));
         assertFalse(constraint.contains("对白表演："));
         assertFalse(constraint.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));

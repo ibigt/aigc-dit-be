@@ -52,6 +52,8 @@ public final class DramaStoryboardCompiler {
             "只念各镜头台词正文，不念角色名和冒号，不得增删或改写。";
     public static final String BEAT_NO_SPEECH = "本镜头无人开口";
     public static final String BEAT_LIP_SYNC = "口型与这句同步";
+    /** 环境声为空时仍留在可见正文上，避免配乐约束只出现在用户看不到的文末。 */
+    static final String VISIBLE_NO_SCORE = "不要配乐，只保留对白。";
     public static final String I2V_MUST_START =
             "Must start: 以提供的首帧为起幅（空间、已在画面中人物的服装与站位）。严格按 Action 的主语演出，禁止改写谁做了什么。"
                     + "Action 新点名、但首帧里还没有的人，必须按其 Identities 外貌入画；"
@@ -656,6 +658,10 @@ public final class DramaStoryboardCompiler {
         return spokenDialogueConstraint(dialogue, false);
     }
 
+    /**
+     * 文末只留执行约束。情绪、原句、画外音位置和环境声已经写在可见正文里，这里不再复述。
+     * {@code beats} 保留给调用方；有镜头时走 {@link #beatDialogueGlobalRule}，不再从这里补语气。
+     */
     static String spokenDialogueConstraint(String dialogue, boolean beats) {
         if (!StringUtils.hasText(dialogue)) {
             return "";
@@ -664,40 +670,22 @@ public final class DramaStoryboardCompiler {
         if (utterances.isEmpty()) {
             return "";
         }
-        List<String> contracts = new ArrayList<>();
-        LinkedHashSet<String> performanceEmotions = new LinkedHashSet<>();
-        boolean hasNarration = false;
+        boolean offScreen = false;
+        boolean onScreen = false;
         for (SpokenUtterance spoken : utterances) {
-            String speaker = spoken.speaker();
-            String words = spoken.words();
-            if (spoken.narration()) {
-                hasNarration = true;
-                contracts.add("旁白解说员以全片统一的旁白音色逐字念出：“" + words + "”，该音色不与任何角色混淆");
-            } else if (spoken.voiceOver()) {
-                // 角色画外音：明确指定用该角色的声音，画面外传来，画面中人物不开口。
-                hasNarration = true;
-                contracts.add("角色“" + speaker + "”的画外音（使用" + speaker + "的音色，自画面外传来）逐字念出：“"
-                        + words + "”");
-            } else if (StringUtils.hasText(spoken.emotion())) {
-                performanceEmotions.add(spoken.emotion());
-                contracts.add("角色“" + speaker + "”以" + spoken.emotion()
-                        + "的语气逐字说出：“" + words + "”，口型与每个字严格同步");
+            if (spoken.narration() || spoken.voiceOver()) {
+                offScreen = true;
             } else {
-                contracts.add("角色“" + speaker + "”逐字说出：“" + words + "”，口型与每个字严格同步");
+                onScreen = true;
             }
         }
         StringBuilder line = new StringBuilder("对白执行：");
-        if (!contracts.isEmpty()) {
-            line.append(String.join("；", contracts)).append("。");
+        if (onScreen) {
+            line.append(BEAT_LIP_SYNC).append('。');
         }
-        line.append(DIALOGUE_EXECUTION_TAIL);
-        if (hasNarration) {
+        line.append(beats ? BEAT_DIALOGUE_EXECUTION : DIALOGUE_EXECUTION_TAIL);
+        if (offScreen) {
             line.append(NARRATION_MOUTH_CLOSED);
-        }
-        if (!performanceEmotions.isEmpty()) {
-            line.append('\n').append(DIALOGUE_PERFORMANCE_PREFIX)
-                    .append(String.join("、", performanceEmotions))
-                    .append(beats ? DIALOGUE_PERFORMANCE_SUFFIX_BEATS : DIALOGUE_PERFORMANCE_SUFFIX);
         }
         return line.toString();
     }
@@ -1004,8 +992,11 @@ public final class DramaStoryboardCompiler {
     private static final Pattern VISIBLE_LABEL = Pattern.compile(
             "(站位|镜头\\d+|景别|动作|接续|台词|场景|运镜|环境声)\\s*[:：]");
 
-    /** 「说：」以及旁白、画外音的冒号。冒号之后到行尾是口播，不再写 {@code @}。 */
-    private static final Pattern SAY_MARK = Pattern.compile("说\\s*[:：]|旁白\\s*[:：]|（画外音）\\s*[:：]");
+    /**
+     * 旧稿仍认的口播标记。冒号紧挨引号时不依赖这些词，见 {@link #findSpeechHits}。
+     * 旁白、画外音不加引号，仍收到换行。
+     */
+    private static final Pattern LEGACY_SPEECH = Pattern.compile("说\\s*[:：]|旁白\\s*[:：]|（画外音）\\s*[:：]");
 
     /**
      * 给用户看的核心正文。场景单独一行；站位、景别和接续留在镜头说明里。
@@ -1054,8 +1045,12 @@ public final class DramaStoryboardCompiler {
                 for (String line : lines) {
                     body.append('\n').append(line);
                 }
+                if (spokenUtterances(beat.getDialogue()).isEmpty()) {
+                    body.append('\n').append(BEAT_NO_SPEECH).append('。');
+                }
                 index++;
             }
+            appendVisibleAmbiance(body, shot.ambiance(), names);
         } else {
             appendVisibleLine(body, "场景", sceneLine(shot.scene(), locationName, names));
             appendVisibleLine(body, "运镜", markAtNames(shot.camera(), names));
@@ -1069,7 +1064,7 @@ public final class DramaStoryboardCompiler {
                     body.append(line);
                 }
             }
-            appendVisibleLine(body, "环境声", markAtNames(shot.ambiance(), names));
+            appendVisibleAmbiance(body, shot.ambiance(), names);
         }
         citeMissingProps(body, propNames, names);
         return quoteSpokenLines(body.toString().trim());
@@ -1394,13 +1389,20 @@ public final class DramaStoryboardCompiler {
                 continue;
             }
             String words = stripAtPrefix(span.text()).trim();
-            if (precededBySay(previousNarrative(spans, i))) {
+            String narrative = previousNarrative(spans, i);
+            if (precededBySay(narrative)) {
                 words = stripWrappingQuotes(words);
             }
+            words = words + punctuationAfterClosingQuote(spans, i);
             if (!StringUtils.hasText(words)) {
                 continue;
             }
-            String speaker = speakerFromNarrative(previousNarrative(spans, i));
+            String speaker = speakerFromNarrative(narrative);
+            String emotion = emotionAdverbBefore(narrative);
+            if (StringUtils.hasText(emotion) && StringUtils.hasText(speaker)
+                    && !speaker.startsWith("旁白") && !speaker.contains("画外音")) {
+                speaker = speaker + "（" + emotion + "）";
+            }
             lines.add(StringUtils.hasText(speaker) ? speaker + "：" + words : words);
         }
         return lines.isEmpty() ? null : String.join("\n", lines);
@@ -1552,6 +1554,20 @@ public final class DramaStoryboardCompiler {
             body.append('\n');
         }
         body.append(label).append('：').append(value.trim());
+    }
+
+    /** 每条可见正文都有环境声。有声音时写在这一行，并写明不要配乐；空着也留下这句约束。 */
+    private static void appendVisibleAmbiance(StringBuilder body, String ambiance, List<String> names) {
+        String sound = blank(markAtNames(ambiance, names));
+        String line;
+        if (!StringUtils.hasText(sound)) {
+            line = VISIBLE_NO_SCORE;
+        } else if (sound.contains("不要配乐")) {
+            line = sound;
+        } else {
+            line = stripEndPunct(sound) + "。" + VISIBLE_NO_SCORE;
+        }
+        appendVisibleLine(body, "环境声", line);
     }
 
     private static void appendVisibleClause(StringBuilder block, String label, String value) {
@@ -1762,13 +1778,27 @@ public final class DramaStoryboardCompiler {
         return prefix + " " + marked.substring(prefix.length());
     }
 
+    private static final String[] SPEECH_VERBS = {
+            "回应", "低语", "呢喃", "吩咐", "开口", "喊", "叫", "问", "道", "说", "答", "喝", "吼", "嚷", "念"
+    };
+
+    private static final Pattern EMOTION_ADVERB = Pattern.compile("(高兴|愤怒|悲伤|恐惧|惊讶|厌恶|紧张)地");
+
     private static String wovenSpeech(String marked, SpokenUtterance spoken) {
         String body = stripEndPunct(marked).trim();
-        String onlyName = "@" + spoken.speaker();
-        if (body.equals(onlyName)) {
-            return onlyName + " 说：" + spoken.words();
+        String words = spoken.words();
+        String verb = speechVerbEnding(body);
+        if (verb != null) {
+            return withEmotionVerb(body, spoken.emotion(), verb) + "：“" + words + "”";
         }
-        return body + "，说：" + spoken.words();
+        if (hasEmotionAdverb(body)) {
+            return body + "：“" + words + "”";
+        }
+        String glue = body.equals("@" + spoken.speaker()) ? " " : "，";
+        if (StringUtils.hasText(spoken.emotion())) {
+            return body + glue + spoken.emotion() + "地说：“" + words + "”";
+        }
+        return body + glue + "说：“" + words + "”";
     }
 
     private static String looseSpeech(SpokenUtterance spoken, List<String> names) {
@@ -1778,7 +1808,36 @@ public final class DramaStoryboardCompiler {
         if (spoken.voiceOver()) {
             return markedName(spoken.speaker(), names) + "（画外音）：" + spoken.words();
         }
-        return citedName(spoken.speaker(), names) + " 说：" + spoken.words();
+        String who = citedName(spoken.speaker(), names);
+        if (StringUtils.hasText(spoken.emotion())) {
+            return who + " " + spoken.emotion() + "地说：“" + spoken.words() + "”";
+        }
+        return who + " 说：“" + spoken.words() + "”";
+    }
+
+    private static String speechVerbEnding(String body) {
+        if (!StringUtils.hasText(body)) {
+            return null;
+        }
+        for (String verb : SPEECH_VERBS) {
+            if (body.endsWith(verb)) {
+                return verb;
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasEmotionAdverb(String text) {
+        return StringUtils.hasText(text) && EMOTION_ADVERB.matcher(text).find();
+    }
+
+    /** 动作已经以问、道、喊、说收尾时，把闭集情绪贴在这个动作前面，不再另加一个「说」。 */
+    private static String withEmotionVerb(String body, String emotion, String verb) {
+        if (!StringUtils.hasText(emotion) || hasEmotionAdverb(body)) {
+            return body;
+        }
+        int at = body.length() - verb.length();
+        return body.substring(0, at) + emotion + "地" + verb;
     }
 
     /** 资产名还在引用名单里才加 @，否则保留普通名字。 */
@@ -1844,7 +1903,7 @@ public final class DramaStoryboardCompiler {
             SaySlot slot = slots.get(i);
             String words = i < lines.size() ? spokenWords(lines.get(i)) : "";
             if (StringUtils.hasText(words)) {
-                out.append(visible, cursor, slot.markerEnd());
+                out.append(visible, cursor, slot.contentStart());
                 out.append(words);
             } else {
                 int cut = slot.markerStart();
@@ -1853,7 +1912,7 @@ public final class DramaStoryboardCompiler {
                 }
                 out.append(visible, cursor, cut);
             }
-            cursor = slot.speechEnd();
+            cursor = StringUtils.hasText(words) ? slot.contentEnd() : slot.resume();
         }
         if (cursor < visible.length()) {
             out.append(visible.substring(cursor));
@@ -1882,7 +1941,16 @@ public final class DramaStoryboardCompiler {
                 }
                 out.append('@').append(name).append("（画外音）：").append(words);
             } else if (StringUtils.hasText(speaker)) {
-                out.append('@').append(speaker).append(" 说：").append(words);
+                SpeakerEmotion parsed = parseSpeakerEmotion(speaker);
+                String emotion = DramaDialogueSpeakers.sanitizeEmotion(parsed.emotion());
+                String name = StringUtils.hasText(parsed.speaker()) ? parsed.speaker() : speaker;
+                out.append('@').append(name);
+                if (StringUtils.hasText(emotion)) {
+                    out.append(' ').append(emotion).append("地说：");
+                } else {
+                    out.append(" 说：");
+                }
+                out.append(words);
             } else {
                 out.append("说：").append(words);
             }
@@ -1915,27 +1983,39 @@ public final class DramaStoryboardCompiler {
 
     private static List<SaySlot> saySlots(String text) {
         List<SaySlot> slots = new ArrayList<>();
+        for (SpeechHit hit : absoluteSpeechHits(text)) {
+            slots.add(new SaySlot(hit.markerStart(), hit.contentStart(), hit.contentEnd(), hit.resume()));
+        }
+        return slots;
+    }
+
+    /** 台词标签整段已是口播，不再从里面拆「说：」。下标相对整段正文。 */
+    private static List<SpeechHit> absoluteSpeechHits(String text) {
+        List<SpeechHit> hits = new ArrayList<>();
         if (!StringUtils.hasText(text)) {
-            return slots;
+            return hits;
         }
         int offset = 0;
         for (TextSpan span : splitLabelSpans(text)) {
             if (!span.dialogue()) {
-                Matcher matcher = SAY_MARK.matcher(span.text());
-                int cursor = 0;
-                while (matcher.find(cursor)) {
-                    int speechStart = matcher.end();
-                    int speechEnd = span.text().indexOf('\n', speechStart);
-                    if (speechEnd < 0) {
-                        speechEnd = span.text().length();
-                    }
-                    slots.add(new SaySlot(offset + matcher.start(), offset + speechStart, offset + speechEnd));
-                    cursor = speechEnd;
+                for (SpeechHit hit : findSpeechHits(span.text())) {
+                    hits.add(shiftSpeechHit(hit, offset));
                 }
             }
             offset += span.text() == null ? 0 : span.text().length();
         }
-        return slots;
+        return hits;
+    }
+
+    private static SpeechHit shiftSpeechHit(SpeechHit hit, int offset) {
+        return new SpeechHit(
+                hit.markerStart() + offset,
+                hit.quoteOpen() < 0 ? -1 : hit.quoteOpen() + offset,
+                hit.contentStart() + offset,
+                hit.contentEnd() + offset,
+                hit.resume() + offset,
+                hit.needsQuotes(),
+                hit.offScreen());
     }
 
     private static boolean isLegacyDialogueSpan(String text) {
@@ -1943,6 +2023,32 @@ public final class DramaStoryboardCompiler {
             return false;
         }
         return text.trim().startsWith("台词：") || text.trim().startsWith("台词:");
+    }
+
+    /** 闭引号紧跟着的句号、叹号仍算这句台词的标点，不留在引号外面丢掉。 */
+    private static String punctuationAfterClosingQuote(List<TextSpan> spans, int dialogueIndex) {
+        if (dialogueIndex + 1 >= spans.size()) {
+            return "";
+        }
+        TextSpan next = spans.get(dialogueIndex + 1);
+        if (next == null || next.dialogue() || !StringUtils.hasText(next.text())) {
+            return "";
+        }
+        String text = next.text();
+        char open = text.charAt(0);
+        if (open != '”' && open != '"') {
+            return "";
+        }
+        int end = 1;
+        while (end < text.length() && isTrailingSpeechPunct(text.charAt(end))) {
+            end++;
+        }
+        return text.substring(1, end);
+    }
+
+    private static boolean isTrailingSpeechPunct(char value) {
+        return value == '。' || value == '！' || value == '？' || value == '…'
+                || value == '.' || value == '!' || value == '?' || value == '，' || value == ',';
     }
 
     private static String previousNarrative(List<TextSpan> spans, int index) {
@@ -1958,44 +2064,80 @@ public final class DramaStoryboardCompiler {
         if (!StringUtils.hasText(narrative)) {
             return "";
         }
-        int marker = lastSayMarker(narrative);
-        String before = marker >= 0 ? narrative.substring(0, marker) : narrative;
-        String markerText = marker >= 0 ? narrative.substring(marker) : "";
-        String clause = before.replaceAll("[，。；、\\s]+$", "");
-        int cut = Math.max(clause.lastIndexOf('\n'),
-                Math.max(clause.lastIndexOf('，'), Math.max(clause.lastIndexOf('。'), clause.lastIndexOf('；'))));
-        String tail = (cut >= 0 ? clause.substring(cut + 1) : clause).trim();
-        if (markerText.startsWith("旁白") || tail.startsWith("旁白")) {
-            return "旁白";
+        SpeechHit hit = lastSpeechHit(narrative);
+        if (hit == null) {
+            return nearestSpeakerAt(narrative);
         }
-        String name = atName(tail);
-        if (!StringUtils.hasText(name)) {
-            return "";
+        if (hit.offScreen()) {
+            String marker = narrative.substring(hit.markerStart(), Math.min(narrative.length(), hit.markerStart() + 6));
+            if (marker.startsWith("旁白")) {
+                return "旁白";
+            }
+            String name = nearestSpeakerAt(narrative.substring(0, hit.markerStart()));
+            return StringUtils.hasText(name) ? name + "（画外音）" : "";
         }
-        if (markerText.contains("画外音") || tail.contains("画外音")) {
-            return name + "（画外音）";
-        }
-        return name;
+        return nearestSpeakerAt(narrative.substring(0, hit.markerStart()));
     }
 
-    private static int lastSayMarker(String narrative) {
-        Matcher matcher = SAY_MARK.matcher(narrative);
-        int start = -1;
-        while (matcher.find()) {
-            start = matcher.start();
+    /** 冒号前最近一个带 {@code @} 的分句里，取开头那个名字。说话动作本身可以没有 {@code @}。 */
+    private static String nearestSpeakerAt(String before) {
+        if (!StringUtils.hasText(before)) {
+            return "";
         }
-        return start;
+        String clause = before.replaceAll("[，。；、\\s]+$", "");
+        int end = clause.length();
+        while (end > 0) {
+            int cut = Math.max(clause.lastIndexOf('\n', end - 1),
+                    Math.max(clause.lastIndexOf('，', end - 1),
+                            Math.max(clause.lastIndexOf('。', end - 1), clause.lastIndexOf('；', end - 1))));
+            String name = atName(clause.substring(cut + 1, end).trim());
+            if (StringUtils.hasText(name)) {
+                return name;
+            }
+            if (cut < 0) {
+                break;
+            }
+            end = cut;
+        }
+        return "";
+    }
+
+    /** 冒号前是「愤怒地说」「愤怒地问」时，把闭集情绪写回台词字段。 */
+    private static String emotionAdverbBefore(String narrative) {
+        SpeechHit hit = lastSpeechHit(narrative);
+        if (hit == null || hit.offScreen() || !StringUtils.hasText(narrative)) {
+            return null;
+        }
+        String before = narrative.substring(0, hit.markerStart()).replaceAll("[\\s，。；、]+$", "");
+        Matcher matcher = EMOTION_ADVERB.matcher(before);
+        int at = -1;
+        String emotion = null;
+        while (matcher.find()) {
+            at = matcher.start();
+            emotion = matcher.group(1);
+        }
+        if (emotion == null || at < 0) {
+            return null;
+        }
+        String after = before.substring(at + emotion.length() + 1);
+        if (!after.isEmpty() && speechVerbEnding(after) == null) {
+            return null;
+        }
+        if (!after.isEmpty() && !after.equals(speechVerbEnding(after))) {
+            return null;
+        }
+        return DramaDialogueSpeakers.sanitizeEmotion(emotion);
     }
 
     /**
-     * 角色「说：」后面的口播用中文引号标出台词。旁白、画外音和旧「台词：」不加引号。
-     * 已经包过一层的不再套。
+     * 角色口播用中文引号标出台词。旁白、画外音和旧「台词：」不加引号。
+     * 已经包过一层的不再套。没有引号的旧「说：」仍补上引号。
      */
     public static String quoteSpokenLines(String text) {
         return rewriteSaySpeech(text, true);
     }
 
-    /** 去掉「说：」后的外层中文引号，供指纹和台词框使用。 */
+    /** 去掉口播外层中文引号，供指纹和台词框使用。 */
     private static String unquoteSpokenLines(String text) {
         return rewriteSaySpeech(text, false);
     }
@@ -2004,22 +2146,27 @@ public final class DramaStoryboardCompiler {
         if (!StringUtils.hasText(text)) {
             return text == null ? "" : text;
         }
-        List<SaySlot> slots = saySlots(text);
-        if (slots.isEmpty()) {
+        List<SpeechHit> hits = absoluteSpeechHits(text);
+        if (hits.isEmpty()) {
             return text;
         }
         StringBuilder out = new StringBuilder();
         int cursor = 0;
-        for (SaySlot slot : slots) {
-            out.append(text, cursor, slot.markerEnd());
-            String marker = text.substring(slot.markerStart(), slot.markerEnd());
-            String speech = text.substring(slot.markerEnd(), slot.speechEnd());
-            if (isCharacterSay(marker)) {
-                out.append(quote ? quoteSpeech(speech) : unquoteSpeech(speech));
-            } else {
+        for (SpeechHit hit : hits) {
+            String speech = text.substring(hit.contentStart(), Math.min(hit.contentEnd(), text.length()));
+            if (quote) {
+                out.append(text, cursor, hit.contentStart());
+                out.append(hit.needsQuotes() ? quoteSpeech(speech) : speech);
+                cursor = hit.contentEnd();
+            } else if (hit.quoteOpen() >= 0) {
+                out.append(text, cursor, hit.quoteOpen());
                 out.append(speech);
+                cursor = hit.resume();
+            } else {
+                out.append(text, cursor, hit.contentStart());
+                out.append(unquoteSpeech(speech));
+                cursor = hit.contentEnd();
             }
-            cursor = slot.speechEnd();
         }
         if (cursor < text.length()) {
             out.append(text.substring(cursor));
@@ -2027,16 +2174,9 @@ public final class DramaStoryboardCompiler {
         return out.toString();
     }
 
-    private static boolean isCharacterSay(String marker) {
-        return marker != null && marker.stripLeading().startsWith("说");
-    }
-
     private static boolean precededBySay(String narrative) {
-        if (!StringUtils.hasText(narrative)) {
-            return false;
-        }
-        int marker = lastSayMarker(narrative);
-        return marker >= 0 && isCharacterSay(narrative.substring(marker));
+        SpeechHit hit = lastSpeechHit(narrative);
+        return hit != null && !hit.offScreen();
     }
 
     private static String quoteSpeech(String speech) {
@@ -2352,7 +2492,21 @@ public final class DramaStoryboardCompiler {
     private record LabelHit(int start, int end, String name) {
     }
 
-    private record SaySlot(int markerStart, int markerEnd, int speechEnd) {
+    private record SaySlot(int markerStart, int contentStart, int contentEnd, int resume) {
+    }
+
+    /**
+     * 一句口播。{@code contentStart}/{@code contentEnd} 是引号内或旧无引号「说：」后的正文。
+     * {@code quoteOpen} 为开引号下标；没有引号时为 -1。{@code resume} 停在闭引号之后，便于同一行继续找下一句。
+     */
+    private record SpeechHit(
+            int markerStart,
+            int quoteOpen,
+            int contentStart,
+            int contentEnd,
+            int resume,
+            boolean needsQuotes,
+            boolean offScreen) {
     }
 
     private static List<TextSpan> splitSpans(String text) {
@@ -2403,31 +2557,126 @@ public final class DramaStoryboardCompiler {
         if (text == null || text.isEmpty()) {
             return spans;
         }
-        Matcher matcher = SAY_MARK.matcher(text);
-        int cursor = 0;
-        boolean found = false;
-        while (matcher.find(cursor)) {
-            found = true;
-            int speechStart = matcher.end();
-            int speechEnd = text.indexOf('\n', speechStart);
-            if (speechEnd < 0) {
-                speechEnd = text.length();
-            }
-            if (speechStart > cursor) {
-                spans.add(new TextSpan(false, text.substring(cursor, speechStart)));
-            }
-            if (speechEnd > speechStart) {
-                spans.add(new TextSpan(true, text.substring(speechStart, speechEnd)));
-            }
-            cursor = speechEnd;
-        }
-        if (!found) {
+        List<SpeechHit> hits = findSpeechHits(text);
+        if (hits.isEmpty()) {
             spans.add(new TextSpan(false, text));
             return spans;
+        }
+        int cursor = 0;
+        for (SpeechHit hit : hits) {
+            if (hit.contentStart() > cursor) {
+                spans.add(new TextSpan(false, text.substring(cursor, hit.contentStart())));
+            }
+            if (hit.contentEnd() > hit.contentStart()) {
+                spans.add(new TextSpan(true, text.substring(hit.contentStart(), hit.contentEnd())));
+            }
+            cursor = hit.contentEnd();
         }
         if (cursor < text.length()) {
             spans.add(new TextSpan(false, text.substring(cursor)));
         }
         return spans;
+    }
+
+    /**
+     * 冒号后只允许空白、紧接着“或"时，引号内是台词。引号没关上就收到本行末尾。
+     * 旧稿继续认没有引号的「说：」，以及「旁白：」「（画外音）：」。
+     * 场景、镜头、站位这类冒号后面没有引号，不当台词。
+     */
+    private static List<SpeechHit> findSpeechHits(String text) {
+        List<SpeechHit> hits = new ArrayList<>();
+        if (!StringUtils.hasText(text)) {
+            return hits;
+        }
+        int from = 0;
+        while (from < text.length()) {
+            SpeechHit hit = nextSpeechHit(text, from);
+            if (hit == null) {
+                break;
+            }
+            hits.add(hit);
+            int next = Math.max(hit.resume(), hit.markerStart() + 1);
+            if (next <= from) {
+                break;
+            }
+            from = next;
+        }
+        return hits;
+    }
+
+    private static SpeechHit lastSpeechHit(String text) {
+        List<SpeechHit> hits = findSpeechHits(text);
+        return hits.isEmpty() ? null : hits.get(hits.size() - 1);
+    }
+
+    private static SpeechHit nextSpeechHit(String text, int from) {
+        Matcher legacy = LEGACY_SPEECH.matcher(text);
+        boolean foundLegacy = legacy.find(from);
+        int colonAt = indexOfColonBeforeQuote(text, from);
+        if (foundLegacy && (colonAt < 0 || legacy.start() <= colonAt)) {
+            return hitFromLegacy(text, legacy.start(), legacy.end(), legacy.group());
+        }
+        if (colonAt >= 0) {
+            return hitFromColonQuote(text, colonAt);
+        }
+        return null;
+    }
+
+    private static SpeechHit hitFromLegacy(String text, int start, int end, String mark) {
+        boolean offScreen = mark.startsWith("旁白") || mark.contains("画外音");
+        int limit = lineEnd(text, end);
+        if (offScreen) {
+            return new SpeechHit(start, -1, end, limit, limit, false, true);
+        }
+        int openAt = end;
+        while (openAt < limit && (text.charAt(openAt) == ' ' || text.charAt(openAt) == '\t')) {
+            openAt++;
+        }
+        if (openAt < limit && (text.charAt(openAt) == '“' || text.charAt(openAt) == '"')) {
+            return quotedHit(text, start, openAt, limit, false);
+        }
+        return new SpeechHit(start, -1, end, limit, limit, true, false);
+    }
+
+    private static SpeechHit hitFromColonQuote(String text, int colonAt) {
+        int openAt = colonAt + 1;
+        int limit = lineEnd(text, colonAt);
+        while (openAt < limit && (text.charAt(openAt) == ' ' || text.charAt(openAt) == '\t')) {
+            openAt++;
+        }
+        return quotedHit(text, colonAt, openAt, limit, false);
+    }
+
+    private static SpeechHit quotedHit(String text, int markerStart, int openAt, int limit, boolean offScreen) {
+        char open = text.charAt(openAt);
+        char closeChar = open == '“' ? '”' : '"';
+        int close = text.indexOf(closeChar, openAt + 1);
+        if (close < 0 || close > limit) {
+            return new SpeechHit(markerStart, openAt, openAt + 1, limit, limit, false, offScreen);
+        }
+        return new SpeechHit(markerStart, openAt, openAt + 1, close, close + 1, false, offScreen);
+    }
+
+    private static int indexOfColonBeforeQuote(String text, int from) {
+        for (int i = Math.max(from, 0); i < text.length(); i++) {
+            char value = text.charAt(i);
+            if (value != '：' && value != ':') {
+                continue;
+            }
+            int openAt = i + 1;
+            while (openAt < text.length() && (text.charAt(openAt) == ' ' || text.charAt(openAt) == '\t')) {
+                openAt++;
+            }
+            if (openAt < text.length() && text.charAt(openAt) != '\n'
+                    && (text.charAt(openAt) == '“' || text.charAt(openAt) == '"')) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int lineEnd(String text, int from) {
+        int lineEnd = text.indexOf('\n', from);
+        return lineEnd < 0 ? text.length() : lineEnd;
     }
 }
