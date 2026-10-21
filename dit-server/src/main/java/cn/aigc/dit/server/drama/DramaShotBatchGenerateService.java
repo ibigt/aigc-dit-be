@@ -92,7 +92,7 @@ public class DramaShotBatchGenerateService {
         boolean concurrent = resolveConcurrent(mode, chainPrevTail, i2vFrame);
 
         List<DramaShot> selected = resolveSelectedShots(episodeId, req.getShotIds());
-        assertSameChapter(selected);
+        assertChaptersPresent(selected);
         if (!concurrent) {
             assertSequentialDeps(selected, chainPrevTail || I2V_FRAME_PREV_TAIL.equals(i2vFrame));
         }
@@ -510,16 +510,11 @@ public class DramaShotBatchGenerateService {
         return selected;
     }
 
-    private void assertSameChapter(List<DramaShot> shots) {
-        Long chapterId = null;
+    /** 允许跨场次批量出片；仅要求每个分镜都有场次（applyBatchSettings 按场次计算场首镜）。 */
+    private void assertChaptersPresent(List<DramaShot> shots) {
         for (DramaShot shot : shots) {
             if (shot.getChapterId() == null) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "分镜缺少场次信息");
-            }
-            if (chapterId == null) {
-                chapterId = shot.getChapterId();
-            } else if (!chapterId.equals(shot.getChapterId())) {
-                throw new BizException(ErrorCode.BAD_REQUEST, "不能跨场次选择分镜");
             }
         }
     }

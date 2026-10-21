@@ -127,7 +127,7 @@ class DramaShotBatchGenerateServiceTest {
     }
 
     @Test
-    void rejectsCrossChapterSelection() {
+    void allowsCrossChapterSelection() {
         storedShots.add(shot(201L, 1, 90L));
         storedShots.add(shot(202L, 2, 91L));
 
@@ -136,8 +136,24 @@ class DramaShotBatchGenerateServiceTest {
         req.setVideoGenerateMode("r2v");
         req.setChainPrevTail(false);
 
+        DramaShotBatchGenerateResp resp = service.create(31L, req);
+
+        assertTrue(Boolean.TRUE.equals(resp.getConcurrent()));
+        assertEquals(DramaShotBatchGenerateService.STATUS_RUNNING, resp.getStatus());
+        verify(storyboardService, times(2)).generateShotForBatch(anyLong());
+    }
+
+    @Test
+    void rejectsShotWithoutChapter() {
+        storedShots.add(shot(201L, 1, null));
+
+        DramaShotBatchGenerateReq req = new DramaShotBatchGenerateReq();
+        req.setShotIds(List.of(201L));
+        req.setVideoGenerateMode("r2v");
+        req.setChainPrevTail(false);
+
         BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
-        assertTrue(error.getMessage().contains("跨场次"));
+        assertTrue(error.getMessage().contains("场次"));
         verify(storyboardService, never()).generateShotForBatch(anyLong());
     }
 

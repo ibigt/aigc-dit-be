@@ -12,7 +12,7 @@ import java.util.List;
 public class DramaShotBatchGenerateReq {
 
     @NotEmpty
-    @Schema(description = "选中的分镜 id；须同一场次")
+    @Schema(description = "选中的分镜 id；可跨场次，每个分镜须已归属场次")
     private List<Long> shotIds;
 
     @NotNull
