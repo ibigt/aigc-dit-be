@@ -153,6 +153,59 @@ class DramaAssetServiceTest {
     }
 
     @Test
+    void extractReusesExistingSeriesAssetInsteadOfInsertingAnotherCopy() {
+        DramaEpisode episode = ownedEpisode();
+        episode.setId(32L);
+        episode.setEpisodeNumber(2);
+        episode.setStatus(DramaContract.STATUS_LOCKED);
+        episode.setScript(ScriptDocs.toMap(sampleDoc()));
+        when(episodeMapper.selectById(32L)).thenReturn(episode);
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+        DramaAsset luo = new DramaAsset();
+        luo.setId(9L);
+        luo.setSeriesId(21L);
+        luo.setEpisodeId(31L);
+        luo.setUserId(7L);
+        luo.setName("洛白");
+        luo.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        luo.setStateTag(DramaContract.STATE_TAG_BASE);
+        luo.setStatus(DramaContract.STATUS_LOCKED);
+        when(assetMapper.selectList(any())).thenReturn(List.of(luo));
+
+        service.extractFromScript(32L, false);
+
+        ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
+        verify(assetMapper, atLeastOnce()).insert(captor.capture());
+        assertTrue(captor.getAllValues().stream().noneMatch(item -> "洛白".equals(item.getName())));
+        assertTrue(captor.getAllValues().stream().anyMatch(item -> "古铜怀表".equals(item.getName())));
+        verify(assetMapper, never()).updateById(luo);
+    }
+
+    @Test
+    void createRejectsDuplicateNameInTheSameCategory() {
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        DramaAsset luo = new DramaAsset();
+        luo.setId(9L);
+        luo.setSeriesId(21L);
+        luo.setEpisodeId(11L);
+        luo.setName("洛白");
+        luo.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        luo.setStateTag(DramaContract.STATE_TAG_BASE);
+        when(assetMapper.selectList(any())).thenReturn(List.of(luo));
+        cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq req = new cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq();
+        req.setName(" 洛白 ");
+        req.setType("角色");
+
+        BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
+
+        assertEquals("该角色已经存在", error.getMessage());
+        assertEquals("该道具已经存在", DramaAssetService.duplicateAssetMessage(DramaContract.ASSET_TYPE_PROP));
+        assertEquals("该场景已经存在", DramaAssetService.duplicateAssetMessage(DramaContract.ASSET_TYPE_SCENE));
+        verify(assetMapper, never()).insert(any(DramaAsset.class));
+    }
+
+    @Test
     void llmAssetExtractionFallsBackToDeterministicSkeletonWhenTextServiceIsMissing() {
         DramaEpisode episode = ownedEpisode();
         episode.setStatus(DramaContract.STATUS_LOCKED);

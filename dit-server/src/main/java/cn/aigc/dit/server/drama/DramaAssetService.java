@@ -166,7 +166,7 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "未能从剧本抽出资产，请手工新增");
         }
         Long userId = UserContext.requireUserId();
-        Map<String, DramaAsset> existing = existingByKey(episode.getId());
+        Map<String, DramaAsset> existing = existingBySeries(episode.getSeriesId());
         for (AssetDraftList.AssetDraft draft : drafts.getAssets()) {
             upsertDraft(episode, userId, existing, draft);
         }
@@ -183,6 +183,9 @@ public class DramaAssetService {
         if (!StringUtils.hasText(req.getName()) || !StringUtils.hasText(req.getType())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请填写资产名称与类型");
         }
+        String type = normalizeType(req.getType());
+        String name = req.getName().trim();
+        rejectDuplicateName(episode.getSeriesId(), type, name);
         DramaAsset asset = new DramaAsset();
         asset.setSeriesId(episode.getSeriesId());
         asset.setEpisodeId(episode.getId());
@@ -547,6 +550,7 @@ public class DramaAssetService {
         String key = uniqueKey(type, name, stateTag);
         DramaAsset current = existing.get(key);
         if (current != null) {
+            // 其他章节已经有同名资产时直接复用，不另插一行。
             if (DramaContract.STATUS_LOCKED.equals(current.getStatus())) {
                 return;
             }
@@ -915,14 +919,47 @@ public class DramaAssetService {
         return series;
     }
 
-    private Map<String, DramaAsset> existingByKey(Long episodeId) {
+    /** 整部剧范围内按类型、名称、状态认资产。已有多条时留最早的那条。 */
+    private Map<String, DramaAsset> existingBySeries(Long seriesId) {
         Map<String, DramaAsset> map = new LinkedHashMap<>();
+        if (seriesId == null) {
+            return map;
+        }
         List<DramaAsset> assets = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
-                .eq(DramaAsset::getEpisodeId, episodeId));
+                .eq(DramaAsset::getSeriesId, seriesId)
+                .orderByAsc(DramaAsset::getId));
         for (DramaAsset asset : assets) {
-            map.put(uniqueKey(asset.getType(), asset.getName(), asset.getStateTag()), asset);
+            map.putIfAbsent(uniqueKey(asset.getType(), asset.getName(), asset.getStateTag()), asset);
         }
         return map;
+    }
+
+    /** 新增时同一分类下名称已存在则拒绝，避免再插一条。提取剧本仍复用已有记录。 */
+    private void rejectDuplicateName(Long seriesId, String type, String name) {
+        if (seriesId == null || !StringUtils.hasText(name)) {
+            return;
+        }
+        String wanted = name.trim();
+        boolean exists = existingBySeries(seriesId).values().stream()
+                .anyMatch(asset -> asset != null
+                        && type.equals(asset.getType())
+                        && wanted.equals(asset.getName() == null ? "" : asset.getName().trim()));
+        if (exists) {
+            throw new BizException(ErrorCode.BAD_REQUEST, duplicateAssetMessage(type));
+        }
+    }
+
+    static String duplicateAssetMessage(String type) {
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
+            return "该角色已经存在";
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return "该道具已经存在";
+        }
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return "该场景已经存在";
+        }
+        return "该资产已经存在";
     }
 
     /** 按生成记录上的任务号反查当时的模型展示名，键是 gen_task.id。 */
@@ -1158,7 +1195,8 @@ public class DramaAssetService {
             return null;
         }
         List<DramaAsset> mates = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
-                .eq(DramaAsset::getEpisodeId, asset.getEpisodeId())
+                .eq(asset.getSeriesId() != null, DramaAsset::getSeriesId, asset.getSeriesId())
+                .eq(asset.getSeriesId() == null, DramaAsset::getEpisodeId, asset.getEpisodeId())
                 .eq(DramaAsset::getType, DramaContract.ASSET_TYPE_CHARACTER)
                 .eq(DramaAsset::getName, baseName));
         for (DramaAsset mate : mates) {

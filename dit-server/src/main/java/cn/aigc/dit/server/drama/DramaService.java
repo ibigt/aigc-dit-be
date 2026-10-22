@@ -208,6 +208,7 @@ public class DramaService {
         if (remaining <= 1) {
             throw new BizException(ErrorCode.BAD_REQUEST, "至少保留一集，无法删除最后一集");
         }
+        rehomeSharedAssets(episode);
         List<String> mediaKeys = mediaRetention.collectEpisodeMediaKeys(episode.getUserId(), episode.getId());
         creationService.removeDramaMedia(episode.getUserId(), mediaKeys);
         episodeMapper.deleteById(episode.getId());
@@ -576,6 +577,51 @@ public class DramaService {
             throw new BizException(ErrorCode.BAD_REQUEST, "剧本生成服务尚未就绪");
         }
         return svc;
+    }
+
+    /**
+     * 删章节前把只挂在这一章上的资产改挂到仍保留的章节，避免级联删掉其他章正在复用的那一份。
+     * 保留章节里已有同名资产时不搬，避免撞上按章节的唯一约束。
+     */
+    private void rehomeSharedAssets(DramaEpisode episode) {
+        List<DramaEpisode> others = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
+                .eq(DramaEpisode::getSeriesId, episode.getSeriesId())
+                .ne(DramaEpisode::getId, episode.getId())
+                .orderByAsc(DramaEpisode::getEpisodeNumber)
+                .orderByAsc(DramaEpisode::getId));
+        if (others == null || others.isEmpty()) {
+            return;
+        }
+        DramaEpisode keeper = others.get(0);
+        List<DramaAsset> assets = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getEpisodeId, episode.getId()));
+        if (assets == null) {
+            return;
+        }
+        for (DramaAsset asset : assets) {
+            if (asset == null) {
+                continue;
+            }
+            DramaAsset clash = assetMapper.selectOne(new LambdaQueryWrapper<DramaAsset>()
+                    .eq(DramaAsset::getEpisodeId, keeper.getId())
+                    .eq(DramaAsset::getType, asset.getType())
+                    .eq(DramaAsset::getName, asset.getName())
+                    .eq(DramaAsset::getStateTag, asset.getStateTag())
+                    .last("LIMIT 1"));
+            if (clash == null) {
+                asset.setEpisodeId(keeper.getId());
+                assetMapper.updateById(asset);
+                continue;
+            }
+            if (!StringUtils.hasText(clash.getImageStorageKey()) && StringUtils.hasText(asset.getImageStorageKey())) {
+                clash.setImageStorageKey(asset.getImageStorageKey());
+                clash.setImageAssetId(asset.getImageAssetId());
+                assetMapper.updateById(clash);
+                asset.setImageStorageKey(null);
+                asset.setImageAssetId(null);
+                assetMapper.updateById(asset);
+            }
+        }
     }
 
     /**
