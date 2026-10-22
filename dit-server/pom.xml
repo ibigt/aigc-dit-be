@@ -96,6 +96,12 @@
             <artifactId>alipay-sdk-java</artifactId>
             <version>4.40.272.ALL</version>
         </dependency>
+        <!-- 微信支付官方 SDK v3（Native 扫码 + 回调验签解密） -->
+        <dependency>
+            <groupId>com.github.wechatpay-apiv3</groupId>
+            <artifactId>wechatpay-java</artifactId>
+            <version>0.2.17</version>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

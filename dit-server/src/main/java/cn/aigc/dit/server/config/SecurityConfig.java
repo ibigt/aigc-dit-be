@@ -29,6 +29,8 @@ public class SecurityConfig {
             "/api/version",
             "/api/auth/login",
             "/api/auth/register",
+            // 支付渠道异步回调：微信/支付宝服务器调用，走签名验证而非登录态
+            "/api/credits/recharge/*/notify",
             "/actuator/health",
             "/actuator/health/**",
             "/actuator/info",

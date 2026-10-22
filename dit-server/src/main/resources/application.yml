@@ -207,3 +207,16 @@ pay:
     merchant-private-key: ${ALIPAY_PRIVATE_KEY:}
     alipay-public-key: ${ALIPAY_PUBLIC_KEY:}
     gateway: ${ALIPAY_GATEWAY:https://openapi-sandbox.dl.alipaydev.com/gateway.do}
+    # 公网 HTTPS 回调地址（可选）；未配置时依赖查单兜底入账
+    notify-url: ${ALIPAY_NOTIFY_URL:}
+  wechat:
+    # 微信支付 Native 扫码：enabled 时注册 WeChatChannel。无沙箱，联调用真实商户号小额支付后手动退款
+    enabled: ${WXPAY_ENABLED:false}
+    mch-id: ${WXPAY_MCH_ID:}
+    app-id: ${WXPAY_APP_ID:}
+    merchant-serial-no: ${WXPAY_MERCHANT_SERIAL_NO:}
+    # 商户 API 证书私钥文件（apiclient_key.pem）路径
+    private-key-path: ${WXPAY_PRIVATE_KEY_PATH:}
+    api-v3-key: ${WXPAY_API_V3_KEY:}
+    # Native 下单必填：公网 HTTPS 回调地址，如 https://your-domain/api/credits/recharge/wechat/notify
+    notify-url: ${WXPAY_NOTIFY_URL:}

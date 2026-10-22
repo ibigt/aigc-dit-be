@@ -174,6 +174,23 @@ public class CreditService {
                 "充值 ¥" + order.getAmountYuan() + " · " + channelLabel(order.getPaymentChannel()) + remarkSuffix);
     }
 
+    /** 渠道异步回调入账：无用户上下文（微信/支付宝服务器调用），金额不符抛异常，幂等可重放。 */
+    public void settleByNotify(String orderNo, String providerTradeNo, Integer expectedAmountFen, String remarkSuffix) {
+        RechargeOrder order = rechargeOrderMapper.selectOne(new LambdaQueryWrapper<RechargeOrder>()
+                .eq(RechargeOrder::getOrderNo, orderNo)
+                .last("LIMIT 1"));
+        if (order == null) {
+            throw new BizException(ErrorCode.NOT_FOUND, "充值订单不存在：" + orderNo);
+        }
+        if (expectedAmountFen != null && expectedAmountFen != order.getAmountYuan() * 100) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "回调金额与订单不符：" + orderNo);
+        }
+        if (!"PAYING".equals(order.getStatus())) {
+            return; // 已入账（重复通知）或已取消，幂等返回
+        }
+        settleOrder(order, providerTradeNo, remarkSuffix);
+    }
+
     private RechargeOrder findOrderByRequest(Long userId, String requestId) {
         return rechargeOrderMapper.selectOne(new LambdaQueryWrapper<RechargeOrder>()
                 .eq(RechargeOrder::getUserId, userId)

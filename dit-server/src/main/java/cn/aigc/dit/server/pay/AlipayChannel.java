@@ -30,12 +30,15 @@ public class AlipayChannel implements PaymentChannel {
     private static final Set<String> PAID_STATUSES = Set.of("TRADE_SUCCESS", "TRADE_FINISHED");
 
     private final AlipayClient client;
+    private final String notifyUrl;
 
     public AlipayChannel(
             @Value("${pay.alipay.app-id}") String appId,
             @Value("${pay.alipay.merchant-private-key}") String merchantPrivateKey,
             @Value("${pay.alipay.alipay-public-key}") String alipayPublicKey,
-            @Value("${pay.alipay.gateway}") String gateway) {
+            @Value("${pay.alipay.gateway}") String gateway,
+            @Value("${pay.alipay.notify-url:}") String notifyUrl) {
+        this.notifyUrl = notifyUrl;
         this.client = new DefaultAlipayClient(gateway, appId, merchantPrivateKey, "json", "UTF-8", alipayPublicKey, "RSA2");
     }
 
@@ -47,6 +50,9 @@ public class AlipayChannel implements PaymentChannel {
     @Override
     public String createQrCode(RechargeOrder order) {
         AlipayTradePrecreateRequest request = new AlipayTradePrecreateRequest();
+        if (notifyUrl != null && !notifyUrl.isBlank()) {
+            request.setNotifyUrl(notifyUrl); // 配了公网回调地址则推送通知，未配仍可靠查单兜底
+        }
         request.setBizContent("{\"out_trade_no\":\"" + order.getOrderNo() + "\","
                 + "\"total_amount\":\"" + order.getAmountYuan() + ".00\","
                 + "\"subject\":\"积分充值 " + order.getCreditAmount() + " 积分\"}");
