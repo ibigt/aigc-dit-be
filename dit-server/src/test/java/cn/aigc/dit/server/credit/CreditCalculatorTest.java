@@ -27,6 +27,30 @@ class CreditCalculatorTest {
     }
 
     @Test
+    void tieredVideoPriceOverridesResolutionMultiplier() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "秒",
+                "sale", Map.of("output", "12 积分", "tiers", Map.of("768P", "5", "2K", "20")));
+        // 分档价直接生效：768P=5/s → 25，2K=20/s → 100
+        assertEquals(25L, CreditCalculator.calculate(pricing, "video", "768P", null, 5, 1));
+        assertEquals(100L, CreditCalculator.calculate(pricing, "video", "2K", null, 5, 1));
+        // 缺档（4K 未配）回退基准 × 全局倍率：12 * 2.5 * 5 = 150
+        assertEquals(150L, CreditCalculator.calculate(pricing, "video", "4K", null, 5, 1));
+    }
+
+    @Test
+    void tieredImagePriceStillAppliesQualityMultiplier() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "张",
+                "sale", Map.of("output", "3 积分", "tiers", Map.of("2K", "6 积分")));
+        assertEquals(6L, CreditCalculator.calculate(pricing, "image", "2K", "Low", null, 1));
+        // 分档价上仍叠清晰度：6 * 2(High) = 12
+        assertEquals(12L, CreditCalculator.calculate(pricing, "image", "2K", "High", null, 1));
+        // 缺档（4K）回退基准 × 分辨率 × 清晰度：3 * 4 * 2 = 24
+        assertEquals(24L, CreditCalculator.calculate(pricing, "image", "4K", "High", null, 1));
+    }
+
+    @Test
     void imageUsesResolutionAndQuality() {
         Map<String, Object> pricing = Map.of(
                 "unit", "张",

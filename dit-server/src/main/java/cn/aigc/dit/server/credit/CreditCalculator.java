@@ -25,17 +25,22 @@ public final class CreditCalculator {
                 ? (ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
                     : ModelCategory.AUDIO.equalsIgnoreCase(category) ? 3D : 2D)
                 : Math.max(0D, configuredPrice);
-        double multiplier = parameterMultiplier(category, resolution, quality);
-        double quantity = unitPrice;
+        String res = resolution == null ? "" : resolution.toUpperCase(Locale.ROOT);
+        Double tierPrice = tierPrice(pricing, res);
+        // 分档价优先：有该档价格直接用，缺档回退 基准价 × 分辨率倍率；图片清晰度倍率始终叠加。
+        double perUnit = tierPrice == null
+                ? unitPrice * resolutionMultiplier(category, res)
+                : Math.max(0D, tierPrice);
+        double quantity = perUnit;
         if (ModelCategory.VIDEO.equalsIgnoreCase(category) && isPerSecond(pricing)) {
             int duration = durationSec == null ? 1 : Math.max(1, durationSec);
-            quantity = unitPrice * duration;
+            quantity = perUnit * duration;
         }
         if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
             quantity = unitPrice * characterUnits(pricing, durationSec);
         }
         int safeCopies = Math.min(4, Math.max(1, copies));
-        return (long) Math.ceil(quantity * multiplier * safeCopies);
+        return (long) Math.ceil(quantity * qualityMultiplier(category, quality) * safeCopies);
     }
 
     /**
@@ -72,6 +77,10 @@ public final class CreditCalculator {
 
     static double parameterMultiplier(String category, String resolution, String quality) {
         String res = resolution == null ? "" : resolution.toUpperCase(Locale.ROOT);
+        return resolutionMultiplier(category, res) * qualityMultiplier(category, quality);
+    }
+
+    static double resolutionMultiplier(String category, String res) {
         if (ModelCategory.VIDEO.equalsIgnoreCase(category)) {
             return switch (res) {
                 case "480P" -> 0.5;
@@ -83,18 +92,35 @@ public final class CreditCalculator {
                 default -> 1.0;
             };
         }
-        double resMul = switch (res) {
+        return switch (res) {
             case "2K" -> 2.0;
             case "4K" -> 4.0;
             default -> 1.0;
         };
+    }
+
+    static double qualityMultiplier(String category, String quality) {
+        if (!ModelCategory.IMAGE.equalsIgnoreCase(category)) {
+            return 1.0;
+        }
         String q = quality == null ? "LOW" : quality.toUpperCase(Locale.ROOT);
-        double qualityMul = switch (q) {
+        return switch (q) {
             case "MEDIUM" -> 1.5;
             case "HIGH" -> 2.0;
             default -> 1.0;
         };
-        return resMul * qualityMul;
+    }
+
+    /** sale.tiers 中该分辨率档的分档价；无则返回 null（回退基准价 × 全局倍率）。 */
+    static Double tierPrice(Map<String, Object> pricing, String resolution) {
+        if (pricing == null || resolution == null || resolution.isEmpty()) {
+            return null;
+        }
+        Object sale = pricing.get("sale");
+        if (sale instanceof Map<?, ?> saleMap && saleMap.get("tiers") instanceof Map<?, ?> tiers) {
+            return parseAmount(tiers.get(resolution));
+        }
+        return null;
     }
 
     static Double saleOutput(Map<String, Object> pricing) {
