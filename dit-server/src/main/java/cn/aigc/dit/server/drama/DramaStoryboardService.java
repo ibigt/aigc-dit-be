@@ -1165,7 +1165,7 @@ public class DramaStoryboardService {
         if (episodeId == null || assetId == null) {
             return;
         }
-        for (DramaShot shot : listShots(episodeId)) {
+        for (DramaShot shot : listSeriesShots(episodeId)) {
             List<Long> ids = idsOf(shot.getReferenceAssetIds());
             if (!ids.contains(assetId)) {
                 continue;
@@ -1191,7 +1191,7 @@ public class DramaStoryboardService {
         }
         Map<Long, DramaAsset> assets = assetsById(episodeId);
         String prefix = stylePrefix(requireEpisode(episodeId).getSeriesId());
-        for (DramaShot shot : listShots(episodeId)) {
+        for (DramaShot shot : listSeriesShots(episodeId)) {
             List<Long> references = idsOf(shot.getReferenceAssetIds());
             if (!references.contains(assetId)) {
                 continue;
@@ -1225,6 +1225,8 @@ public class DramaStoryboardService {
         List<String> assetNames = assets.stream()
                 .map(DramaAsset::getName)
                 .filter(StringUtils::hasText)
+                .map(String::trim)
+                .distinct()
                 .toList();
         ShotDraftList drafts = resolveDrafts(
                 episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec, visualStyleOf(series));
@@ -3055,9 +3057,26 @@ public class DramaStoryboardService {
     }
 
     private List<DramaAsset> listAssets(Long episodeId) {
+        DramaEpisode episode = episodeId == null ? null : episodeMapper.selectById(episodeId);
+        if (episode == null || episode.getSeriesId() == null) {
+            return assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                    .eq(DramaAsset::getEpisodeId, episodeId)
+                    .orderByAsc(DramaAsset::getId));
+        }
         return assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
-                .eq(DramaAsset::getEpisodeId, episodeId)
+                .eq(DramaAsset::getSeriesId, episode.getSeriesId())
                 .orderByAsc(DramaAsset::getId));
+    }
+
+    private List<DramaShot> listSeriesShots(Long episodeId) {
+        DramaEpisode episode = episodeMapper.selectById(episodeId);
+        if (episode == null || episode.getSeriesId() == null) {
+            return listShots(episodeId);
+        }
+        return shotMapper.selectList(new LambdaQueryWrapper<DramaShot>()
+                .eq(DramaShot::getSeriesId, episode.getSeriesId())
+                .orderByAsc(DramaShot::getEpisodeId)
+                .orderByAsc(DramaShot::getShotIndex));
     }
 
     private Map<Long, DramaAsset> assetsById(Long episodeId) {

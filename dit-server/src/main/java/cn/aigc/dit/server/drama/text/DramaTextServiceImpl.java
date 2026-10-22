@@ -599,8 +599,10 @@ public class DramaTextServiceImpl implements DramaTextService {
                     picked.add(name.strip());
                 }
             }
-            if (StringUtils.hasText(scene.getLocation()) && allow.contains(scene.getLocation().strip())) {
-                picked.add(scene.getLocation().strip());
+            for (String location : DramaAssetDrafts.sceneAssetLocations(scene.getLocation())) {
+                if (allow.contains(location)) {
+                    picked.add(location);
+                }
             }
         }
         if (picked.isEmpty()) {

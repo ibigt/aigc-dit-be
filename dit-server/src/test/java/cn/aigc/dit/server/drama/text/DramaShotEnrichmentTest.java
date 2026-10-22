@@ -219,6 +219,33 @@ class DramaShotEnrichmentTest {
     }
 
     @Test
+    void acceptsCameraUpToSixtyFourCharacters() {
+        ShotDraftList list = new ShotDraftList();
+        ShotDraftList.ShotDraft shot = shot();
+        list.setShots(new ArrayList<>(List.of(shot)));
+
+        String camera = "中".repeat(60);
+        DramaShotEnrichment.ShotEnrichList accepted = enrich(
+                1, 2,
+                "洛白推开档案室的门，停步回身望向办公桌。",
+                "档案室一隅，铁柜森然，灯管嗡鸣。");
+        accepted.getShots().get(0).setCamera(camera);
+        assertEquals(3, DramaShotEnrichment.merge(list, accepted, ASSETS));
+        assertEquals(camera, shot.getCamera());
+
+        ShotDraftList rejectedList = new ShotDraftList();
+        ShotDraftList.ShotDraft rejected = shot();
+        rejectedList.setShots(new ArrayList<>(List.of(rejected)));
+        DramaShotEnrichment.ShotEnrichList tooLong = enrich(
+                1, 2,
+                "洛白推开档案室的门，停步回身望向办公桌。",
+                "档案室一隅，铁柜森然，灯管嗡鸣。");
+        tooLong.getShots().get(0).setCamera("中".repeat(65));
+        assertEquals(0, DramaShotEnrichment.merge(rejectedList, tooLong, ASSETS));
+        assertEquals(null, rejected.getCamera());
+    }
+
+    @Test
     void rejectsEditVerbsThatLookLikeAVideoEditTask() {
         ShotDraftList list = new ShotDraftList();
         ShotDraftList.ShotDraft shot = shot();

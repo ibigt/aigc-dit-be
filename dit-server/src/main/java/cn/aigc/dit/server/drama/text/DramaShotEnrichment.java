@@ -26,7 +26,7 @@ public final class DramaShotEnrichment {
     static final int MAX_BEAT_ACTION_LENGTH = 160;
     static final int MAX_BLOCKING_LENGTH = 120;
     static final int MAX_SCENE_LENGTH = 120;
-    static final int MAX_CAMERA_LENGTH = 48;
+    static final int MAX_CAMERA_LENGTH = 64;
     static final int MAX_AMBIANCE_LENGTH = 80;
 
     private DramaShotEnrichment() {

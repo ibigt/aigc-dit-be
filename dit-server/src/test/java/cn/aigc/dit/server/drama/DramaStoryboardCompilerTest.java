@@ -61,9 +61,12 @@ class DramaStoryboardCompilerTest {
         assertFalse(prompt.contains("出场：洛白、夏安、局长"));
         assertTrue(prompt.contains("参考图：<Picture 1>、<Picture 2> 为角色参考图；<Picture 3> 为道具参考图；<Picture 4> 为场景参考图。"));
         assertTrue(prompt.contains("Duration: 5 seconds"));
-        assertTrue(prompt.contains("对白执行："));
+        assertTrue(prompt.contains("Dialogue: 局长：洛老弟，别睡了。"));
+        assertTrue(prompt.contains("对白执行：" + DramaStoryboardCompiler.BEAT_LIP_SYNC));
         assertTrue(prompt.contains("只念台词正文，不念角色名和冒号"));
-        assertTrue(prompt.contains("角色“局长”逐字说出：“洛老弟，别睡了。”"));
+        assertFalse(prompt.contains("逐字说出"));
+        assertFalse(prompt.contains("对白表演"));
+        assertFalse(prompt.contains("以愤怒的语气"));
         assertFalse(prompt.contains("完整人物描述永不缩写"));
         assertFalse(prompt.contains("三视图"));
         assertFalse(prompt.contains("不要剧情场面"));
@@ -622,6 +625,7 @@ class DramaStoryboardCompilerTest {
                 镜头2：全景。环绕。接逐渐扩散。
                 怪物化作代码浪潮，圆形扑向@洛白，说：“不梦……还不梦！”
                 @洛白 说：“代码涌进……不对劲。”
+                环境声：不要配乐，只保留对白。
                 """.stripTrailing(), visible);
     }
 
@@ -676,6 +680,124 @@ class DramaStoryboardCompilerTest {
         assertTrue(visible.contains("站位：@洛白在病床旁。"));
         assertFalse(visible.contains("站位：@洛白在病床旁，@怀表"));
         assertTrue(visible.contains("@洛白 按下@怀表，说：“怀表开启。”"));
+    }
+
+    @Test
+    void visiblePromptShowsAmbianceAndMarksSilentShots() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("宴安站在殿门内。");
+        beats.setBeats(List.of(
+                beat("中景，中心构图，微仰", "宴安推门。", "从殿门进入", null),
+                beat("近景", "宴安停下。", "接推门", "宴安：这里有人来过。")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "殿内金色光柱", "推门", null, null, null, 8,
+                List.of("宴安"), 1, List.of(), null, "殿内回声", beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(shot, List.of("宴安"));
+
+        int first = visible.indexOf("镜头1：");
+        int second = visible.indexOf("镜头2：");
+        assertTrue(first >= 0 && first < second);
+        assertTrue(visible.substring(first, second).contains("本镜头无人开口。"));
+        assertFalse(visible.substring(second).contains("本镜头无人开口"));
+        assertTrue(visible.contains("镜头1：中景，中心构图，微仰。接从殿门进入。"));
+        assertTrue(visible.endsWith("环境声：殿内回声。不要配乐，只保留对白。"));
+        assertEquals(null, DramaStoryboardCompiler.extractDialogue(
+                visible.substring(first, second)));
+    }
+
+    @Test
+    void visiblePromptWeavesEmotionAndKeepsVariedSpeechVerbs() {
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("孙悟空在殿中。");
+        beats.setBeats(List.of(
+                beat("中景", "局长摔下档案。", "接进门", "局长（愤怒）：你给我站住！"),
+                beat("近景", "孙悟空低头合十，平静回应。", "接合十", "孙悟空：弟子，谨遵佛旨。"),
+                beat("特写", "孙悟空抬头，问。", "接抬头", "孙悟空（愤怒）：你敢？")));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "大雄宝殿", null, null, null, null, 12,
+                List.of("局长", "孙悟空"), 2, List.of(), null, null, beats);
+
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(shot, List.of("局长", "孙悟空"));
+
+        assertTrue(visible.contains("@局长 摔下档案，愤怒地说：“你给我站住！”"));
+        assertTrue(visible.contains("@孙悟空 低头合十，平静回应：“弟子，谨遵佛旨。”"));
+        assertFalse(visible.contains("平静回应，说："));
+        assertTrue(visible.contains("@孙悟空 抬头，愤怒地问：“你敢？”"));
+        assertEquals("""
+                局长（愤怒）：你给我站住！
+                孙悟空：弟子，谨遵佛旨。
+                孙悟空（愤怒）：你敢？""".stripTrailing(), DramaStoryboardCompiler.extractDialogue(visible));
+
+        String rewritten = DramaStoryboardCompiler.writeDialogueBack(
+                visible, "局长（愤怒）：别跑！\n孙悟空：弟子遵命。\n孙悟空（愤怒）：放肆！");
+        assertTrue(rewritten.contains("愤怒地说：“别跑！”"));
+        assertTrue(rewritten.contains("平静回应：“弟子遵命。”"));
+        assertTrue(rewritten.contains("愤怒地问：“放肆！”"));
+        assertFalse(rewritten.contains("你给我站住"));
+
+        String extra = DramaStoryboardCompiler.writeDialogueBack(
+                "镜头1：中景。\n@局长 说：“站住。”",
+                "局长：站住。\n洛白（愤怒）：你给我站住！");
+        assertTrue(extra.contains("@洛白 愤怒地说：“你给我站住！”"));
+        assertTrue(extra.contains("@局长 说：“站住。”"));
+    }
+
+    @Test
+    void colonNextToQuotesIsDialogueAndNamesInsideStayPlain() {
+        String visible = "镜头1：中景。\n@孙悟空 低头合十，平静回应：“弟子，谨遵@佛旨。”";
+        assertEquals(List.of("孙悟空"), DramaStoryboardCompiler.narrativeAtNames(visible, List.of("孙悟空", "佛旨")));
+        assertEquals("孙悟空：弟子，谨遵佛旨。", DramaStoryboardCompiler.extractDialogue(visible));
+        assertEquals("孙悟空：弟子，谨遵佛旨。\n局长（愤怒）：你给我站住！",
+                DramaStoryboardCompiler.extractDialogue(
+                        "@孙悟空 平静回应：“弟子，谨遵佛旨。”@局长 愤怒地说：“你给我站住！”"));
+    }
+
+    @Test
+    void assembleDoesNotRepeatEmotionLineAmbianceOrSilence() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        List<DramaStoryboardCompiler.ActiveReference> refs = List.of(
+                ref(1, "局长", DramaContract.ASSET_TYPE_CHARACTER, "中年男性", "设定图"),
+                ref(2, "洛白", DramaContract.ASSET_TYPE_CHARACTER, "青年男性", "设定图"));
+        DramaShotBeats beats = new DramaShotBeats();
+        beats.setBlocking("局长在门口。");
+        beats.setBeats(List.of(
+                beat("中景", "局长摔下档案。", "接进门", "局长（愤怒）：你给我站住！"),
+                beat("近景", "洛白低头。", "接摔档案", null)));
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "办公室", "问责", "局长（愤怒）：你给我站住！", "门外", "站住", 8,
+                List.of("局长", "洛白"), 2, List.of(), null, "纸页轻响", beats);
+        String visible = DramaStoryboardCompiler.renderVisiblePrompt(shot, List.of("局长", "洛白"));
+
+        String prompt = DramaStoryboardCompiler.assemble(prefix, refs, List.of(), visible, shot).prompt();
+        int execution = prompt.indexOf("对白执行：");
+        assertTrue(execution > 0);
+        assertTrue(prompt.contains("愤怒地说：“你给我站住！”"));
+        assertTrue(prompt.contains("本镜头无人开口。"));
+        assertTrue(prompt.contains("环境声：纸页轻响。不要配乐，只保留对白。"));
+        assertTrue(prompt.substring(execution).contains(DramaStoryboardCompiler.BEAT_DIALOGUE_EXECUTION));
+        assertFalse(prompt.substring(execution).contains("以愤怒的语气"));
+        assertFalse(prompt.substring(execution).contains("你给我站住"));
+        assertFalse(prompt.contains("对白表演"));
+        assertFalse(prompt.contains("Ambiance:"));
+        assertEquals(1, prompt.split("不要配乐", -1).length - 1);
+        assertEquals(1, prompt.split("本镜头无人开口", -1).length - 1);
+    }
+
+    @Test
+    void assembleKeepsLipSyncWithoutRepeatingVoiceOverOrigin() {
+        String prefix = DramaStyles.require(DramaStyles.ANIME_COMIC).prefix();
+        String visible = "@洛白 停下。只闻其声，不出现说话人实体。\n@张总（画外音）：难道是他？\n环境声：不要配乐，只保留对白。";
+        DramaStoryboardCompiler.ShotContent shot = new DramaStoryboardCompiler.ShotContent(
+                "走廊", "画外音", "张总（画外音）：难道是他？", "走廊", "停下", 6,
+                List.of("洛白", "张总"), 2);
+        String prompt = DramaStoryboardCompiler.assemble(prefix, List.of(), List.of(), visible, shot).prompt();
+        assertTrue(prompt.contains("只闻其声，不出现说话人实体"));
+        assertTrue(prompt.contains(DramaStoryboardCompiler.NARRATION_MOUTH_CLOSED));
+        assertFalse(prompt.contains("自画面外传来"));
+        assertFalse(prompt.contains("口型与这句同步"));
+        assertFalse(prompt.contains("Ambiance:"));
+        assertEquals(1, prompt.split("难道是他", -1).length - 1);
     }
 
     @Test
