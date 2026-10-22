@@ -141,6 +141,31 @@ public final class CreditCalculator {
         return "秒".equals(String.valueOf(pricing.get("unit")).trim());
     }
 
+    /**
+     * 语音计费字符数：与供应商口径一致——汉字（CJK）算 2 个字符，英文字母/数字/标点/空格各算 1。
+     * 必须与前端 pricing.js 的 billableCharacters 保持一致，否则估价与实扣不符。
+     */
+    public static int billableCharacters(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        int index = 0;
+        while (index < text.length()) {
+            int codePoint = text.codePointAt(index);
+            total += isCjk(codePoint) ? 2 : 1;
+            index += Character.charCount(codePoint);
+        }
+        return total;
+    }
+
+    private static boolean isCjk(int codePoint) {
+        // 仅汉字表意文字算 2；标点（含全角标点）、字母、数字、空格等一律算 1
+        return (codePoint >= 0x4E00 && codePoint <= 0x9FFF)      // CJK 统一表意文字
+                || (codePoint >= 0x3400 && codePoint <= 0x4DBF)  // 扩展 A
+                || (codePoint >= 0xF900 && codePoint <= 0xFAFF); // 兼容表意文字
+    }
+
     /** audio 调用时 quantity 参数表示字符数；图片/视频仍表示时长。 */
     static double characterUnits(Map<String, Object> pricing, Integer characterCount) {
         int count = characterCount == null ? 1 : Math.max(1, characterCount);

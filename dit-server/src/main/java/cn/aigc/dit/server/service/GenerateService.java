@@ -138,7 +138,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
 
     static Integer billingQuantity(GenerateRequest request) {
         if (ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
-            return request.getPrompt() == null ? 0 : request.getPrompt().length();
+            // 语音按供应商计费字符数（汉字算 2），与前端估价同规则
+            return CreditCalculator.billableCharacters(request.getPrompt());
         }
         return request.getDurationSec();
     }

@@ -85,6 +85,22 @@ class CreditCalculatorTest {
     }
 
     @Test
+    void billableCharactersCountsCjkAsTwo() {
+        // 供应商口径：1 汉字 = 2 字符，英文字母/数字/标点/空格各 1
+        assertEquals(0, CreditCalculator.billableCharacters(null));
+        assertEquals(0, CreditCalculator.billableCharacters(""));
+        assertEquals(8, CreditCalculator.billableCharacters("你好世界"));           // 4 汉字 ×2
+        assertEquals(4, CreditCalculator.billableCharacters("abcd"));                // 4 字母 ×1
+        assertEquals(7, CreditCalculator.billableCharacters("你好ab，"));            // 2 汉字×2 + 2 字母 + 全角逗号×1 = 7
+        assertEquals(4, CreditCalculator.billableCharacters("，。！？"));             // 标点各 1
+        // 1 万汉字 → 2 万计费字符 → 2 个「万字符」单位 → 2 × 46 积分
+        Map<String, Object> pricing = Map.of("unit", "万字符", "sale", Map.of("output", "46 积分"));
+        String tenThousandHanzi = "字".repeat(10_000);
+        assertEquals(92L, CreditCalculator.calculate(
+                pricing, "audio", null, null, CreditCalculator.billableCharacters(tenThousandHanzi), 1));
+    }
+
+    @Test
     void explicitZeroIsFreeAndMissingPriceUsesDefault() {
         assertEquals(0L, CreditCalculator.calculate(
                 Map.of("unit", "张", "sale", Map.of("output", "0")),
