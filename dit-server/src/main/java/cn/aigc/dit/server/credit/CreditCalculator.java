@@ -75,6 +75,7 @@ public final class CreditCalculator {
         if (ModelCategory.VIDEO.equalsIgnoreCase(category)) {
             return switch (res) {
                 case "480P" -> 0.5;
+                case "768P" -> 0.5;
                 case "720P" -> 0.75;
                 case "1080P" -> 1.0;
                 case "2K" -> 1.5;

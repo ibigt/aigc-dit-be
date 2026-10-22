@@ -18,6 +18,15 @@ class CreditCalculatorTest {
     }
 
     @Test
+    void video768PChargesHalfOfBase() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "秒",
+                "sale", Map.of("output", "12 积分"));
+        // 12 * 5s * 0.5(768P) * 1 = 30；修复前 768P 落默认倍率 1.0 会扣 60
+        assertEquals(30L, CreditCalculator.calculate(pricing, "video", "768P", null, 5, 1));
+    }
+
+    @Test
     void imageUsesResolutionAndQuality() {
         Map<String, Object> pricing = Map.of(
                 "unit", "张",
