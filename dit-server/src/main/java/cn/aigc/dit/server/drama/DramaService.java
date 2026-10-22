@@ -111,7 +111,8 @@ public class DramaService {
         Long userId = UserContext.requireUserId();
         List<DramaSeries> series = seriesMapper.selectList(new LambdaQueryWrapper<DramaSeries>()
                 .eq(DramaSeries::getUserId, userId)
-                .orderByDesc(DramaSeries::getUpdatedAt));
+                .orderByDesc(DramaSeries::getCreatedAt)
+                .orderByDesc(DramaSeries::getId));
         if (series.isEmpty()) {
             return List.of();
         }
