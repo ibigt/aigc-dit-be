@@ -5,6 +5,7 @@ import cn.aigc.dit.common.model.resp.PageQueryResp;
 import cn.aigc.dit.server.model.req.CreditRechargeReq;
 import cn.aigc.dit.server.model.resp.CreditLedgerResp;
 import cn.aigc.dit.server.model.resp.CreditSummaryResp;
+import cn.aigc.dit.server.model.resp.RechargeOrderResp;
 import cn.aigc.dit.server.model.resp.UserProfileResp;
 import cn.aigc.dit.server.service.AuthService;
 import cn.aigc.dit.server.service.CreditService;
@@ -13,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -47,5 +49,24 @@ public class CreditController {
     public CommonResult<UserProfileResp> recharge(@Valid @RequestBody CreditRechargeReq req) {
         creditService.recharge(req.getAmountYuan(), req.getPayment(), req.getRequestId());
         return CommonResult.success(authService.currentUser());
+    }
+
+    @Operation(summary = "创建充值订单，返回支付二维码")
+    @PostMapping("/recharge/orders")
+    public CommonResult<RechargeOrderResp> createRechargeOrder(@Valid @RequestBody CreditRechargeReq req) {
+        return CommonResult.success(creditService.createRechargeOrder(
+                req.getAmountYuan(), req.getPayment(), req.getRequestId()));
+    }
+
+    @Operation(summary = "查询充值订单状态")
+    @GetMapping("/recharge/orders/{orderNo}")
+    public CommonResult<RechargeOrderResp> getRechargeOrder(@PathVariable String orderNo) {
+        return CommonResult.success(creditService.getRechargeOrder(orderNo));
+    }
+
+    @Operation(summary = "模拟支付回调（仅 Mock 渠道，联调用）")
+    @PostMapping("/recharge/orders/{orderNo}/mock-pay")
+    public CommonResult<RechargeOrderResp> mockPayRechargeOrder(@PathVariable String orderNo) {
+        return CommonResult.success(creditService.mockPayRechargeOrder(orderNo));
     }
 }

@@ -3,11 +3,15 @@ package cn.aigc.dit.server.service;
 import cn.aigc.dit.server.mapper.CreditLedgerMapper;
 import cn.aigc.dit.server.mapper.RechargeOrderMapper;
 import cn.aigc.dit.server.mapper.SysUserMapper;
+import cn.aigc.dit.server.pay.PayChannelRouter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,7 +32,7 @@ class CreditServiceNetByRefTest {
 
     @BeforeEach
     void setUp() {
-        service = new CreditService(sysUserMapper, creditLedgerMapper, rechargeOrderMapper);
+        service = new CreditService(sysUserMapper, creditLedgerMapper, rechargeOrderMapper, new PayChannelRouter(List.of(), true), new TransactionTemplate());
     }
 
     @Test

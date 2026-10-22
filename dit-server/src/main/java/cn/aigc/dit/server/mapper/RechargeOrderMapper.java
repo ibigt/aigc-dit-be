@@ -11,10 +11,10 @@ public interface RechargeOrderMapper extends BaseMapper<RechargeOrder> {
     @Insert("""
             INSERT INTO recharge_order
               (order_no, request_id, user_id, amount_yuan, credit_amount, payment_channel,
-               status, provider_trade_no, paid_at)
+               status, provider_trade_no, qr_code, paid_at)
             VALUES
               (#{orderNo}, #{requestId}, #{userId}, #{amountYuan}, #{creditAmount}, #{paymentChannel},
-               #{status}, #{providerTradeNo}, #{paidAt})
+               #{status}, #{providerTradeNo}, #{qrCode}, #{paidAt})
             ON CONFLICT (user_id, request_id) DO NOTHING
             """)
     int insertIfAbsent(RechargeOrder order);

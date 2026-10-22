@@ -22,6 +22,7 @@ public class RechargeOrder {
     private String paymentChannel;
     private String status;
     private String providerTradeNo;
+    private String qrCode;
     private OffsetDateTime paidAt;
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

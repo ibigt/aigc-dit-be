@@ -195,3 +195,15 @@ dit:
 logging:
   level:
     cn.aigc.dit: INFO
+
+pay:
+  mock:
+    # Mock 支付通道：true 时充值二维码为模拟值，可用 mock-pay 接口模拟支付回调；接入真实渠道后置 false
+    enabled: ${PAY_MOCK_ENABLED:true}
+  alipay:
+    # 支付宝当面付：enabled 时注册 AlipayChannel；沙箱/正式仅密钥与网关不同。密钥一律走环境变量，勿写入仓库
+    enabled: ${ALIPAY_ENABLED:false}
+    app-id: ${ALIPAY_APP_ID:}
+    merchant-private-key: ${ALIPAY_PRIVATE_KEY:}
+    alipay-public-key: ${ALIPAY_PUBLIC_KEY:}
+    gateway: ${ALIPAY_GATEWAY:https://openapi-sandbox.dl.alipaydev.com/gateway.do}

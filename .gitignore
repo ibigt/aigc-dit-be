@@ -32,3 +32,6 @@ preview_ep*.json
 replay_*_resp.json
 login_*.json
 token_*.txt
+
+# 本地支付联调密钥
+*.env
