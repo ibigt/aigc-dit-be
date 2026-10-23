@@ -71,7 +71,8 @@ public final class ArkRequestMapper {
     static boolean allows1080p(GenerateRequest request) {
         String model = modelName(request == null ? new GenerateRequest() : request).toLowerCase(Locale.ROOT);
         String adapter = request == null ? "" : safe(request.getAdapterKey()).toLowerCase(Locale.ROOT);
-        if (model.contains("fast") || model.contains("2-5") || model.contains("2.5")
+        // 官方仅 480p / 720p 的档位：fast、mini、2.5 系列都不支持 1080p
+        if (model.contains("fast") || model.contains("mini") || model.contains("2-5") || model.contains("2.5")
                 || AdapterCatalog.SEEDANCE_2_5.equals(adapter)) {
             return false;
         }

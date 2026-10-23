@@ -178,4 +178,25 @@ class ArkRequestMapperTest {
                 .setResolution("1080P");
         assertEquals("720p", ArkRequestMapper.clampResolution(request));
     }
+
+    @Test
+    void miniModelClamps1080DownTo720() {
+        // 官方 doubao-seedance-2.0-mini 仅支持 480p / 720p，与 fast 同档
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("doubao-seedance-2.0-mini")
+                .setResolution("1080P");
+        assertEquals("720p", ArkRequestMapper.clampResolution(request));
+        assertEquals(List.of("480P", "720P"),
+                ArkRequestMapper.supportedResolutions(AdapterCatalog.SEEDANCE_2_0, "doubao-seedance-2.0-mini"));
+    }
+
+    @Test
+    void standardModelKeeps1080p() {
+        GenerateRequest request = new GenerateRequest()
+                .setAdapterKey(AdapterCatalog.SEEDANCE_2_0)
+                .setModelKey("seedance-2-0-202602")
+                .setResolution("1080P");
+        assertEquals("1080p", ArkRequestMapper.clampResolution(request));
+    }
 }
