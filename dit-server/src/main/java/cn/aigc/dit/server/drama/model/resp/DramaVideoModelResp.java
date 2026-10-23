@@ -13,6 +13,10 @@ public class DramaVideoModelResp {
     private String name;
     private String provider;
     private String adapterKey;
+    @Schema(description = "模型标识，供前端按品牌目录兜底匹配图标")
+    private String modelKey;
+    @Schema(description = "品牌图标，与模型管理保持一致")
+    private String logo;
     @Schema(description = "该模型支持的分镜时长（秒），已与 5–15 求交")
     private List<Integer> durations;
     @Schema(description = "该模型支持的成片清晰度，已与 480P/720P/1080P/2K 求交")

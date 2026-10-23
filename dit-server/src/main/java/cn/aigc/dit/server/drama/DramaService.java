@@ -879,6 +879,8 @@ public class DramaService {
         resp.setName(model.getName());
         resp.setProvider(model.getProvider());
         resp.setAdapterKey(model.getAdapterKey());
+        resp.setModelKey(model.getModelKey());
+        resp.setLogo(model.getLogo());
         return resp;
     }
 
@@ -902,6 +904,8 @@ public class DramaService {
         resp.setName(model.getName());
         resp.setProvider(model.getProvider());
         resp.setAdapterKey(model.getAdapterKey());
+        resp.setModelKey(model.getModelKey());
+        resp.setLogo(model.getLogo());
         String adapter = AdapterCatalog.resolveKeyForGenerate(
                 model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
         resp.setDurations(DramaDurations.supported(adapter, model.getAdapterKey(), model.getModelKey()));

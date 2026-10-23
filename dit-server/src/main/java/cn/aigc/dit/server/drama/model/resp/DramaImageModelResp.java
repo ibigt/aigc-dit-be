@@ -11,4 +11,8 @@ public class DramaImageModelResp {
     private String name;
     private String provider;
     private String adapterKey;
+    @Schema(description = "模型标识，供前端按品牌目录兜底匹配图标")
+    private String modelKey;
+    @Schema(description = "品牌图标，与模型管理保持一致")
+    private String logo;
 }
