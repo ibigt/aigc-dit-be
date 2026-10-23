@@ -86,18 +86,45 @@ class CreditCalculatorTest {
 
     @Test
     void billableCharactersCountsCjkAsTwo() {
-        // 供应商口径：1 汉字 = 2 字符，英文字母/数字/标点/空格各 1
-        assertEquals(0, CreditCalculator.billableCharacters(null));
-        assertEquals(0, CreditCalculator.billableCharacters(""));
-        assertEquals(8, CreditCalculator.billableCharacters("你好世界"));           // 4 汉字 ×2
-        assertEquals(4, CreditCalculator.billableCharacters("abcd"));                // 4 字母 ×1
-        assertEquals(7, CreditCalculator.billableCharacters("你好ab，"));            // 2 汉字×2 + 2 字母 + 全角逗号×1 = 7
-        assertEquals(4, CreditCalculator.billableCharacters("，。！？"));             // 标点各 1
+        // 供应商口径（MiniMax）：1 汉字 = 2 字符，英文字母/数字/标点/空格各 1
+        assertEquals(0, CreditCalculator.billableCharacters(null, 2));
+        assertEquals(0, CreditCalculator.billableCharacters("", 2));
+        assertEquals(8, CreditCalculator.billableCharacters("你好世界", 2));         // 4 汉字 ×2
+        assertEquals(4, CreditCalculator.billableCharacters("abcd", 2));             // 4 字母 ×1
+        assertEquals(7, CreditCalculator.billableCharacters("你好ab，", 2));         // 2 汉字×2 + 2 字母 + 全角逗号×1 = 7
+        assertEquals(4, CreditCalculator.billableCharacters("，。！？", 2));          // 标点各 1
         // 1 万汉字 → 2 万计费字符 → 2 个「万字符」单位 → 2 × 46 积分
         Map<String, Object> pricing = Map.of("unit", "万字符", "sale", Map.of("output", "46 积分"));
         String tenThousandHanzi = "字".repeat(10_000);
         assertEquals(92L, CreditCalculator.calculate(
-                pricing, "audio", null, null, CreditCalculator.billableCharacters(tenThousandHanzi), 1));
+                pricing, "audio", null, null, CreditCalculator.billableCharacters(tenThousandHanzi, 2), 1));
+    }
+
+    @Test
+    void billableCharactersFollowsConfiguredWeight() {
+        // 火山/Ark 口径：1 字 = 1 字符
+        assertEquals(4, CreditCalculator.billableCharacters("你好世界", 1));
+        assertEquals(4, CreditCalculator.billableCharacters("abcd", 1));
+        // 1 万汉字 → 1 万计费字符 → 1 个「万字符」单位 → 1 × 46 积分
+        Map<String, Object> pricing = Map.of(
+                "unit", "万字符", "sale", Map.of("output", "46 积分"), "cjkWeight", 1);
+        String tenThousandHanzi = "字".repeat(10_000);
+        assertEquals(46L, CreditCalculator.calculate(
+                pricing, "audio", null, null,
+                CreditCalculator.billableCharacters(tenThousandHanzi, 1), 1));
+    }
+
+    @Test
+    void cjkWeightPrefersModelPricingThenFallsBackToProvider() {
+        // 模型定价里显式配置优先
+        assertEquals(1, CreditCalculator.cjkWeight(Map.of("cjkWeight", 1), "minimax-speech", "minimax", "speech-2.8-hd"));
+        assertEquals(2, CreditCalculator.cjkWeight(Map.of("cjkWeight", 2), "ark-speech", "火山引擎", "doubao-seed-tts"));
+        // 未配置时按供应商推断：MiniMax = 2，火山/Ark = 1
+        assertEquals(2, CreditCalculator.cjkWeight(Map.of(), "minimax-speech", "minimax", "speech-2.8-hd"));
+        assertEquals(2, CreditCalculator.cjkWeight(null, "minimax-speech", "minimax", "speech-2.8-hd"));
+        assertEquals(1, CreditCalculator.cjkWeight(null, "ark-speech", "火山引擎", "doubao-seed-tts"));
+        assertEquals(1, CreditCalculator.cjkWeight(null, null, "火山引擎", "doubao-seed-tts"));
+        assertEquals(2, CreditCalculator.cjkWeight(null, null, "minimax", "speech-2.8-hd"));
     }
 
     @Test

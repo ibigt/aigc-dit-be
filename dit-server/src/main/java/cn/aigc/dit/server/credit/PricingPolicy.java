@@ -29,6 +29,31 @@ public final class PricingPolicy {
         }
         validateSide("售价", pricing.get("sale"));
         validateSide("成本", pricing.get("cost"));
+        validateCjkWeight(pricing);
+    }
+
+    /**
+     * 语音字符计数的汉字权重：1 = 1 字 = 1 字符（火山/Ark 等），2 = 1 汉字 = 2 字符（MiniMax）。
+     * 缺省按供应商推断，不强制配置；配了必须落在 1 或 2。
+     */
+    private static void validateCjkWeight(Map<String, Object> pricing) {
+        Object raw = pricing.get("cjkWeight");
+        if (raw == null || String.valueOf(raw).isBlank()) {
+            return;
+        }
+        double weight;
+        if (raw instanceof Number number) {
+            weight = number.doubleValue();
+        } else {
+            try {
+                weight = Double.parseDouble(String.valueOf(raw).trim());
+            } catch (NumberFormatException e) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "汉字计费口径必须是 1 或 2");
+            }
+        }
+        if (weight != 1D && weight != 2D) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "汉字计费口径必须是 1 或 2");
+        }
     }
 
     private static void validateSide(String label, Object side) {

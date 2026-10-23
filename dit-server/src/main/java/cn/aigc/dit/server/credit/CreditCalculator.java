@@ -142,21 +142,61 @@ public final class CreditCalculator {
     }
 
     /**
-     * 语音计费字符数：与供应商口径一致——汉字（CJK）算 2 个字符，英文字母/数字/标点/空格各算 1。
-     * 必须与前端 pricing.js 的 billableCharacters 保持一致，否则估价与实扣不符。
+     * 语音计费字符数的默认汉字权重：MiniMax 口径 1 汉字 = 2 字符。
+     * 按「1 字 = 1 字符」计费的供应商（火山/Ark 等）需要在模型定价里配置 {@code cjkWeight = 1}。
      */
-    public static int billableCharacters(String text) {
+    public static final int DEFAULT_CJK_WEIGHT = 2;
+
+    /**
+     * 语音计费字符数：与供应商口径一致——汉字（CJK）按 cjkWeight 计（默认 2），
+     * 英文字母/数字/标点/空格各算 1。必须与前端 pricing.js 的 billableCharacters 保持一致，
+     * 否则估价与实扣不符。
+     */
+    public static int billableCharacters(String text, int cjkWeight) {
         if (text == null || text.isEmpty()) {
             return 0;
         }
+        int weight = Math.max(1, cjkWeight);
         int total = 0;
         int index = 0;
         while (index < text.length()) {
             int codePoint = text.codePointAt(index);
-            total += isCjk(codePoint) ? 2 : 1;
+            total += isCjk(codePoint) ? weight : 1;
             index += Character.charCount(codePoint);
         }
         return total;
+    }
+
+    /**
+     * 汉字计费权重：优先取模型定价里配置的 {@code cjkWeight}（1 或 2）——这是给中转渠道等
+     * 特殊情况预留的模型级覆盖；缺省查供应商计费口径内置表 {@link SupplierBillingRules}。
+     */
+    public static int cjkWeight(Map<String, Object> pricing, String adapterKey, String provider, String modelKey) {
+        Double configured = parseAmount(pricing == null ? null : pricing.get("cjkWeight"));
+        if (configured != null && configured >= 1D && configured <= 2D) {
+            return (int) Math.round(configured);
+        }
+        return SupplierBillingRules.resolveCharacterRule(adapterKey, provider, modelKey).weight();
+    }
+
+    /**
+     * 生效的语音字符计数口径（含展示用的说明与官方依据）。
+     * 模型级 {@code cjkWeight} 覆盖在内置表之上，界面按这里的结果展示。
+     */
+    public static SupplierBillingRules.CharacterRule characterRule(Map<String, Object> pricing,
+                                                                  String adapterKey, String provider, String modelKey) {
+        SupplierBillingRules.CharacterRule builtin =
+                SupplierBillingRules.resolveCharacterRule(adapterKey, provider, modelKey);
+        Double configured = parseAmount(pricing == null ? null : pricing.get("cjkWeight"));
+        if (configured != null && configured >= 1D && configured <= 2D) {
+            int weight = (int) Math.round(configured);
+            if (weight != builtin.weight()) {
+                return new SupplierBillingRules.CharacterRule(weight,
+                        weight == 1 ? "1 字 = 1 字符" : "1 汉字 = 2 字符",
+                        "模型级覆盖（内置规则为 " + builtin.label() + "）");
+            }
+        }
+        return builtin;
     }
 
     private static boolean isCjk(int codePoint) {

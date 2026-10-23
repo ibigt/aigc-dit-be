@@ -11,7 +11,9 @@ import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
+import cn.aigc.dit.server.credit.CreditCalculator;
 import cn.aigc.dit.server.credit.PricingPolicy;
+import cn.aigc.dit.server.credit.SupplierBillingRules;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.text.OpenAiCompatChatClient;
@@ -307,6 +309,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setInstanceType(instanceType == null ? null : String.valueOf(instanceType));
         Object proxy = pricing.remove("proxy");
         resp.setProxy(proxy == null ? null : String.valueOf(proxy));
+        applyCharacterRule(model, pricing);
         resp.setPricing(pricing);
         resp.setEnabled(model.getEnabled());
         resp.setDescription(model.getDescription());
@@ -316,6 +319,21 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setCreatedAt(model.getCreatedAt());
         resp.setUpdatedAt(model.getUpdatedAt());
         return resp;
+    }
+
+    /**
+     * 把生效的语音字符计数口径写进下发用的 pricing——口径来自内置规则表
+     * {@link cn.aigc.dit.server.credit.SupplierBillingRules}，前端直接读取展示，无需自行推断。
+     */
+    private void applyCharacterRule(AiModel model, Map<String, Object> pricing) {
+        if (!ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory())) {
+            return;
+        }
+        SupplierBillingRules.CharacterRule rule = CreditCalculator.characterRule(
+                model.getPricing(), model.getAdapterKey(), model.getProvider(), model.getModelKey());
+        pricing.put("cjkWeight", rule.weight());
+        pricing.put("cjkWeightLabel", rule.label());
+        pricing.put("cjkWeightSource", rule.source());
     }
 
     ModelPublicResp toPublicResp(AiModel model) {
@@ -335,6 +353,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         pricing.remove("concurrentLimit");
         pricing.remove("instanceType");
         pricing.remove("proxy");
+        applyCharacterRule(model, pricing);
         resp.setPricing(pricing);
         if (ModelCategory.AUDIO.equalsIgnoreCase(model.getCategory())) {
             Map<String, Object> options = publicAudioOptions(model.getAdapterConfig());

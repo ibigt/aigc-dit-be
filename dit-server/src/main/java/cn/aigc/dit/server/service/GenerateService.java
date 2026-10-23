@@ -98,7 +98,7 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getCategory(),
                 request.getResolution(),
                 request.getQuality(),
-                billingQuantity(request),
+                billingQuantity(model, request),
                 request.resolvedCopies());
         boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
         CreationSession session = bindSession
@@ -136,10 +136,15 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         return creationService.toTaskResp(task, List.of(), model.getName());
     }
 
-    static Integer billingQuantity(GenerateRequest request) {
+    static Integer billingQuantity(AiModel model, GenerateRequest request) {
         if (ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
-            // 语音按供应商计费字符数（汉字算 2），与前端估价同规则
-            return CreditCalculator.billableCharacters(request.getPrompt());
+            // 语音按供应商计费字符数，汉字权重按模型配置（cjkWeight），缺省按供应商推断，与前端估价同规则
+            int weight = CreditCalculator.cjkWeight(
+                    model == null ? null : model.getPricing(),
+                    model == null ? null : model.getAdapterKey(),
+                    model == null ? null : model.getProvider(),
+                    model == null ? null : model.getModelKey());
+            return CreditCalculator.billableCharacters(request.getPrompt(), weight);
         }
         return request.getDurationSec();
     }
