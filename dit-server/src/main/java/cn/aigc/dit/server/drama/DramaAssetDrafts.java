@@ -105,25 +105,26 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * 从衍生资产里取出相对本体的变化。整张设定图长句不能当变化，否则会把人重画一遍。
+     * 从衍生资产里取出相对本体的变化。整张设定图长句不能当变化，否则会把人重画一遍；
+     * 本体的身份不变量说的是「这个人长什么样」，也不是变化，不能写进图生图提示词。
      */
     public static String derivativeChange(String name, String stateTag, String description, String identity) {
-        if (isAppearanceFact(description)) {
+        if (isChangeFact(description)) {
             return description.trim();
         }
-        if (isAppearanceFact(identity) && !identity.contains("同一张脸")) {
-            return identity.trim();
-        }
         String state = StringUtils.hasText(stateTag) ? stateTag : inferStateTag(name);
-        String label = name == null ? "" : name;
+        String label = stateNameOf(name);
         if (DramaContract.STATE_TAG_DREAM.equals(state) || label.contains("入梦") || label.contains("梦境")) {
             return "光影抽离、略微漂浮，仍是同一个人";
         }
         if (label.contains("湿身")) {
             return "外衣与发尾湿透，贴在身上";
         }
-        if (DramaContract.STATE_TAG_COSTUME.equals(state)) {
+        if (DramaContract.STATE_TAG_COSTUME.equals(state) || label.contains("换装")) {
             return "服装换成这一状态下的另一套，脸与发型不变";
+        }
+        if (label.contains("战损") || label.contains("受伤")) {
+            return "衣服破损带伤痕与污渍，其余与原图一致";
         }
         return "外观按该状态变化，脸与发型不变";
     }
@@ -195,6 +196,22 @@ public final class DramaAssetDrafts {
         return trimmed.substring(0, dot).trim();
     }
 
+    /** 「洛白·入梦」取状态名「入梦」。没有后缀时返回空串。 */
+    public static String stateNameOf(String name) {
+        if (!StringUtils.hasText(name)) {
+            return "";
+        }
+        String trimmed = name.trim();
+        int dot = trimmed.indexOf('·');
+        if (dot < 0) {
+            dot = trimmed.indexOf('・');
+        }
+        if (dot <= 0 || dot >= trimmed.length() - 1) {
+            return "";
+        }
+        return trimmed.substring(dot + 1).trim();
+    }
+
     private static boolean isAppearanceFact(String text) {
         if (!StringUtils.hasText(text)) {
             return false;
@@ -204,6 +221,24 @@ public final class DramaAssetDrafts {
                 && !value.contains("角色设定图")
                 && !value.contains("三视图")
                 && !value.contains("设定拼版");
+    }
+
+    /**
+     * 状态描述能否直接当作「相对本体的变化」写进图生图提示词。
+     * 排除整张设定图模板，也排除身份锁定句（那是「这个人是谁」，不是变化）。
+     */
+    public static boolean isChangeFact(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.trim();
+        return !value.contains("角色设定图")
+                && !value.contains("三视图")
+                && !value.contains("设定拼版")
+                && !value.contains("角色设定表")
+                && !value.contains("同一张脸")
+                && !value.contains("必须保持一致")
+                && !value.contains("禁止写成另一个人");
     }
 
     public static String buildPrompt(String type, String name, DramaStyles.Spec style) {
@@ -318,6 +353,10 @@ public final class DramaAssetDrafts {
             text.append("入梦/梦境独立状态，光影可抽离漂浮，仍是同一张脸和发型，禁止写成另一个人。");
         } else if (DramaContract.STATE_TAG_COSTUME.equals(stateTag)) {
             text.append("换装/湿身等状态独立成图，脸与发型与主身份一致。");
+        } else if (DramaContract.STATE_TAG_WET.equals(stateTag)) {
+            text.append("湿发/湿身独立状态：头发湿透贴服，衣物淋湿贴身，仍是同一张脸和发型，禁止写成另一个人。");
+        } else if (DramaContract.STATE_TAG_CUSTOM.equals(stateTag)) {
+            text.append("角色特殊状态独立成图，脸与发型与主身份保持一致。");
         }
         if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
             // 现代写实：定妆转面压缩版；禁 CG/质感由 prefix 承担，此处只保留构图与白底。
@@ -720,7 +759,26 @@ public final class DramaAssetDrafts {
         return type + "\0" + name + "\0" + (StringUtils.hasText(stateTag) ? stateTag : DramaContract.STATE_TAG_BASE);
     }
 
+    /**
+     * 状态标签以资产名的状态后缀为准（「本体名·状态名」）：有后缀就是状态资产，
+     * 后缀是已知状态词给专属标签，其余按特殊状态处理。没有后缀就是本体。
+     */
     public static String inferStateTag(String name) {
+        if (!StringUtils.hasText(name)) {
+            return DramaContract.STATE_TAG_BASE;
+        }
+        String suffix = stateNameOf(name);
+        if (StringUtils.hasText(suffix)) {
+            String lower = suffix.toLowerCase(Locale.ROOT);
+            if (suffix.contains("入梦") || suffix.contains("梦境") || suffix.contains("梦魇")
+                    || lower.contains("dream")) {
+                return DramaContract.STATE_TAG_DREAM;
+            }
+            if (suffix.contains("换装") || suffix.contains("湿身") || lower.contains("costume")) {
+                return DramaContract.STATE_TAG_COSTUME;
+            }
+            return DramaContract.STATE_TAG_CUSTOM;
+        }
         String lower = name.toLowerCase(Locale.ROOT);
         if (name.contains("入梦") || name.contains("梦境") || name.contains("梦魇")
                 || lower.contains("dream")) {

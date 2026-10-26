@@ -184,7 +184,12 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "请填写资产名称与类型");
         }
         String type = normalizeType(req.getType());
-        String name = req.getName().trim();
+        String name = composeStateName(req);
+        String stateTag = DramaAssetDrafts.inferStateTag(name);
+        if (!DramaContract.STATE_TAG_BASE.equals(stateTag)
+                && !DramaAssetDrafts.isChangeFact(req.getDescription())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写状态描述，例如「穿红色晚礼服，头发扎起」");
+        }
         rejectDuplicateName(episode.getSeriesId(), type, name);
         DramaAsset asset = new DramaAsset();
         asset.setSeriesId(episode.getSeriesId());
@@ -193,6 +198,18 @@ public class DramaAssetService {
         asset.setStatus(DramaContract.STATUS_NOT_STARTED);
         asset.setIdentityVersion(0);
         applySave(asset, req, true);
+        asset.setType(type);
+        asset.setName(name);
+        asset.setStateTag(stateTag);
+        if (!DramaContract.STATE_TAG_BASE.equals(stateTag)) {
+            // 状态资产必须独立成图，不与本体合并。
+            asset.setMustSplit(true);
+        }
+        if (!StringUtils.hasText(asset.getIdentityInvariants())
+                && !DramaContract.STATE_TAG_BASE.equals(stateTag)) {
+            // 状态资产继承本体外形，不复制本体长句；「同一个人」由本体图兜底。
+            asset.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(type, name, stateTag));
+        }
         if (!StringUtils.hasText(asset.getDescription()) && StringUtils.hasText(asset.getIdentityInvariants())) {
             asset.setDescription(asset.getIdentityInvariants());
         }
@@ -203,14 +220,37 @@ public class DramaAssetService {
         return toResp(asset, null);
     }
 
+    /**
+     * 资产名 = 本体名·状态名。状态名是状态资产的身份（下游按名字引用），
+     * 状态标签由名字派生，避免同一状态出现两条同名不同标签的记录。
+     */
+    private static String composeStateName(DramaAssetSaveReq req) {
+        String name = req.getName().trim();
+        String stateName = req.getStateName() == null ? null : req.getStateName().trim();
+        String requestedTag = DramaContract.normalizeStateTag(req.getStateTag());
+        if (StringUtils.hasText(stateName)) {
+            return DramaAssetDrafts.baseCharacterName(name) + "·" + stateName;
+        }
+        if (!DramaContract.STATE_TAG_BASE.equals(requestedTag)) {
+            return DramaAssetDrafts.baseCharacterName(name) + "·" + DramaContract.stateWord(requestedTag);
+        }
+        return name;
+    }
+
     @Transactional
     public DramaAssetResp update(Long assetId, DramaAssetSaveReq req) {
         DramaAsset asset = requireAsset(assetId);
         boolean appearanceChanged = req.getIdentityInvariants() != null
                 || req.getName() != null
                 || req.getStateTag() != null
-                || req.getType() != null;
+                || req.getType() != null
+                // 状态资产的「状态外观」写在 description 上，改了要重算提示词。
+                || req.getDescription() != null;
         applySave(asset, req, false);
+        if (req.getName() != null && req.getStateTag() == null) {
+            // 状态标签以名字为准：改名后重新派生，避免留下「同名不同标签」的两条记录。
+            asset.setStateTag(DramaAssetDrafts.inferStateTag(asset.getName()));
+        }
         ensureUnique(asset, asset.getId());
         reopenIfConfirmed(asset);
         if (appearanceChanged) {
@@ -641,7 +681,7 @@ public class DramaAssetService {
             String tag = StringUtils.hasText(req.getStateTag())
                     ? req.getStateTag().trim()
                     : DramaAssetDrafts.inferStateTag(asset.getName());
-            asset.setStateTag(tag);
+            asset.setStateTag(DramaContract.normalizeStateTag(tag));
         }
         if (req.getDescription() != null) {
             asset.setDescription(blankToNull(req.getDescription()));
@@ -934,7 +974,10 @@ public class DramaAssetService {
         return map;
     }
 
-    /** 新增时同一分类下名称已存在则拒绝，避免再插一条。提取剧本仍复用已有记录。 */
+    /**
+     * 新增时同一分类下名称已存在则拒绝，避免再插一条。提取剧本仍复用已有记录。
+     * 状态资产的名称自带状态后缀（本体名·状态名），同名即同一状态。
+     */
     private void rejectDuplicateName(Long seriesId, String type, String name) {
         if (seriesId == null || !StringUtils.hasText(name)) {
             return;
@@ -945,8 +988,16 @@ public class DramaAssetService {
                         && type.equals(asset.getType())
                         && wanted.equals(asset.getName() == null ? "" : asset.getName().trim()));
         if (exists) {
-            throw new BizException(ErrorCode.BAD_REQUEST, duplicateAssetMessage(type));
+            throw new BizException(ErrorCode.BAD_REQUEST, duplicateAssetMessage(type, wanted));
         }
+    }
+
+    static String duplicateAssetMessage(String type, String name) {
+        String stateName = DramaAssetDrafts.stateNameOf(name);
+        if (StringUtils.hasText(stateName)) {
+            return "「" + DramaAssetDrafts.baseCharacterName(name) + "」的「" + stateName + "」状态已经存在";
+        }
+        return duplicateAssetMessage(type);
     }
 
     static String duplicateAssetMessage(String type) {
@@ -1044,6 +1095,7 @@ public class DramaAssetService {
         resp.setName(asset.getName());
         resp.setType(asset.getType());
         resp.setStateTag(asset.getStateTag());
+        resp.setStateLabel(DramaAssetDrafts.stateNameOf(asset.getName()));
         resp.setDescription(asset.getDescription());
         resp.setIdentityInvariants(asset.getIdentityInvariants());
         resp.setImagePrompt(asset.getImagePrompt());
@@ -1134,15 +1186,28 @@ public class DramaAssetService {
      */
     private String compileImagePromptForGenerate(DramaAsset asset, DramaSeries series) {
         DramaStyles.Spec style = DramaStyles.require(series.getStyleKey());
+        String identity = identityForPrompt(asset, findBaseCharacter(asset));
         String rebuilt = DramaAssetDrafts.buildPrompt(
-                asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
-        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), asset.getIdentityInvariants());
+                asset.getType(), asset.getName(), asset.getStateTag(), style, null, identity);
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity);
+        rebuilt = withStateChange(rebuilt, asset);
         if (StringUtils.hasText(rebuilt) && !rebuilt.equals(blankToNull(asset.getImagePrompt()))) {
             asset.setImagePrompt(rebuilt);
             scrubTemplateDescription(asset, style);
             assetMapper.updateById(asset);
         }
         return rebuilt;
+    }
+
+    /** 状态资产没有本体图可参考时，把状态描述也写进提示词，否则这一状态只剩模板话。 */
+    private static String withStateChange(String prompt, DramaAsset asset) {
+        if (asset == null || DramaContract.STATE_TAG_BASE.equals(asset.getStateTag())) {
+            return prompt;
+        }
+        if (!DramaAssetDrafts.isChangeFact(asset.getDescription())) {
+            return prompt;
+        }
+        return prompt + "本状态外观：" + asset.getDescription().trim() + "。";
     }
 
     /** 创建/更新外形后刷新完整提示词缓存，供侧栏只读预览。 */
@@ -1154,10 +1219,12 @@ public class DramaAssetService {
         applyCompiledImagePrompt(asset, style);
     }
 
-    private static void applyCompiledImagePrompt(DramaAsset asset, DramaStyles.Spec style) {
+    private void applyCompiledImagePrompt(DramaAsset asset, DramaStyles.Spec style) {
+        String identity = identityForPrompt(asset, findBaseCharacter(asset));
         String rebuilt = DramaAssetDrafts.buildPrompt(
-                asset.getType(), asset.getName(), asset.getStateTag(), style, null, asset.getIdentityInvariants());
-        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), asset.getIdentityInvariants());
+                asset.getType(), asset.getName(), asset.getStateTag(), style, null, identity);
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity);
+        rebuilt = withStateChange(rebuilt, asset);
         asset.setImagePrompt(rebuilt);
         scrubTemplateDescription(asset, style);
     }
@@ -1165,6 +1232,11 @@ public class DramaAssetService {
     /** description 若仍是旧版整段模板，降级为外形摘要，避免与 identity 双源长句。 */
     private static void scrubTemplateDescription(DramaAsset asset, DramaStyles.Spec style) {
         if (asset == null || style == null) {
+            return;
+        }
+        // 状态资产的 description 是「相对本体的变化」，不是设定图模板，不能被降级掉。
+        if (!DramaContract.STATE_TAG_BASE.equals(asset.getStateTag())
+                && DramaAssetDrafts.isChangeFact(asset.getDescription())) {
             return;
         }
         if (!DramaAssetDrafts.shouldReplaceImagePrompt(asset.getDescription(), asset.getType(), style.key())) {
@@ -1179,6 +1251,18 @@ public class DramaAssetService {
      * 换装 / 入梦且本体已有设定图时，返回那张图，生图改为在原图上改。没有可用本体图时返回 null，仍走整张设定图。
      */
     private DramaAsset findBaseCharacterSheet(DramaAsset asset) {
+        DramaAsset base = findBaseCharacter(asset);
+        if (base == null) {
+            return null;
+        }
+        if (StringUtils.hasText(base.getImageStorageKey()) || base.getImageAssetId() != null) {
+            return base;
+        }
+        return null;
+    }
+
+    /** 状态资产的本体（同系列、同类型、本体名、状态为 base），有没有图都返回。 */
+    private DramaAsset findBaseCharacter(DramaAsset asset) {
         if (asset == null
                 || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
                 || asset.getEpisodeId() == null) {
@@ -1199,6 +1283,7 @@ public class DramaAssetService {
                 .eq(asset.getSeriesId() == null, DramaAsset::getEpisodeId, asset.getEpisodeId())
                 .eq(DramaAsset::getType, DramaContract.ASSET_TYPE_CHARACTER)
                 .eq(DramaAsset::getName, baseName));
+        DramaAsset fallback = null;
         for (DramaAsset mate : mates) {
             if (mate == null || mate.getId() != null && mate.getId().equals(asset.getId())) {
                 continue;
@@ -1209,11 +1294,33 @@ public class DramaAssetService {
             if (!DramaContract.STATE_TAG_BASE.equals(mateState)) {
                 continue;
             }
-            if (StringUtils.hasText(mate.getImageStorageKey()) || mate.getImageAssetId() != null) {
+            if (fallback == null) {
+                fallback = mate;
+            }
+            // 优先挑带外形设定的那条，状态资产要继承本体的脸与发型。
+            if (StringUtils.hasText(mate.getIdentityInvariants())) {
                 return mate;
             }
         }
-        return null;
+        return fallback;
+    }
+
+    /**
+     * 状态资产继承本体的外形设定，而不是各存一份长句：本体改了外形，状态图跟着改。
+     */
+    private static String identityForPrompt(DramaAsset asset, DramaAsset base) {
+        String own = asset == null ? null : asset.getIdentityInvariants();
+        if (base == null || !StringUtils.hasText(base.getIdentityInvariants())) {
+            return own;
+        }
+        String baseIdentity = base.getIdentityInvariants().trim();
+        if (!StringUtils.hasText(own)) {
+            return baseIdentity;
+        }
+        if (own.contains("同一张脸")) {
+            return baseIdentity;
+        }
+        return baseIdentity + " " + own.trim();
     }
 
     static String resolveImagePrompt(DramaAsset asset) {

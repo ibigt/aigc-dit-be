@@ -15,6 +15,8 @@ public class DramaAssetResp {
     private String name;
     private String type;
     private String stateTag;
+    @Schema(description = "状态名（资产名「本体名·状态名」的后缀），本体为空")
+    private String stateLabel;
     private String description;
     private String identityInvariants;
     private String imagePrompt;

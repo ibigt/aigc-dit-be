@@ -82,8 +82,9 @@ public final class DramaTextPrompts {
             - 角色和场景按剧本完整抽取；道具只允许从各场 props 数组引用，禁止从 action、heading、dialogue
               或环境描写中追加桌椅、杯子、衣物等普通物品。
             - props 已是筛选后的主要道具，按名称去重后逐条输出，不要扩写成零件或附属物。
-            - 入梦 / 梦魇 / 换装 / 湿身等状态必须独立成条：name 用「本体名·状态」，
-              state_tag 给 dream 或 costume，must_split 给 true，
+            - 入梦 / 梦魇 / 换装 / 湿身 / 战损等状态必须独立成条：name 用「本体名·状态」，
+              状态名写「入梦 / 换装 / 湿身 / 战损」这类可读词；
+              state_tag 由状态名决定（入梦给 dream，换装与湿身给 costume，其余给 custom），must_split 给 true，
               identity_invariants 写明「与本体同一张脸和发型；禁止写成另一个人」。
             - 状态条目绝不能并进本体 description，本体 description 里不得出现入梦/湿身字样。
             - 角色 / 场景 / 道具的 image_prompt 一律输出空字符串，由服务端按项目视觉风格生成完整设定图长句。

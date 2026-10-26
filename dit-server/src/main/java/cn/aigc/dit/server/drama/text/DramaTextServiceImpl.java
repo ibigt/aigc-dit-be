@@ -1240,9 +1240,16 @@ public class DramaTextServiceImpl implements DramaTextService {
                     && DramaDialogueSpeakers.isNarration(name)) {
                 continue;
             }
-            String tag = StringUtils.hasText(draft.getStateTag())
-                    ? draft.getStateTag().strip()
-                    : DramaAssetDrafts.inferStateTag(name);
+            // 状态名在名字后缀里，标签以名字为准；模型标错标签按同一套词表纠正。
+            String tag = DramaAssetDrafts.inferStateTag(name);
+            if (DramaContract.STATE_TAG_BASE.equals(tag) && StringUtils.hasText(draft.getStateTag())) {
+                String requested = DramaContract.normalizeStateTag(draft.getStateTag().strip());
+                if (!DramaContract.STATE_TAG_BASE.equals(requested)) {
+                    // 模型标了状态却没给「本体名·状态名」，补上默认状态名，别把状态丢了
+                    name = name + "·" + DramaContract.stateWord(requested);
+                    tag = DramaAssetDrafts.inferStateTag(name);
+                }
+            }
             draft.setName(name);
             draft.setType(draft.getType().strip());
             draft.setStateTag(tag);

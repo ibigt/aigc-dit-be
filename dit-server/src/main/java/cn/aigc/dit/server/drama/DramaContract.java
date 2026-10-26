@@ -53,6 +53,33 @@ public final class DramaContract {
     public static final String STATE_TAG_BASE = "base";
     public static final String STATE_TAG_DREAM = "dream";
     public static final String STATE_TAG_COSTUME = "costume";
+    public static final String STATE_TAG_WET = "wet";
+    public static final String STATE_TAG_CUSTOM = "custom";
+
+    public static final Set<String> STATE_TAGS = Set.of(
+            STATE_TAG_BASE, STATE_TAG_DREAM, STATE_TAG_COSTUME, STATE_TAG_WET, STATE_TAG_CUSTOM);
+
+    /** 状态名预设：资产名「本体名·状态名」的后缀候选，前端「扩展状态」下拉用。 */
+    public static final List<String> STATE_NAME_PRESETS = List.of("入梦", "换装", "湿身", "战损", "受伤");
+
+    /** 状态标签归一：空 → base；不在词表内 → custom（特殊状态）。 */
+    public static String normalizeStateTag(String tag) {
+        if (tag == null || tag.isBlank()) {
+            return STATE_TAG_BASE;
+        }
+        String value = tag.trim().toLowerCase(java.util.Locale.ROOT);
+        return STATE_TAGS.contains(value) ? value : STATE_TAG_CUSTOM;
+    }
+
+    /** 状态标签的默认状态名，用于「只给了标签没给状态名」时补资产名后缀。 */
+    public static String stateWord(String tag) {
+        return switch (normalizeStateTag(tag)) {
+            case STATE_TAG_DREAM -> "入梦";
+            case STATE_TAG_COSTUME -> "换装";
+            case STATE_TAG_WET -> "湿身";
+            default -> "状态";
+        };
+    }
 
     /** 资产页同时进行的 t2i 上限（支持一次性批量 16 张）；超出部分由前端滚动排队补位。 */
     public static final int MAX_ASSET_GENERATE = 16;
