@@ -398,6 +398,8 @@ public final class DramaAssetDrafts {
                 case DramaStyles.LIVE_REALISM -> "现代都市常服与当代发型妆造，禁止无故改成古装武侠汉服仙侠，禁止胸牌编号与可读文字。";
                 case DramaStyles.GUOFENG_3D -> "国风古典妆造，汉服广袖与发冠金饰，禁止现代西装夹克与运动鞋。";
                 case DramaStyles.NEON_CYBER -> "赛博都市发型妆造，机能外套与金属义体发光接口清晰可见，禁止古装汉服与证件照大平光。";
+                case DramaStyles.SCI_FI_CINEMA -> "科幻电影妆造，科技面料制服与智能终端细节清晰，禁止古装汉服与现代运动便装。";
+                case DramaStyles.AMERICAN_RETRO -> "美式复古妆造，复古牛仔、皮夹克或波点连衣裙与老式发型，禁止古装汉服与现代运动装。";
                 default -> "现代都市常服与当代发型妆造，禁止古装武侠汉服仙侠与古代发冠配饰。";
             };
         }

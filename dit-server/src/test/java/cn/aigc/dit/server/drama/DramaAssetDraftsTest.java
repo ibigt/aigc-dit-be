@@ -606,13 +606,17 @@ class DramaAssetDraftsTest {
 
     @Test
     void realisticCategoryStylesShareLiveActionTemplates() {
-        // 写实大类 3 风格（现代写实 / 古风写实 / 霓虹赛博）都在写实基础上实现：
+        // 写实大类 7 风格（现代写实 / 古风写实 / 霓虹赛博 / 韩剧柔光 / 日系青春 / 科技电影 / 美式复古）都在写实基础上实现：
         // 现代写实用加强定妆转面、其余用真人写真四格设定表；场景为实拍空镜、道具为实拍静物，
         // 且各自叠加自己的题材服饰句与风格句；动漫大类保持概念图 / 设定图分支。
         java.util.Set<String> realisticKeys = java.util.Set.of(
                 DramaStyles.LIVE_REALISM,
                 DramaStyles.GUOFENG_3D,
-                DramaStyles.NEON_CYBER);
+                DramaStyles.NEON_CYBER,
+                DramaStyles.KDRAMA_SOFT,
+                DramaStyles.JP_YOUTH,
+                DramaStyles.SCI_FI_CINEMA,
+                DramaStyles.AMERICAN_RETRO);
         for (DramaStyles.Spec spec : DramaStyles.all()) {
             if (!realisticKeys.contains(spec.key())) {
                 continue;

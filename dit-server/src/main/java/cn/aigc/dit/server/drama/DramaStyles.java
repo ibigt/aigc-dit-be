@@ -23,6 +23,10 @@ public final class DramaStyles {
     public static final String RURAL = "rural";
     public static final String GUOFENG_3D = "guofeng-3d";
     public static final String NEON_CYBER = "neon-cyber";
+    public static final String KDRAMA_SOFT = "kdrama-soft";
+    public static final String JP_YOUTH = "jp-youth";
+    public static final String SCI_FI_CINEMA = "sci-fi-cinema";
+    public static final String AMERICAN_RETRO = "american-retro";
 
     /**
      * 旧别名：曾独立存在的「真人3D风」，已合并到 {@link #LIVE_REALISM}「现代写实风」。
@@ -99,6 +103,30 @@ public final class DramaStyles {
                 "霓虹赛博风",
                 "霓虹赛博写实风，赛博都市真人实拍写真摄影，高对比紫蓝橙红霓虹色，霓虹光与自然肤质，清晰五官与独立发丝，浅景深，35mm 电影镜头，商业人像与杂志写真质感，不要二次元卡通，不要3D国漫厚涂，不要CG数字人，不要塑料皮肤，不要平涂线稿，不要古装汉服",
                 "/drama/styles/neon-cyber.jpg",
+                CATEGORY_REALISTIC));
+        register(new Spec(
+                KDRAMA_SOFT,
+                "韩剧柔光风",
+                "韩剧柔光写实风，韩剧真人实拍摄影，柔和暖调打光与奶油色滤镜，水润透亮肤质与自然裸妆感，精致五官与柔顺发丝，浅景深虚化，85mm 人像镜头，浪漫唯美与杂志画报质感，不要二次元卡通，不要3D渲染，不要CG数字人，不要塑料皮肤，不要平涂线稿，不要古装汉服",
+                "/drama/styles/kdrama-soft.jpg",
+                CATEGORY_REALISTIC));
+        register(new Spec(
+                JP_YOUTH,
+                "日系青春风",
+                "日系青春写实风，日剧与青春电影真人实拍摄影，柔和高调自然光与轻微过曝胶片色调，清透素颜质感与蓬松空气感发型，干净清爽的校服或休闲穿搭，逆光通透与少女感构图，35mm 胶片颗粒质感，不要二次元卡通，不要3D渲染，不要CG数字人，不要塑料皮肤，不要平涂线稿，不要古装汉服，不要浓妆艳抹",
+                "/drama/styles/jp-youth.jpg",
+                CATEGORY_REALISTIC));
+        register(new Spec(
+                SCI_FI_CINEMA,
+                "科技电影风",
+                "科技电影写实风，科幻电影真人实拍大片摄影，冷调青橙对比与体积光雾，玻璃金属与全息投影反光，自然肤质与清晰五官发丝，浅景深，变形宽银幕镜头与水平蓝光光晕，电影级调色与商业大片质感，不要二次元卡通，不要3D渲染，不要CG数字人，不要塑料皮肤，不要平涂线稿，不要古装汉服",
+                "/drama/styles/sci-fi-cinema.jpg",
+                CATEGORY_REALISTIC));
+        register(new Spec(
+                AMERICAN_RETRO,
+                "美式复古风",
+                "美式复古写实风，美式复古真人实拍写真摄影，柯达胶片暖调与褪色颗粒，复古牛仔夹克或波点连衣裙与老式卷发，公路餐馆霓虹招牌与老爷车街景，正午硬光或暖黄昏，自然肤质与清晰五官发丝，浅景深，35mm 胶片镜头，复古画报与电影剧照质感，不要二次元卡通，不要3D渲染，不要CG数字人，不要塑料皮肤，不要平涂线稿，不要古装汉服，不要现代科技感",
+                "/drama/styles/american-retro.jpg",
                 CATEGORY_REALISTIC));
     }
 
