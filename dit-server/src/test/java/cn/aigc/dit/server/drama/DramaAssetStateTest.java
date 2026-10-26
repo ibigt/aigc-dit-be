@@ -40,6 +40,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.aigc.dit.server.model.req.GenerateSubmitReq;
+
 /**
  * 人物状态扩展（本体名·状态名）的形状约束：
  * 名字是状态的身份，标签由名字派生，状态资产继承本体外形并只叠加状态描述。
@@ -227,6 +229,34 @@ class DramaAssetStateTest {
         verify(assetMapper).updateById(captor.capture());
         assertEquals("洛白·入梦", captor.getValue().getName());
         assertEquals(DramaContract.STATE_TAG_DREAM, captor.getValue().getStateTag());
+    }
+
+    @Test
+    void stateImageRequiresTheBaseSheetFirst() {
+        DramaAsset state = baseCharacter();
+        state.setId(12L);
+        state.setName("洛白·湿身");
+        state.setStateTag(DramaContract.STATE_TAG_COSTUME);
+        state.setDescription("白衬衫湿透贴服");
+        when(assetMapper.selectById(12L)).thenReturn(state);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        series.setImageAdapterKey("gpt-image-2");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel model = new AiModel();
+        model.setId(12L);
+        model.setName("GPT Image 2");
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setCapabilities(List.of("image", "t2i"));
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        // 本体存在但没有设定图。
+        when(assetMapper.selectList(any())).thenReturn(List.of(baseCharacter()));
+
+        BizException error = assertThrows(BizException.class, () -> service.generateImage(12L));
+
+        assertEquals("请先给本体「洛白」生成设定图，再生成状态图", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 
     private DramaAsset capturedInsert() {

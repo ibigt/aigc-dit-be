@@ -405,6 +405,11 @@ public class DramaAssetService {
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         AiModel model = requireBoundImageModel(series);
         DramaAsset baseSheet = findBaseCharacterSheet(asset);
+        if (isStateCharacter(asset) && baseSheet == null && findBaseCharacter(asset) != null) {
+            // 本体存在但没有设定图：状态图没有可改的底图，硬画会变成另一个人的新脸。
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "请先给本体「" + DramaAssetDrafts.baseCharacterName(asset.getName()) + "」生成设定图，再生成状态图");
+        }
         String prompt = baseSheet == null
                 ? compileImagePromptForGenerate(asset, series)
                 : DramaAssetDrafts.derivativePrompt(DramaAssetDrafts.derivativeChange(
@@ -1303,6 +1308,17 @@ public class DramaAssetService {
             }
         }
         return fallback;
+    }
+
+    /** 是不是角色状态资产（本体名·状态名，非 base）。 */
+    private static boolean isStateCharacter(DramaAsset asset) {
+        if (asset == null || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+            return false;
+        }
+        String tag = StringUtils.hasText(asset.getStateTag())
+                ? asset.getStateTag().trim()
+                : DramaAssetDrafts.inferStateTag(asset.getName());
+        return !DramaContract.STATE_TAG_BASE.equals(tag);
     }
 
     /**
