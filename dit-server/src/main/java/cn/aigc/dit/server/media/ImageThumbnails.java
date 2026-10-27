@@ -13,7 +13,9 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 /**
  * 列表预览用缩略图：按最长边缩放并转 JPEG，便于缓存与节省带宽。
@@ -59,7 +61,27 @@ public final class ImageThumbnails {
     }
 
     public static String cacheKey(String storageKey, int width) {
+        return cacheKey(storageKey, width, -1L);
+    }
+
+    /**
+     * 缩略图缓存键必须带上原图字节数：同一 key 被覆盖写入后，旧缩略图不能继续命中，
+     * 否则列表/历史用 w=480 仍是旧图，大预览 w=960 或原图已是新图。
+     */
+    public static String cacheKey(String storageKey, int width, long sourceBytes) {
+        if (sourceBytes > 0) {
+            return storageKey + ".__thumb_w" + width + "_s" + sourceBytes + ".jpg";
+        }
         return storageKey + ".__thumb_w" + width + ".jpg";
+    }
+
+    /** 列出各档位可能残留的旧缓存键（含不带 size 的历史格式），便于覆盖写入后清理。 */
+    public static List<String> legacyCacheKeys(String storageKey) {
+        List<String> keys = new ArrayList<>();
+        for (int bucket : WIDTH_BUCKETS) {
+            keys.add(cacheKey(storageKey, bucket));
+        }
+        return keys;
     }
 
     /**
