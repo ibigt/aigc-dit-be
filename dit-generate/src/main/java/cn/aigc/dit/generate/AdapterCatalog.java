@@ -431,7 +431,15 @@ public final class AdapterCatalog {
         row.put("supportsAudioReference", audio.supported());
         row.put("maxAudioReferences", audio.maxReferences());
         row.put("supportsAudioOnlyReference", audio.audioOnly());
+        row.put("audioModes", audioModes(spec.key()));
         return row;
+    }
+
+    /** Explicit adapter capability; a future music adapter must opt in here. */
+    public static List<String> audioModes(String adapterKey) {
+        return MOCK.equals(adapterKey) ? List.of("speech", "music")
+                : List.of(MINIMAX_SPEECH, OPENAI_SPEECH).contains(adapterKey == null ? "" : adapterKey)
+                ? List.of("speech") : List.of();
     }
 
     public static String defaultModelKey(String adapterKey) {

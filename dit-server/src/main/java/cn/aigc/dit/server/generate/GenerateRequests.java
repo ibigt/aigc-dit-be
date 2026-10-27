@@ -48,6 +48,10 @@ public final class GenerateRequests {
                 .setDurationSec(req.getDurationSec())
                 .setReferenceVideoSeconds(req.getReferenceVideoSeconds())
                 .setVoiceId(blankToNull(req.getVoiceId()))
+                .setAudioMode(blankToNull(req.getAudioMode()))
+                .setEmotion(blankToNull(req.getEmotion()))
+                .setLyrics(blankToNull(req.getLyrics()))
+                .setInstrumental(req.getInstrumental())
                 .setSpeed(req.getSpeed())
                 .setAudioFormat(blankToNull(req.getAudioFormat()))
                 .setCopies(req.getCopies() == null ? 1 : req.getCopies())
@@ -132,6 +136,10 @@ public final class GenerateRequests {
             params.put("referenceVideoSeconds", request.getReferenceVideoSeconds());
         }
         params.put("voiceId", request.getVoiceId());
+        params.put("audioMode", request.getAudioMode());
+        params.put("emotion", request.getEmotion());
+        params.put("lyrics", request.getLyrics());
+        params.put("instrumental", request.getInstrumental());
         params.put("speed", request.getSpeed());
         params.put("audioFormat", request.getAudioFormat());
         params.put("copies", request.resolvedCopies());
@@ -195,6 +203,10 @@ public final class GenerateRequests {
                 .setDurationSec(intVal(params.get("durationSec")))
                 .setReferenceVideoSeconds(intVal(params.get("referenceVideoSeconds")))
                 .setVoiceId(stringVal(params.get("voiceId"), null))
+                .setAudioMode(stringVal(params.get("audioMode"), null))
+                .setEmotion(stringVal(params.get("emotion"), null))
+                .setLyrics(stringVal(params.get("lyrics"), null))
+                .setInstrumental(params.get("instrumental") instanceof Boolean flag ? flag : null)
                 .setSpeed(doubleVal(params.get("speed")))
                 .setAudioFormat(stringVal(params.get("audioFormat"), null))
                 .setCopies(task.getCopies() == null ? intVal(params.get("copies")) : task.getCopies())

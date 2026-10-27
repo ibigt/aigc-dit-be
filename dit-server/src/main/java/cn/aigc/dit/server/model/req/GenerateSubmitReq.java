@@ -46,6 +46,14 @@ public class GenerateSubmitReq {
     @Schema(description = "语音音色标识；category=audio 时使用")
     private String voiceId;
 
+    @Size(max = 16)
+    private String audioMode;
+    @Size(max = 128)
+    private String emotion;
+    @Size(max = 4096)
+    private String lyrics;
+    private Boolean instrumental;
+
     @DecimalMin("0.25")
     @DecimalMax("4.0")
     @Schema(description = "语速倍率，默认 1.0")

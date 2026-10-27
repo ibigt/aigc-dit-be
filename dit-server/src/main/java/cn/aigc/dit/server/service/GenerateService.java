@@ -213,6 +213,11 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())) {
             return;
         }
+        String audioMode = request.getAudioMode() == null ? "speech" : request.getAudioMode();
+        if (!AdapterCatalog.audioModes(request.getAdapterKey()).contains(audioMode)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前音频模型不支持" + ("music".equals(audioMode) ? " AI 音乐" : "该音频") + "模式");
+        }
+        request.setAudioMode(audioMode);
         if (request.getPrompt() == null || request.getPrompt().isBlank()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "待朗读文本不能为空");
         }
@@ -222,7 +227,9 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (request.getFrames() != null && request.getFrames().hasAny()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "文本生成语音不支持首尾帧");
         }
-        request.setCopies(1);
+        if (request.getCopies() == null || request.getCopies() < 1 || request.getCopies() > 4) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "音频副本数量必须在 1 到 4 之间");
+        }
         if (request.getSpeed() == null) {
             request.setSpeed(1.0);
         }

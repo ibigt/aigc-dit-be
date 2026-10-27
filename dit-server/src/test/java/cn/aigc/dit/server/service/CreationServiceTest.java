@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -26,6 +27,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -173,5 +175,43 @@ class CreationServiceTest {
 
         service.removeDramaOutputs(1L, 9L, "users/1/a.png");
         verify(creationMapper).delete(any());
+    }
+
+    @Test
+    void workflowFilmCreatesZeroCostCreation() {
+        service.recordWorkflowFilm(7L, 1L, "edit", "Final cut",
+                "users/7/workflows/1/edit/film.mp4", "poster.jpg", 9.5);
+
+        ArgumentCaptor<Creation> saved = ArgumentCaptor.forClass(Creation.class);
+        verify(creationMapper).insert(saved.capture());
+        Creation creation = saved.getValue();
+        assertEquals(7L, creation.getUserId());
+        assertEquals("Final cut", creation.getTitle());
+        assertEquals("video", creation.getCategory());
+        assertEquals("users/7/workflows/1/edit/film.mp4", creation.getStorageKey());
+        assertEquals("poster.jpg", creation.getPosterKey());
+        assertEquals(10, creation.getDurationSec());
+        assertEquals(0L, creation.getCreditCost());
+        assertEquals("workflow", creation.getProjectKind());
+        assertEquals(1L, creation.getProjectId());
+    }
+
+    @Test
+    void workflowFilmUpdatesExistingCreationForSameStorageKey() {
+        Creation existing = new Creation();
+        existing.setId(42L);
+        existing.setUserId(7L);
+        existing.setStorageKey("users/7/workflows/1/edit/film.mp4");
+        existing.setPosterKey("old-poster.jpg");
+        when(creationMapper.selectOne(any(), eq(false))).thenReturn(existing);
+
+        service.recordWorkflowFilm(7L, 1L, "edit", "Final cut",
+                "users/7/workflows/1/edit/film.mp4", "new-poster.jpg", 12);
+
+        ArgumentCaptor<Creation> updated = ArgumentCaptor.forClass(Creation.class);
+        verify(creationMapper).updateById(updated.capture());
+        assertEquals(42L, updated.getValue().getId());
+        assertEquals("new-poster.jpg", updated.getValue().getPosterKey());
+        verify(creationMapper, never()).insert(any(Creation.class));
     }
 }

@@ -110,17 +110,9 @@ public class SglangGenerateProvider implements GenerateProvider {
         body.put("task", task);
         body.put("seconds", seconds);
         body.put("conditions", conditions);
-        int edge = 768;
-        if (!config.containsKey("shortEdge") && request.getResolution() != null && !request.getResolution().isBlank()) {
-            String resolution = request.getResolution().toLowerCase(Locale.ROOT).replace("p", "");
-            try { edge = Integer.parseInt(resolution); } catch (NumberFormatException e) { throw bad("SGLang 分辨率请使用 768P 等短边像素值"); }
-        }
-        if (edge <= 0) throw bad("分辨率必须大于零");
-        if (config.containsKey("shortEdge")) {
-            try { edge = Integer.parseInt(String.valueOf(config.get("shortEdge"))); }
-            catch (NumberFormatException e) { throw bad("shortEdge 必须为正整数"); }
-            if (edge <= 0) throw bad("shortEdge 必须为正整数");
-        }
+        // 分辨率档位优先于 adapterConfig.shortEdge：数字档（768P/1080P…）取档位数字，2K→1440、4K→2160；
+        // 未传分辨率或档位无法识别时回退 shortEdge 配置，最终默认 768
+        int edge = shortEdgeOf(request.getResolution(), config);
         body.put("target", Map.of("short_edge", edge, "aspect_ratio", ratio, "duration_seconds", (double) seconds));
         // The content endpoint returns one MP4 per job.
         body.put("num_outputs_per_prompt", 1);
@@ -134,6 +126,36 @@ public class SglangGenerateProvider implements GenerateProvider {
     private void addFrame(List<Map<String, Object>> conditions, String key, int index) {
         if (key != null && !key.isBlank()) conditions.add(Map.of("type", "image", "uri", mediaUri(key),
                 "role", "keyframe", "frame_index", index));
+    }
+
+    private static int shortEdgeOf(String resolution, Map<String, Object> config) {
+        Integer mapped = mappedShortEdge(resolution);
+        if (mapped != null) return mapped;
+        if (config.containsKey("shortEdge")) {
+            try {
+                int configured = Integer.parseInt(String.valueOf(config.get("shortEdge")));
+                if (configured <= 0) throw bad("shortEdge 必须为正整数");
+                return configured;
+            } catch (NumberFormatException e) {
+                throw bad("shortEdge 必须为正整数");
+            }
+        }
+        return 768;
+    }
+
+    private static Integer mappedShortEdge(String resolution) {
+        if (resolution == null || resolution.isBlank()) return null;
+        String tier = resolution.trim().toLowerCase(Locale.ROOT);
+        if (tier.endsWith("p")) tier = tier.substring(0, tier.length() - 1);
+        if ("2k".equals(tier)) return 1440;
+        if ("4k".equals(tier)) return 2160;
+        try {
+            int edge = Integer.parseInt(tier);
+            if (edge <= 0) throw bad("分辨率必须大于零");
+            return edge;
+        } catch (NumberFormatException e) {
+            return null; // 未知档位回退 shortEdge 配置
+        }
     }
 
     private String mediaUri(String key) {

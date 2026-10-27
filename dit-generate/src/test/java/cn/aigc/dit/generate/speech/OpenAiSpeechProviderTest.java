@@ -42,6 +42,7 @@ class OpenAiSpeechProviderTest {
                 .setModelKey("tts-pro")
                 .setPrompt("  欢迎使用语音创作  ")
                 .setVoiceId("nova")
+                .setEmotion("happy").setCopies(3)
                 .setSpeed(1.25)
                 .setAudioFormat("wav")
                 .setAdapterConfig(Map.of("instructions", "语气温暖"));
@@ -57,10 +58,18 @@ class OpenAiSpeechProviderTest {
         assertEquals("nova", body.path("voice").asText());
         assertEquals("wav", body.path("response_format").asText());
         assertEquals(1.25, body.path("speed").asDouble());
-        assertEquals("语气温暖", body.path("instructions").asText());
+        assertEquals("happy", body.path("instructions").asText());
+        assertEquals(java.util.List.of("users/8/outputs/42/1.wav", "users/8/outputs/42/2.wav", "users/8/outputs/42/3.wav"), result.getOutputKeys());
         assertEquals(PollResult.SUCCEEDED, result.getStatus());
         assertEquals("users/8/outputs/42/1.wav", result.getOutputStorageKey());
         assertArrayEquals(new byte[]{1, 2, 3, 4}, Files.readAllBytes(tempDir.resolve(result.getOutputStorageKey())));
+    }
+
+    @Test
+    void rejectsMusicRatherThanSynthesizingSpeech() {
+        var provider = new OpenAiSpeechProvider(new LocalObjectStorage(tempDir), new GenerateProperties(), new RecordingHttp(new byte[]{1}), new ObjectMapper());
+        var request = new GenerateRequest().setCategory("audio").setMode("t2a").setPrompt("strings").setAudioMode("music");
+        assertThrows(cn.aigc.dit.common.exception.BizException.class, () -> provider.submit(request));
     }
 
     @Test

@@ -38,7 +38,7 @@ public class OpenAiSpeechProvider implements GenerateProvider {
     private final GenerateProperties.Speech properties;
     private final SpeechHttp http;
     private final ObjectMapper objectMapper;
-    private final Map<String, String> completed = new ConcurrentHashMap<>();
+    private final Map<String, java.util.List<String>> completed = new ConcurrentHashMap<>();
 
     @Autowired
     public OpenAiSpeechProvider(ObjectStorage objectStorage, GenerateProperties properties) {
@@ -62,24 +62,26 @@ public class OpenAiSpeechProvider implements GenerateProvider {
     public SubmitResult submit(GenerateRequest request) {
         assertSupported(request);
         String format = formatOf(request);
-        byte[] audio = http.post(speechUri(request.getEndpoint(), properties.getBaseUrl()),
-                firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
-        if (audio == null || audio.length == 0) {
-            throw new BizException(ErrorCode.INTERNAL, "语音模型未返回音频内容");
+        java.util.List<String> keys = outputKeys(request, format);
+        for (String key : keys) {
+            byte[] audio = http.post(speechUri(request.getEndpoint(), properties.getBaseUrl()),
+                    firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
+            if (audio == null || audio.length == 0) {
+                throw new BizException(ErrorCode.INTERNAL, "语音模型未返回音频内容");
+            }
+            objectStorage.put(key, audio, contentType(format));
         }
-        String key = outputKey(request, format);
-        objectStorage.put(key, audio, contentType(format));
         String jobId = "speech-" + UUID.randomUUID();
-        completed.put(jobId, key);
+        completed.put(jobId, keys);
         return SubmitResult.accepted(jobId);
     }
 
     @Override
     public PollResult poll(String jobId) {
-        String key = completed.get(jobId);
-        return key == null
+        java.util.List<String> keys = completed.get(jobId);
+        return keys == null
                 ? PollResult.failed(jobId, "语音生成任务不存在")
-                : PollResult.succeeded(jobId, key);
+                : PollResult.succeeded(jobId, keys);
     }
 
     @Override
@@ -90,7 +92,7 @@ public class OpenAiSpeechProvider implements GenerateProvider {
     /** 服务重启后 Worker 可根据已持久化任务恢复内存态。 */
     public void remember(String jobId, GenerateRequest request) {
         if (StringUtils.hasText(jobId) && request != null) {
-            completed.putIfAbsent(jobId, outputKey(request, formatOf(request)));
+            completed.putIfAbsent(jobId, outputKeys(request, formatOf(request)));
         }
     }
 
@@ -121,6 +123,9 @@ public class OpenAiSpeechProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
+        if ("music".equals(request.getAudioMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前语音协议不支持 AI 音乐模式");
+        }
         if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
                 || !GenerateMode.T2A.equalsIgnoreCase(GenerateMode.canonical(request.getMode()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前语音协议仅支持文本生成语音（t2a）");
@@ -144,7 +149,7 @@ public class OpenAiSpeechProvider implements GenerateProvider {
         body.put("voice", firstNonBlank(request.getVoiceId(), configString(request, "defaultVoice"), DEFAULT_VOICE));
         body.put("response_format", format);
         body.put("speed", speedOf(request));
-        String instructions = configString(request, "instructions");
+        String instructions = firstNonBlank(request.getEmotion(), configString(request, "instructions"));
         if (StringUtils.hasText(instructions)) {
             body.put("instructions", instructions);
         }
@@ -178,6 +183,12 @@ public class OpenAiSpeechProvider implements GenerateProvider {
         long userId = request.getUserId() == null ? 0L : request.getUserId();
         long taskId = request.getTaskId() == null ? 0L : request.getTaskId();
         return "users/" + userId + "/outputs/" + taskId + "/1." + format;
+    }
+
+    private static java.util.List<String> outputKeys(GenerateRequest request, String format) {
+        String first = outputKey(request, format);
+        String prefix = first.substring(0, first.lastIndexOf('/') + 1);
+        return java.util.stream.IntStream.rangeClosed(1, request.resolvedCopies()).mapToObj(index -> prefix + index + "." + format).toList();
     }
 
     static String contentType(String format) {

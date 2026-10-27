@@ -268,6 +268,39 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     }
 
     @Transactional
+    public void recordWorkflowFilm(Long userId, Long runId, String nodeId, String title,
+                                   String storageKey, String posterKey, double durationSeconds) {
+        if (userId == null || runId == null || !StringUtils.hasText(storageKey)) {
+            throw new IllegalArgumentException("工作流成片信息不完整");
+        }
+        String filmTitle = StringUtils.hasText(title) ? title.trim() : "工作流成片";
+        Creation creation = getOne(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getStorageKey, storageKey)
+                .last("LIMIT 1"), false);
+        boolean existing = creation != null;
+        if (!existing) {
+            creation = new Creation();
+            creation.setUserId(userId);
+            creation.setStorageKey(storageKey);
+            creation.setCategory(ModelCategory.VIDEO);
+            creation.setCopyIndex(1);
+            creation.setCreditCost(0L);
+        }
+        creation.setTitle(filmTitle);
+        creation.setPrompt(filmTitle);
+        creation.setPosterKey(posterKey);
+        creation.setDurationSec((int) Math.ceil(durationSeconds));
+        creation.setProjectKind("workflow");
+        creation.setProjectId(runId);
+        if (existing) {
+            updateById(creation);
+        } else {
+            save(creation);
+        }
+    }
+
+    @Transactional
     public void removeDramaFilm(Long userId, String storageKey) {
         if (userId == null || !StringUtils.hasText(storageKey)) {
             return;

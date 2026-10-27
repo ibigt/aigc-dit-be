@@ -37,6 +37,7 @@ class MiniMaxSpeechProviderTest {
                 .setApiKey("secret").setModelKey("speech-2.8-hd")
                 .setPrompt("欢迎使用").setVoiceId("male-qn-qingse")
                 .setSpeed(1.15).setAudioFormat("mp3")
+                .setEmotion("happy").setCopies(3)
                 .setAdapterConfig(Map.of("volume", 1.2, "pitch", 1, "sampleRate", 32000,
                         "bitrate", 128000, "channel", 1, "languageBoost", "Chinese"));
 
@@ -49,10 +50,18 @@ class MiniMaxSpeechProviderTest {
         assertEquals("speech-2.8-hd", body.path("model").asText());
         assertEquals("male-qn-qingse", body.path("voice_setting").path("voice_id").asText());
         assertEquals(1.15, body.path("voice_setting").path("speed").asDouble());
+        assertEquals("happy", body.path("voice_setting").path("emotion").asText());
+        assertEquals(java.util.List.of("users/5/outputs/12/1.mp3", "users/5/outputs/12/2.mp3", "users/5/outputs/12/3.mp3"), result.getOutputKeys());
         assertEquals("mp3", body.path("audio_setting").path("format").asText());
         assertEquals("Chinese", body.path("language_boost").asText());
         assertEquals(PollResult.SUCCEEDED, result.getStatus());
         assertArrayEquals(new byte[]{1, 2, (byte) 255}, Files.readAllBytes(tempDir.resolve(result.getOutputStorageKey())));
+    }
+
+    @Test
+    void rejectsMusicRatherThanSynthesizingSpeech() {
+        var provider = new MiniMaxSpeechProvider(new LocalObjectStorage(tempDir), new GenerateProperties(), new RecordingHttp("{\"data\":{\"audio\":\"0102\"}}"), new ObjectMapper());
+        assertThrows(BizException.class, () -> provider.submit(new GenerateRequest().setCategory("audio").setMode("t2a").setPrompt("strings").setAudioMode("music")));
     }
 
     @Test

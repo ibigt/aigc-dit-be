@@ -28,6 +28,10 @@ public class GenerateRequest {
     private Integer referenceVideoSeconds;
     /** 语音生成参数；仅 category=audio/t2a 使用。 */
     private String voiceId;
+    private String audioMode;
+    private String emotion;
+    private String lyrics;
+    private Boolean instrumental;
     private Double speed;
     private String audioFormat;
     private Integer copies = 1;
@@ -164,6 +168,15 @@ public class GenerateRequest {
     public String getVoiceId() {
         return voiceId;
     }
+
+    public String getAudioMode() { return audioMode; }
+    public GenerateRequest setAudioMode(String value) { audioMode = value; return this; }
+    public String getEmotion() { return emotion; }
+    public GenerateRequest setEmotion(String value) { emotion = value; return this; }
+    public String getLyrics() { return lyrics; }
+    public GenerateRequest setLyrics(String value) { lyrics = value; return this; }
+    public Boolean getInstrumental() { return instrumental; }
+    public GenerateRequest setInstrumental(Boolean value) { instrumental = value; return this; }
 
     public GenerateRequest setVoiceId(String voiceId) {
         this.voiceId = voiceId;

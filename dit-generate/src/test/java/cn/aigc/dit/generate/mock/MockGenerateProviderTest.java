@@ -80,13 +80,16 @@ class MockGenerateProviderTest {
                 .setTaskId(44L)
                 .setCategory("audio")
                 .setMode("t2a")
-                .setPrompt("欢迎使用语音合成")
-                .setCopies(1);
+                .setPrompt("warm strings")
+                .setAudioMode("music").setLyrics("hello").setInstrumental(false)
+                .setCopies(3);
 
         PollResult result = provider.poll(provider.submit(request).getJobId());
         Path output = tempDir.resolve(result.getOutputKeys().get(0));
 
         assertEquals(PollResult.SUCCEEDED, result.getStatus());
+        assertEquals(java.util.List.of("users/9/outputs/44/1.wav", "users/9/outputs/44/2.wav", "users/9/outputs/44/3.wav"), result.getOutputKeys());
+        for (String key : result.getOutputKeys()) assertEquals("RIFF", new String(Files.readAllBytes(tempDir.resolve(key)), 0, 4, StandardCharsets.US_ASCII));
         assertTrue(output.toString().endsWith(".wav"));
         assertEquals("RIFF", new String(Files.readAllBytes(output), 0, 4, StandardCharsets.US_ASCII));
         assertTrue(Files.size(output) > 20_000);

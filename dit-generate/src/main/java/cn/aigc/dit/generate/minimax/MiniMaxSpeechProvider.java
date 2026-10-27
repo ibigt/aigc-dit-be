@@ -43,7 +43,7 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     private final GenerateProperties.Minimax properties;
     private final MiniMaxHttp http;
     private final ObjectMapper objectMapper;
-    private final Map<String, String> completed = new ConcurrentHashMap<>();
+    private final Map<String, java.util.List<String>> completed = new ConcurrentHashMap<>();
 
     @Autowired
     public MiniMaxSpeechProvider(ObjectStorage objectStorage, GenerateProperties properties) {
@@ -67,25 +67,27 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     public SubmitResult submit(GenerateRequest request) {
         assertSupported(request);
         String format = formatOf(request);
-        String response = http.postJson(endpoint(request.getEndpoint(), properties.getBaseUrl()),
-                firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
-        JsonNode root = readJson(response);
-        assertSuccess(root);
-        byte[] audio = audioBytes(root);
-        if (audio.length == 0) {
-            throw new BizException(ErrorCode.INTERNAL, "MiniMax 语音接口未返回音频内容");
+        java.util.List<String> keys = outputKeys(request, format);
+        for (String key : keys) {
+            String response = http.postJson(endpoint(request.getEndpoint(), properties.getBaseUrl()),
+                    firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
+            JsonNode root = readJson(response);
+            assertSuccess(root);
+            byte[] audio = audioBytes(root);
+            if (audio.length == 0) {
+                throw new BizException(ErrorCode.INTERNAL, "MiniMax 语音接口未返回音频内容");
+            }
+            objectStorage.put(key, audio, contentType(format));
         }
-        String key = outputKey(request, format);
-        objectStorage.put(key, audio, contentType(format));
         String jobId = "minimax-speech-" + UUID.randomUUID();
-        completed.put(jobId, key);
+        completed.put(jobId, keys);
         return SubmitResult.accepted(jobId);
     }
 
     @Override
     public PollResult poll(String jobId) {
-        String key = completed.get(jobId);
-        return key == null ? PollResult.failed(jobId, "MiniMax 语音任务不存在") : PollResult.succeeded(jobId, key);
+        java.util.List<String> keys = completed.get(jobId);
+        return keys == null ? PollResult.failed(jobId, "MiniMax 语音任务不存在") : PollResult.succeeded(jobId, keys);
     }
 
     @Override
@@ -95,7 +97,7 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
 
     public void remember(String jobId, GenerateRequest request) {
         if (StringUtils.hasText(jobId) && request != null) {
-            completed.putIfAbsent(jobId, outputKey(request, formatOf(request)));
+            completed.putIfAbsent(jobId, outputKeys(request, formatOf(request)));
         }
     }
 
@@ -149,6 +151,9 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
+        if ("music".equals(request.getAudioMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax 语音协议不支持 AI 音乐模式");
+        }
         if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
                 || !GenerateMode.T2A.equalsIgnoreCase(GenerateMode.canonical(request.getMode()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax 语音协议仅支持文本生成语音（t2a）");
@@ -162,6 +167,7 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
         Map<String, Object> voice = new LinkedHashMap<>();
         voice.put("voice_id", firstNonBlank(request.getVoiceId(), configString(request, "defaultVoice"), DEFAULT_VOICE));
         voice.put("speed", request.getSpeed() == null ? 1D : request.getSpeed());
+        if (StringUtils.hasText(request.getEmotion())) voice.put("emotion", request.getEmotion());
         voice.put("vol", configDouble(request, "volume", 1D));
         voice.put("pitch", configInt(request, "pitch", 0));
 
@@ -240,6 +246,12 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     static String outputKey(GenerateRequest request, String format) {
         return "users/" + (request.getUserId() == null ? 0 : request.getUserId()) + "/outputs/"
                 + (request.getTaskId() == null ? 0 : request.getTaskId()) + "/1." + format;
+    }
+
+    private static java.util.List<String> outputKeys(GenerateRequest request, String format) {
+        String first = outputKey(request, format);
+        String prefix = first.substring(0, first.lastIndexOf('/') + 1);
+        return java.util.stream.IntStream.rangeClosed(1, request.resolvedCopies()).mapToObj(index -> prefix + index + "." + format).toList();
     }
 
     static String contentType(String format) {
