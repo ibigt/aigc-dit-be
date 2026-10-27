@@ -83,11 +83,13 @@ class DetectiveClubRegressionTest {
         List<AssetDraftList.AssetDraft> assets = DramaAssetDrafts.fromScript(parsedScript()).getAssets();
 
         for (JsonNode want : spec.get("must_include")) {
-            AssetDraftList.AssetDraft got = findAsset(assets, want.get("name").asText());
-            assertNotNull(got, "资产清单缺少：" + want.get("name").asText());
-            assertEquals(want.get("type").asText(), got.getType(), "类型错：" + want.get("name").asText());
-            if (want.has("state_tag")) {
-                assertEquals(want.get("state_tag").asText(), got.getStateTag(), "state_tag 错：" + got.getName());
+            String wantName = want.get("name").asText();
+            String wantTag = want.has("state_tag") ? want.get("state_tag").asText() : null;
+            AssetDraftList.AssetDraft got = findAsset(assets, wantName, wantTag);
+            assertNotNull(got, "资产清单缺少：" + wantName + (wantTag != null ? "/" + wantTag : ""));
+            assertEquals(want.get("type").asText(), got.getType(), "类型错：" + wantName);
+            if (wantTag != null) {
+                assertEquals(wantTag, got.getStateTag(), "state_tag 错：" + got.getName());
             }
             if (want.has("must_split")) {
                 assertEquals(want.get("must_split").asBoolean(), Boolean.TRUE.equals(got.getMustSplit()),
@@ -98,7 +100,9 @@ class DetectiveClubRegressionTest {
 
         for (AssetDraftList.AssetDraft asset : assets) {
             assertTrue(notBlank(asset.getDescription()), "描述不得为空：" + asset.getName());
-            assertTrue(notBlank(asset.getIdentityInvariants()), "identity_invariants 不得为空：" + asset.getName());
+            if (DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+                assertTrue(notBlank(asset.getIdentityInvariants()), "identity_invariants 不得为空：" + asset.getName());
+            }
             assertTrue(notBlank(asset.getImagePrompt()), "image_prompt 不得为空：" + asset.getName());
             assertTrue(Boolean.TRUE.equals(asset.getNeedsHuman()), "未经人工确认的草稿必须 needs_human：" + asset.getName());
         }
@@ -112,7 +116,8 @@ class DetectiveClubRegressionTest {
         for (JsonNode forbid : spec.get("must_not_merge")) {
             String base = forbid.get("base").asText();
             List<AssetDraftList.AssetDraft> baseRows = assets.stream()
-                    .filter(item -> base.equals(item.getName()))
+                    .filter(item -> base.equals(item.getName())
+                            && DramaContract.STATE_TAG_BASE.equals(item.getStateTag()))
                     .toList();
             assertEquals(1, baseRows.size(), base + " 只应有一条本体");
             assertEquals(DramaContract.STATE_TAG_BASE, baseRows.get(0).getStateTag(), base + " 本体不能带梦境态");
@@ -129,7 +134,11 @@ class DetectiveClubRegressionTest {
         JsonNode spec = MAPPER.readTree(fixture("expected-shots.json"));
         ScriptDoc doc = parsedScript();
         List<String> assetNames = DramaAssetDrafts.fromScript(doc).getAssets().stream()
-                .map(AssetDraftList.AssetDraft::getName)
+                .map(item -> DramaAssetVersions.mentionName(
+                        item.getName(), item.getStateTag(),
+                        DramaContract.STATE_TAG_DREAM.equals(item.getStateTag())
+                                && "洛白".equals(item.getName()) ? "入梦" : null))
+                .distinct()
                 .toList();
         ShotDraftList drafts = DramaShotDrafts.fromScript(doc, assetNames);
 
@@ -198,8 +207,23 @@ class DetectiveClubRegressionTest {
                 .toList();
     }
 
-    private static AssetDraftList.AssetDraft findAsset(List<AssetDraftList.AssetDraft> assets, String name) {
-        return assets.stream().filter(item -> name.equals(item.getName())).findFirst().orElse(null);
+    private static AssetDraftList.AssetDraft findAsset(
+            List<AssetDraftList.AssetDraft> assets, String name, String stateTag) {
+        return assets.stream()
+                .filter(item -> name.equals(item.getName()))
+                .filter(item -> {
+                    if (stateTag == null) {
+                        return true;
+                    }
+                    String tag = item.getStateTag();
+                    if (stateTag.equals(tag)) {
+                        return true;
+                    }
+                    return DramaContract.STATE_TAG_BASE.equals(stateTag)
+                            && (tag == null || tag.isBlank());
+                })
+                .findFirst()
+                .orElse(null);
     }
 
     private static List<String> dialoguePairs(ScriptDoc.Scene scene) {

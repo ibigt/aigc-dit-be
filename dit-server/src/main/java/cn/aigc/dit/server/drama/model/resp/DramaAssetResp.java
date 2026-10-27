@@ -15,8 +15,16 @@ public class DramaAssetResp {
     private String name;
     private String type;
     private String stateTag;
-    @Schema(description = "状态名（资产名「本体名·状态名」的后缀），本体为空")
+    @Schema(description = "版本展示标签；基础版为「基础」")
+    private String versionLabel;
+    @Schema(description = "兼容旧字段：同 versionLabel（非基础）或空")
     private String stateLabel;
+    @Schema(description = "延伸父版本 id")
+    private Long parentAssetId;
+    @Schema(description = "分镜 @ 引用名：基础版为短名，其它为「名·标签」")
+    private String mentionName;
+    @Schema(description = "同族版本数（含基础）")
+    private Integer versionCount;
     private String description;
     private String identityInvariants;
     private String imagePrompt;

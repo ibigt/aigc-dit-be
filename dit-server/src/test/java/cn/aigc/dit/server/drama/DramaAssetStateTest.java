@@ -43,8 +43,7 @@ import static org.mockito.Mockito.when;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 
 /**
- * 人物状态扩展（本体名·状态名）的形状约束：
- * 名字是状态的身份，标签由名字派生，状态资产继承本体外形并只叠加状态描述。
+ * 角色多版本：族名固定、versionLabel 展示、mention 为「名·标签」。
  */
 @ExtendWith(MockitoExtension.class)
 class DramaAssetStateTest {
@@ -121,11 +120,13 @@ class DramaAssetStateTest {
     }
 
     @Test
-    void creatingAStateAssetAppendsTheStateNameAndDerivesTheTag() {
+    void creatingAVersionKeepsFamilyNameAndSetsLabel() {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
         when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
-        when(assetMapper.selectList(any())).thenReturn(List.of(baseCharacter()));
+        DramaAsset base = baseCharacter();
+        when(assetMapper.selectById(9L)).thenReturn(base);
+        when(assetMapper.selectList(any())).thenReturn(List.of(base));
         when(assetMapper.selectOne(any())).thenReturn(null);
 
         DramaAssetSaveReq req = new DramaAssetSaveReq();
@@ -137,23 +138,23 @@ class DramaAssetStateTest {
         service.create(31L, req);
 
         DramaAsset inserted = capturedInsert();
-        assertEquals("洛白·湿身", inserted.getName());
-        assertEquals(DramaContract.STATE_TAG_COSTUME, inserted.getStateTag());
+        assertEquals("洛白", inserted.getName());
+        assertEquals("湿身", inserted.getVersionLabel());
+        assertEquals(DramaContract.STATE_TAG_WET, inserted.getStateTag());
         assertTrue(Boolean.TRUE.equals(inserted.getMustSplit()));
-        // 状态资产不复制本体长句，只留「同一个人」的锁；本体外形在生图时继承。
+        assertEquals(Long.valueOf(9L), inserted.getParentAssetId());
         assertTrue(inserted.getIdentityInvariants().contains("同一张脸"));
         assertFalse(inserted.getIdentityInvariants().contains("锐利眼神"));
-        // 状态描述是「相对本体的变化」，不能被设定图模板覆盖。
         assertEquals("白衬衫湿透贴服，头发湿哒哒贴着额头", inserted.getDescription());
-        assertNotNull(inserted.getImagePrompt());
-        assertTrue(inserted.getImagePrompt().contains("本状态外观：白衬衫湿透贴服"));
-        assertTrue(inserted.getImagePrompt().contains(BASE_IDENTITY));
+        assertEquals("洛白·湿身", DramaAssetVersions.mentionNameOf(inserted));
     }
 
     @Test
-    void stateAssetWithoutDescriptionIsRejected() {
+    void versionWithoutDescriptionIsRejected() {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(assetMapper.selectById(9L)).thenReturn(baseCharacter());
+        when(assetMapper.selectList(any())).thenReturn(List.of(baseCharacter()));
 
         DramaAssetSaveReq req = new DramaAssetSaveReq();
         req.setName("洛白");
@@ -167,14 +168,17 @@ class DramaAssetStateTest {
     }
 
     @Test
-    void duplicateStateNameIsRejectedWithTheStateMessage() {
+    void duplicateVersionLabelIsRejected() {
         DramaEpisode episode = ownedEpisode();
         when(episodeMapper.selectById(31L)).thenReturn(episode);
+        DramaAsset base = baseCharacter();
         DramaAsset existing = baseCharacter();
         existing.setId(11L);
-        existing.setName("洛白·湿身");
-        existing.setStateTag(DramaContract.STATE_TAG_COSTUME);
-        when(assetMapper.selectList(any())).thenReturn(List.of(existing));
+        existing.setName("洛白");
+        existing.setStateTag(DramaContract.STATE_TAG_WET);
+        existing.setVersionLabel("湿身");
+        when(assetMapper.selectById(9L)).thenReturn(base);
+        when(assetMapper.selectList(any())).thenReturn(List.of(base, existing));
 
         DramaAssetSaveReq req = new DramaAssetSaveReq();
         req.setName("洛白");
@@ -184,7 +188,7 @@ class DramaAssetStateTest {
 
         BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
 
-        assertEquals("「洛白」的「湿身」状态已经存在", error.getMessage());
+        assertEquals("「洛白」的「湿身」版本已经存在", error.getMessage());
         verify(assetMapper, never()).insert(any(DramaAsset.class));
     }
 
@@ -210,14 +214,14 @@ class DramaAssetStateTest {
     }
 
     @Test
-    void renamingAStateAssetReDerivesItsTag() {
+    void renamingWithLegacyDotPromotesVersionLabel() {
         DramaAsset asset = baseCharacter();
         asset.setId(12L);
-        asset.setName("洛白·湿身");
-        asset.setStateTag(DramaContract.STATE_TAG_COSTUME);
+        asset.setName("洛白");
+        asset.setStateTag(DramaContract.STATE_TAG_BASE);
         when(assetMapper.selectById(12L)).thenReturn(asset);
         when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
-        when(assetMapper.selectList(any())).thenReturn(List.of(baseCharacter()));
+        when(assetMapper.selectList(any())).thenReturn(List.of(asset));
         when(assetMapper.selectOne(any())).thenReturn(null);
 
         DramaAssetSaveReq req = new DramaAssetSaveReq();
@@ -227,7 +231,8 @@ class DramaAssetStateTest {
 
         ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
         verify(assetMapper).updateById(captor.capture());
-        assertEquals("洛白·入梦", captor.getValue().getName());
+        assertEquals("洛白", captor.getValue().getName());
+        assertEquals("入梦", captor.getValue().getVersionLabel());
         assertEquals(DramaContract.STATE_TAG_DREAM, captor.getValue().getStateTag());
     }
 
@@ -235,8 +240,9 @@ class DramaAssetStateTest {
     void stateImageRequiresTheBaseSheetFirst() {
         DramaAsset state = baseCharacter();
         state.setId(12L);
-        state.setName("洛白·湿身");
-        state.setStateTag(DramaContract.STATE_TAG_COSTUME);
+        state.setName("洛白");
+        state.setStateTag(DramaContract.STATE_TAG_WET);
+        state.setVersionLabel("湿身");
         state.setDescription("白衬衫湿透贴服");
         when(assetMapper.selectById(12L)).thenReturn(state);
         DramaSeries series = ownedSeries();
@@ -250,12 +256,11 @@ class DramaAssetStateTest {
         model.setEnabled(true);
         model.setCapabilities(List.of("image", "t2i"));
         when(aiModelMapper.selectById(12L)).thenReturn(model);
-        // 本体存在但没有设定图。
         when(assetMapper.selectList(any())).thenReturn(List.of(baseCharacter()));
 
         BizException error = assertThrows(BizException.class, () -> service.generateImage(12L));
 
-        assertEquals("请先给本体「洛白」生成设定图，再生成状态图", error.getMessage());
+        assertEquals("请先给基础版「洛白」生成设定图，再生成延伸版", error.getMessage());
         verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 

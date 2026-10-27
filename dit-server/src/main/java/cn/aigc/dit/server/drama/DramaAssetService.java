@@ -17,6 +17,7 @@ import cn.aigc.dit.server.drama.mapper.DramaAssetMapper;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
+import cn.aigc.dit.server.drama.model.req.DramaAssetVersionReq;
 import cn.aigc.dit.generate.ark.ArkAssetRefs;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetGenerationResp;
@@ -114,8 +115,10 @@ public class DramaAssetService {
         applySucceededQuietly(assets);
         repairIncompletePrompts(assets, episode.getSeriesId());
         Map<Long, GenTask> tasks = loadTasks(assets);
+        Map<String, Integer> familyCounts = familyVersionCounts(assets);
         return assets.stream()
-                .map(item -> toResp(item, item.getGenTaskId() == null ? null : tasks.get(item.getGenTaskId())))
+                .map(item -> toResp(item, item.getGenTaskId() == null ? null : tasks.get(item.getGenTaskId()),
+                        familyCounts))
                 .toList();
     }
 
@@ -184,13 +187,42 @@ public class DramaAssetService {
             throw new BizException(ErrorCode.BAD_REQUEST, "请填写资产名称与类型");
         }
         String type = normalizeType(req.getType());
-        String name = composeStateName(req);
-        String stateTag = DramaAssetDrafts.inferStateTag(name);
-        if (!DramaContract.STATE_TAG_BASE.equals(stateTag)
+        String versionLabel = firstNonBlank(req.getVersionLabel(), req.getStateName());
+        // 兼容旧前端：带状态名时若已有基础版，则延伸出新版本。
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type) && StringUtils.hasText(versionLabel)) {
+            DramaAsset base = findFamilyBase(episode.getSeriesId(), episode.getId(), type,
+                    DramaAssetDrafts.baseCharacterName(req.getName().trim()));
+            if (base != null) {
+                DramaAssetVersionReq versionReq = new DramaAssetVersionReq();
+                versionReq.setVersionLabel(versionLabel.trim());
+                versionReq.setChangeDescription(req.getDescription());
+                versionReq.setParentAssetId(req.getParentAssetId() != null ? req.getParentAssetId() : base.getId());
+                return createVersion(base.getId(), versionReq);
+            }
+        }
+        DramaAssetVersions.ParsedName parsed = DramaAssetVersions.parseLegacyName(req.getName().trim());
+        String name = parsed.familyName();
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
+            DramaAssetVersions.validateFamilyName(name);
+        }
+        String stateTag = DramaContract.STATE_TAG_BASE;
+        if (StringUtils.hasText(parsed.versionLabel())) {
+            // 剧本式「洛白·湿身」直接新建时落成版本行；无基础版时一并建基础占位不在此路径。
+            stateTag = DramaAssetVersions.slugFromLabel(parsed.versionLabel());
+        } else if (StringUtils.hasText(req.getStateTag())
+                && !DramaContract.STATE_TAG_BASE.equals(DramaContract.normalizeStateTag(req.getStateTag()))) {
+            stateTag = DramaContract.normalizeStateTag(req.getStateTag());
+        }
+        if (!DramaAssetVersions.isBase(stateTag)
                 && !DramaAssetDrafts.isChangeFact(req.getDescription())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请填写状态描述，例如「穿红色晚礼服，头发扎起」");
         }
-        rejectDuplicateName(episode.getSeriesId(), type, name);
+        if (DramaAssetVersions.isBase(stateTag)) {
+            rejectDuplicateFamilyBase(episode.getSeriesId(), type, name);
+        } else {
+            rejectDuplicateVersionLabel(episode.getSeriesId(), episode.getId(), type, name,
+                    firstNonBlank(parsed.versionLabel(), versionLabel, DramaContract.stateWord(stateTag)));
+        }
         DramaAsset asset = new DramaAsset();
         asset.setSeriesId(episode.getSeriesId());
         asset.setEpisodeId(episode.getId());
@@ -201,14 +233,22 @@ public class DramaAssetService {
         asset.setType(type);
         asset.setName(name);
         asset.setStateTag(stateTag);
-        if (!DramaContract.STATE_TAG_BASE.equals(stateTag)) {
-            // 状态资产必须独立成图，不与本体合并。
+        if (!DramaAssetVersions.isBase(stateTag)) {
             asset.setMustSplit(true);
-        }
-        if (!StringUtils.hasText(asset.getIdentityInvariants())
-                && !DramaContract.STATE_TAG_BASE.equals(stateTag)) {
-            // 状态资产继承本体外形，不复制本体长句；「同一个人」由本体图兜底。
-            asset.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(type, name, stateTag));
+            asset.setVersionLabel(firstNonBlank(parsed.versionLabel(), versionLabel, DramaContract.stateWord(stateTag)));
+            asset.setParentAssetId(req.getParentAssetId());
+            if (asset.getParentAssetId() == null) {
+                DramaAsset base = findFamilyBase(episode.getSeriesId(), episode.getId(), type, name);
+                if (base != null) {
+                    asset.setParentAssetId(base.getId());
+                }
+            }
+            if (!StringUtils.hasText(asset.getIdentityInvariants())) {
+                asset.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(type, name, stateTag));
+            }
+        } else {
+            asset.setVersionLabel(null);
+            asset.setParentAssetId(null);
         }
         if (!StringUtils.hasText(asset.getDescription()) && StringUtils.hasText(asset.getIdentityInvariants())) {
             asset.setDescription(asset.getIdentityInvariants());
@@ -221,20 +261,56 @@ public class DramaAssetService {
     }
 
     /**
-     * 资产名 = 本体名·状态名。状态名是状态资产的身份（下游按名字引用），
-     * 状态标签由名字派生，避免同一状态出现两条同名不同标签的记录。
+     * 基于某版本延伸新建；同 {@code name}、新 slug、变化描述；参考图链指向父版。
      */
-    private static String composeStateName(DramaAssetSaveReq req) {
-        String name = req.getName().trim();
-        String stateName = req.getStateName() == null ? null : req.getStateName().trim();
-        String requestedTag = DramaContract.normalizeStateTag(req.getStateTag());
-        if (StringUtils.hasText(stateName)) {
-            return DramaAssetDrafts.baseCharacterName(name) + "·" + stateName;
+    @Transactional
+    public DramaAssetResp createVersion(Long assetId, DramaAssetVersionReq req) {
+        DramaAsset source = requireAsset(assetId);
+        if (!DramaContract.ASSET_TYPE_CHARACTER.equals(source.getType())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "只有角色可以延伸版本");
         }
-        if (!DramaContract.STATE_TAG_BASE.equals(requestedTag)) {
-            return DramaAssetDrafts.baseCharacterName(name) + "·" + DramaContract.stateWord(requestedTag);
+        if (req == null || !StringUtils.hasText(req.getVersionLabel())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写版本标签");
         }
-        return name;
+        DramaAssetVersions.validateVersionLabel(req.getVersionLabel());
+        if (!DramaAssetDrafts.isChangeFact(req.getChangeDescription())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请填写状态描述，例如「穿红色晚礼服，头发扎起」");
+        }
+        String label = req.getVersionLabel().trim();
+        String familyName = source.getName().trim();
+        rejectDuplicateVersionLabel(source.getSeriesId(), source.getEpisodeId(), source.getType(), familyName, label);
+        Long parentId = req.getParentAssetId() != null ? req.getParentAssetId() : source.getId();
+        DramaAsset parent = requireAsset(parentId);
+        if (!parent.getType().equals(source.getType())
+                || !familyName.equals(parent.getName() == null ? "" : parent.getName().trim())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "父版本必须属于同一角色");
+        }
+        java.util.Set<String> usedSlugs = familyAssets(source.getSeriesId(), source.getEpisodeId(),
+                source.getType(), familyName).stream()
+                .map(item -> item.getStateTag() == null ? DramaContract.STATE_TAG_BASE : item.getStateTag().trim())
+                .collect(java.util.stream.Collectors.toCollection(java.util.HashSet::new));
+        String stateTag = DramaAssetVersions.uniquifySlug(DramaAssetVersions.slugFromLabel(label), usedSlugs);
+        DramaAsset asset = new DramaAsset();
+        asset.setSeriesId(source.getSeriesId());
+        asset.setEpisodeId(source.getEpisodeId());
+        asset.setUserId(UserContext.requireUserId());
+        asset.setName(familyName);
+        asset.setType(source.getType());
+        asset.setStateTag(stateTag);
+        asset.setVersionLabel(label);
+        asset.setParentAssetId(parent.getId());
+        asset.setDescription(req.getChangeDescription().trim());
+        asset.setIdentityInvariants(DramaAssetDrafts.defaultIdentity(
+                source.getType(), familyName, stateTag));
+        asset.setMustSplit(true);
+        asset.setNeedsHuman(true);
+        asset.setStatus(DramaContract.STATUS_NOT_STARTED);
+        asset.setIdentityVersion(0);
+        refreshCompiledImagePrompt(asset);
+        ensureUnique(asset, null);
+        assetMapper.insert(asset);
+        touchSeries(source.getSeriesId());
+        return toResp(asset, null);
     }
 
     @Transactional
@@ -243,13 +319,33 @@ public class DramaAssetService {
         boolean appearanceChanged = req.getIdentityInvariants() != null
                 || req.getName() != null
                 || req.getStateTag() != null
+                || req.getVersionLabel() != null
                 || req.getType() != null
-                // 状态资产的「状态外观」写在 description 上，改了要重算提示词。
+                // 版本的「变化描述」写在 description 上，改了要重算提示词。
                 || req.getDescription() != null;
+        String previousName = asset.getName();
         applySave(asset, req, false);
-        if (req.getName() != null && req.getStateTag() == null) {
-            // 状态标签以名字为准：改名后重新派生，避免留下「同名不同标签」的两条记录。
-            asset.setStateTag(DramaAssetDrafts.inferStateTag(asset.getName()));
+        if (req.getName() != null && DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+            DramaAssetVersions.ParsedName parsed = DramaAssetVersions.parseLegacyName(req.getName().trim());
+            DramaAssetVersions.validateFamilyName(parsed.familyName());
+            asset.setName(parsed.familyName());
+            if (StringUtils.hasText(parsed.versionLabel()) && DramaAssetVersions.isBase(asset.getStateTag())) {
+                // 误把「洛白·湿身」写进基础版名：升为版本标签。
+                asset.setVersionLabel(parsed.versionLabel());
+                asset.setStateTag(parsed.stateTag());
+                asset.setMustSplit(true);
+            } else if (StringUtils.hasText(parsed.versionLabel()) && req.getVersionLabel() == null) {
+                asset.setVersionLabel(parsed.versionLabel());
+            }
+            if (!ObjectsEquals(previousName, asset.getName())) {
+                renameFamily(asset, previousName, asset.getName());
+            }
+        }
+        if (req.getVersionLabel() != null && !DramaAssetVersions.isBase(asset.getStateTag())) {
+            DramaAssetVersions.validateVersionLabel(req.getVersionLabel());
+            rejectDuplicateVersionLabel(asset.getSeriesId(), asset.getEpisodeId(), asset.getType(),
+                    asset.getName(), req.getVersionLabel().trim(), asset.getId());
+            asset.setVersionLabel(req.getVersionLabel().trim());
         }
         ensureUnique(asset, asset.getId());
         reopenIfConfirmed(asset);
@@ -259,6 +355,27 @@ public class DramaAssetService {
         assetMapper.updateById(asset);
         touchSeries(asset.getSeriesId());
         return toResp(asset, loadTask(asset.getGenTaskId()));
+    }
+
+    private static boolean ObjectsEquals(String a, String b) {
+        if (a == null) {
+            return b == null;
+        }
+        return a.equals(b);
+    }
+
+    /** 改族名时同步同集同类型的其它版本行。 */
+    private void renameFamily(DramaAsset pivot, String from, String to) {
+        if (!StringUtils.hasText(from) || !StringUtils.hasText(to) || from.equals(to)) {
+            return;
+        }
+        for (DramaAsset mate : familyAssets(pivot.getSeriesId(), pivot.getEpisodeId(), pivot.getType(), from)) {
+            if (mate.getId().equals(pivot.getId())) {
+                continue;
+            }
+            mate.setName(to);
+            assetMapper.updateById(mate);
+        }
     }
 
     public DramaAssetReviewResp reviewCharacter(Long assetId) {
@@ -271,29 +388,65 @@ public class DramaAssetService {
         if (isGenerating(loadTask(asset.getGenTaskId()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "生图进行中，请稍后再删");
         }
-        List<DramaAssetGeneration> generations = listGenerationEntities(asset.getId());
-        java.util.LinkedHashSet<String> storageKeys = new java.util.LinkedHashSet<>();
-        if (generations != null) {
-            for (DramaAssetGeneration generation : generations) {
-                if (generation != null && StringUtils.hasText(generation.getStorageKey())) {
-                    storageKeys.add(generation.getStorageKey());
-                }
+        List<DramaAsset> victims;
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
+                && DramaAssetVersions.isBase(asset.getStateTag())) {
+            // 删基础版 = 删整族。
+            victims = new java.util.ArrayList<>(familyAssets(
+                    asset.getSeriesId(), asset.getEpisodeId(), asset.getType(), asset.getName()));
+            if (victims.stream().noneMatch(item -> asset.getId().equals(item.getId()))) {
+                victims.add(asset);
+            }
+            if (victims.isEmpty()) {
+                victims = List.of(asset);
+            }
+        } else {
+            victims = List.of(asset);
+        }
+        for (DramaAsset victim : victims) {
+            if (isGenerating(loadTask(victim.getGenTaskId()))) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "生图进行中，请稍后再删");
             }
         }
-        if (StringUtils.hasText(asset.getImageStorageKey())) {
-            storageKeys.add(asset.getImageStorageKey());
+        java.util.LinkedHashSet<String> storageKeys = new java.util.LinkedHashSet<>();
+        Long userId = asset.getUserId();
+        Long episodeId = asset.getEpisodeId();
+        Long seriesId = asset.getSeriesId();
+        // 先删非基础版，再删基础，避免 parent 外键阻碍。
+        List<DramaAsset> ordered = new java.util.ArrayList<>();
+        for (DramaAsset victim : victims) {
+            if (!DramaAssetVersions.isBase(victim.getStateTag())) {
+                ordered.add(victim);
+            }
         }
-        if (StringUtils.hasText(asset.getVoiceReferenceKey())) {
-            storageKeys.add(asset.getVoiceReferenceKey());
+        for (DramaAsset victim : victims) {
+            if (DramaAssetVersions.isBase(victim.getStateTag())) {
+                ordered.add(victim);
+            }
         }
-        forgetAssetCreations(generations);
-        assetMapper.deleteById(asset.getId());
-        // 删除资产后同步解除分镜参考绑定，保留分镜文字中的道具描述。
-        storyboardService.detachAssetReference(asset.getEpisodeId(), asset.getId());
-        touchSeries(asset.getSeriesId());
+        for (DramaAsset victim : ordered) {
+            List<DramaAssetGeneration> generations = listGenerationEntities(victim.getId());
+            if (generations != null) {
+                for (DramaAssetGeneration generation : generations) {
+                    if (generation != null && StringUtils.hasText(generation.getStorageKey())) {
+                        storageKeys.add(generation.getStorageKey());
+                    }
+                }
+            }
+            if (StringUtils.hasText(victim.getImageStorageKey())) {
+                storageKeys.add(victim.getImageStorageKey());
+            }
+            if (StringUtils.hasText(victim.getVoiceReferenceKey())) {
+                storageKeys.add(victim.getVoiceReferenceKey());
+            }
+            forgetAssetCreations(generations);
+            assetMapper.deleteById(victim.getId());
+            storyboardService.detachAssetReference(episodeId, victim.getId());
+        }
+        touchSeries(seriesId);
         List<String> releasedKeys = List.copyOf(storageKeys);
         afterCommit(() -> releasedKeys.forEach(characterReview::release));
-        mediaRetention.purgeAfterCommit(asset.getUserId(), releasedKeys);
+        mediaRetention.purgeAfterCommit(userId, releasedKeys);
     }
 
     @Transactional
@@ -386,12 +539,22 @@ public class DramaAssetService {
         }
     }
 
+    /** 音色挂在基础版；版本行请求时回写到族内 base。 */
+    private DramaAsset voiceOwner(DramaAsset asset) {
+        if (asset == null || DramaAssetVersions.isBase(asset.getStateTag())) {
+            return asset;
+        }
+        DramaAsset base = findBaseCharacter(asset);
+        return base != null ? base : asset;
+    }
+
     private void attachVoiceReference(DramaAsset asset, String key, String mime) {
-        asset.setVoiceReferenceKey(key);
-        asset.setVoiceReferenceMime(mime);
-        reopenIfConfirmed(asset);
-        assetMapper.updateById(asset);
-        touchSeries(asset.getSeriesId());
+        DramaAsset target = voiceOwner(asset);
+        target.setVoiceReferenceKey(key);
+        target.setVoiceReferenceMime(mime);
+        reopenIfConfirmed(target);
+        assetMapper.updateById(target);
+        touchSeries(target.getSeriesId());
     }
 
     @Transactional
@@ -404,16 +567,25 @@ public class DramaAssetService {
         DramaAsset asset = requireAsset(assetId);
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         AiModel model = requireBoundImageModel(series);
-        DramaAsset baseSheet = findBaseCharacterSheet(asset);
-        if (isStateCharacter(asset) && baseSheet == null && findBaseCharacter(asset) != null) {
-            // 本体存在但没有设定图：状态图没有可改的底图，硬画会变成另一个人的新脸。
+        DramaAsset referenceSheet = findReferenceSheet(asset);
+        DramaAsset baseCharacter = findBaseCharacter(asset);
+        if (isStateCharacter(asset) && referenceSheet == null && baseCharacter != null) {
+            // 父版/基础版都没有设定图：硬画会变成另一个人的新脸。
             throw new BizException(ErrorCode.BAD_REQUEST,
-                    "请先给本体「" + DramaAssetDrafts.baseCharacterName(asset.getName()) + "」生成设定图，再生成状态图");
+                    "请先给基础版「" + asset.getName() + "」生成设定图，再生成延伸版");
         }
-        String prompt = baseSheet == null
-                ? compileImagePromptForGenerate(asset, series)
-                : DramaAssetDrafts.derivativePrompt(DramaAssetDrafts.derivativeChange(
-                        asset.getName(), asset.getStateTag(), asset.getDescription(), asset.getIdentityInvariants()));
+        String prompt;
+        if (referenceSheet == null) {
+            prompt = compileImagePromptForGenerate(asset, series);
+        } else {
+            String change = DramaAssetDrafts.derivativeChange(
+                    DramaAssetVersions.mentionNameOf(asset),
+                    asset.getStateTag(),
+                    asset.getDescription(),
+                    asset.getIdentityInvariants());
+            String baseIdentity = baseCharacter != null ? baseCharacter.getIdentityInvariants() : null;
+            prompt = DramaAssetDrafts.derivativePrompt(change, baseIdentity);
+        }
         if (!StringUtils.hasText(prompt)) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先完善外形设定");
         }
@@ -425,13 +597,13 @@ public class DramaAssetService {
         req.setRatio(series.getAspectRatio());
         req.setResolution(normalizeImageResolution(resolution));
         req.setCopies(1);
-        if (baseSheet != null) {
+        if (referenceSheet != null) {
             GenerateSubmitReq.ReferenceInput input = new GenerateSubmitReq.ReferenceInput();
             input.setType(AssetKind.IMAGE);
-            if (StringUtils.hasText(baseSheet.getImageStorageKey())) {
-                input.setStorageKey(baseSheet.getImageStorageKey());
+            if (StringUtils.hasText(referenceSheet.getImageStorageKey())) {
+                input.setStorageKey(referenceSheet.getImageStorageKey());
             } else {
-                input.setAssetId(baseSheet.getImageAssetId());
+                input.setAssetId(referenceSheet.getImageAssetId());
             }
             req.setReferences(List.of(input));
         }
@@ -588,10 +760,18 @@ public class DramaAssetService {
             return;
         }
         String type = normalizeType(draft.getType());
-        String name = draft.getName().trim();
+        DramaAssetVersions.ParsedName parsed = DramaContract.ASSET_TYPE_CHARACTER.equals(type)
+                ? DramaAssetVersions.parseLegacyName(draft.getName().trim())
+                : new DramaAssetVersions.ParsedName(draft.getName().trim(), "", DramaContract.STATE_TAG_BASE);
+        String name = parsed.familyName();
         String stateTag = StringUtils.hasText(draft.getStateTag())
-                ? draft.getStateTag().trim()
-                : DramaAssetDrafts.inferStateTag(name);
+                ? DramaContract.normalizeStateTag(draft.getStateTag())
+                : (StringUtils.hasText(parsed.versionLabel())
+                ? parsed.stateTag()
+                : DramaAssetDrafts.inferStateTag(draft.getName()));
+        String versionLabel = StringUtils.hasText(parsed.versionLabel())
+                ? parsed.versionLabel()
+                : (DramaAssetVersions.isBase(stateTag) ? null : DramaContract.stateWord(stateTag));
         String key = uniqueKey(type, name, stateTag);
         DramaAsset current = existing.get(key);
         if (current != null) {
@@ -600,6 +780,9 @@ public class DramaAssetService {
                 return;
             }
             fillEmpty(current, draft, type, stateTag);
+            if (!StringUtils.hasText(current.getVersionLabel()) && StringUtils.hasText(versionLabel)) {
+                current.setVersionLabel(versionLabel);
+            }
             assetMapper.updateById(current);
             return;
         }
@@ -610,6 +793,13 @@ public class DramaAssetService {
         asset.setName(name);
         asset.setType(type);
         asset.setStateTag(stateTag);
+        asset.setVersionLabel(versionLabel);
+        if (!DramaAssetVersions.isBase(stateTag)) {
+            DramaAsset base = findFamilyBase(episode.getSeriesId(), episode.getId(), type, name);
+            if (base != null) {
+                asset.setParentAssetId(base.getId());
+            }
+        }
         asset.setDescription(blankToNull(draft.getDescription()));
         asset.setIdentityInvariants(blankToNull(draft.getIdentityInvariants()));
         asset.setImagePrompt(blankToNull(draft.getImagePrompt()));
@@ -685,8 +875,14 @@ public class DramaAssetService {
         if (req.getStateTag() != null || creating) {
             String tag = StringUtils.hasText(req.getStateTag())
                     ? req.getStateTag().trim()
-                    : DramaAssetDrafts.inferStateTag(asset.getName());
+                    : DramaContract.STATE_TAG_BASE;
             asset.setStateTag(DramaContract.normalizeStateTag(tag));
+        }
+        if (req.getVersionLabel() != null) {
+            asset.setVersionLabel(blankToNull(req.getVersionLabel()));
+        }
+        if (req.getParentAssetId() != null) {
+            asset.setParentAssetId(req.getParentAssetId());
         }
         if (req.getDescription() != null) {
             asset.setDescription(blankToNull(req.getDescription()));
@@ -725,7 +921,7 @@ public class DramaAssetService {
                 .ne(excludeId != null, DramaAsset::getId, excludeId)
                 .last("LIMIT 1"));
         if (clash != null) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "同名同状态的资产已存在，入梦/换装请用独立名称");
+            throw new BizException(ErrorCode.BAD_REQUEST, "同名同版本的资产已存在");
         }
     }
 
@@ -979,11 +1175,8 @@ public class DramaAssetService {
         return map;
     }
 
-    /**
-     * 新增时同一分类下名称已存在则拒绝，避免再插一条。提取剧本仍复用已有记录。
-     * 状态资产的名称自带状态后缀（本体名·状态名），同名即同一状态。
-     */
-    private void rejectDuplicateName(Long seriesId, String type, String name) {
+    /** 同一分类下基础名已有基础版则拒绝。 */
+    private void rejectDuplicateFamilyBase(Long seriesId, String type, String name) {
         if (seriesId == null || !StringUtils.hasText(name)) {
             return;
         }
@@ -991,18 +1184,79 @@ public class DramaAssetService {
         boolean exists = existingBySeries(seriesId).values().stream()
                 .anyMatch(asset -> asset != null
                         && type.equals(asset.getType())
-                        && wanted.equals(asset.getName() == null ? "" : asset.getName().trim()));
+                        && wanted.equals(asset.getName() == null ? "" : asset.getName().trim())
+                        && DramaAssetVersions.isBase(asset.getStateTag()));
         if (exists) {
-            throw new BizException(ErrorCode.BAD_REQUEST, duplicateAssetMessage(type, wanted));
+            throw new BizException(ErrorCode.BAD_REQUEST, duplicateAssetMessage(type));
+        }
+    }
+
+    private void rejectDuplicateVersionLabel(Long seriesId, Long episodeId, String type, String name, String label) {
+        rejectDuplicateVersionLabel(seriesId, episodeId, type, name, label, null);
+    }
+
+    private void rejectDuplicateVersionLabel(
+            Long seriesId, Long episodeId, String type, String name, String label, Long excludeId) {
+        if (!StringUtils.hasText(label)) {
+            return;
+        }
+        String wanted = label.trim();
+        for (DramaAsset asset : familyAssets(seriesId, episodeId, type, name)) {
+            if (excludeId != null && excludeId.equals(asset.getId())) {
+                continue;
+            }
+            if (DramaAssetVersions.isBase(asset.getStateTag())) {
+                continue;
+            }
+            String existing = StringUtils.hasText(asset.getVersionLabel())
+                    ? asset.getVersionLabel().trim()
+                    : DramaContract.stateWord(asset.getStateTag());
+            if (wanted.equals(existing)) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "「" + name + "」的「" + wanted + "」版本已经存在");
+            }
         }
     }
 
     static String duplicateAssetMessage(String type, String name) {
-        String stateName = DramaAssetDrafts.stateNameOf(name);
-        if (StringUtils.hasText(stateName)) {
-            return "「" + DramaAssetDrafts.baseCharacterName(name) + "」的「" + stateName + "」状态已经存在";
+        DramaAssetVersions.ParsedName parsed = DramaAssetVersions.parseLegacyName(name);
+        if (StringUtils.hasText(parsed.versionLabel())) {
+            return "「" + parsed.familyName() + "」的「" + parsed.versionLabel() + "」版本已经存在";
         }
         return duplicateAssetMessage(type);
+    }
+
+    private List<DramaAsset> familyAssets(Long seriesId, Long episodeId, String type, String name) {
+        if (!StringUtils.hasText(name) || !StringUtils.hasText(type)) {
+            return List.of();
+        }
+        return assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(seriesId != null, DramaAsset::getSeriesId, seriesId)
+                .eq(seriesId == null && episodeId != null, DramaAsset::getEpisodeId, episodeId)
+                .eq(DramaAsset::getType, type)
+                .eq(DramaAsset::getName, name.trim())
+                .orderByAsc(DramaAsset::getId));
+    }
+
+    private DramaAsset findFamilyBase(Long seriesId, Long episodeId, String type, String name) {
+        for (DramaAsset asset : familyAssets(seriesId, episodeId, type, name)) {
+            if (DramaAssetVersions.isBase(asset.getStateTag())) {
+                return asset;
+            }
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     static String duplicateAssetMessage(String type) {
@@ -1093,6 +1347,10 @@ public class DramaAssetService {
     }
 
     private DramaAssetResp toResp(DramaAsset asset, GenTask task) {
+        return toResp(asset, task, null);
+    }
+
+    private DramaAssetResp toResp(DramaAsset asset, GenTask task, Map<String, Integer> familyCounts) {
         DramaAssetResp resp = new DramaAssetResp();
         resp.setId(asset.getId());
         resp.setSeriesId(asset.getSeriesId());
@@ -1100,7 +1358,17 @@ public class DramaAssetService {
         resp.setName(asset.getName());
         resp.setType(asset.getType());
         resp.setStateTag(asset.getStateTag());
-        resp.setStateLabel(DramaAssetDrafts.stateNameOf(asset.getName()));
+        String displayLabel = DramaAssetVersions.displayLabel(asset.getStateTag(), asset.getVersionLabel());
+        resp.setVersionLabel(displayLabel);
+        // 兼容旧前端：仅有明确 versionLabel 的延伸版才填 stateLabel。
+        resp.setStateLabel(StringUtils.hasText(asset.getVersionLabel()) ? asset.getVersionLabel().trim() : null);
+        resp.setParentAssetId(asset.getParentAssetId());
+        resp.setMentionName(DramaAssetVersions.mentionNameOf(asset));
+        if (familyCounts != null && DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+            resp.setVersionCount(familyCounts.getOrDefault(familyKey(asset), 1));
+        } else {
+            resp.setVersionCount(1);
+        }
         resp.setDescription(asset.getDescription());
         resp.setIdentityInvariants(asset.getIdentityInvariants());
         resp.setImagePrompt(asset.getImagePrompt());
@@ -1128,6 +1396,27 @@ public class DramaAssetService {
         resp.setCreatedAt(asset.getCreatedAt());
         resp.setUpdatedAt(asset.getUpdatedAt());
         return resp;
+    }
+
+    private static String familyKey(DramaAsset asset) {
+        return (asset.getType() == null ? "" : asset.getType())
+                + "\0"
+                + (asset.getName() == null ? "" : asset.getName().trim());
+    }
+
+    private static Map<String, Integer> familyVersionCounts(List<DramaAsset> assets) {
+        Map<String, Integer> counts = new HashMap<>();
+        if (assets == null) {
+            return counts;
+        }
+        for (DramaAsset asset : assets) {
+            if (asset == null || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())) {
+                continue;
+            }
+            String key = familyKey(asset);
+            counts.merge(key, 1, Integer::sum);
+        }
+        return counts;
     }
 
     static String normalizeType(String type) {
@@ -1253,61 +1542,50 @@ public class DramaAssetService {
     }
 
     /**
-     * 换装 / 入梦且本体已有设定图时，返回那张图，生图改为在原图上改。没有可用本体图时返回 null，仍走整张设定图。
+     * 延伸版参考图：父版有图 → 父版；否则族内基础版有图 → 基础版；否则 null 走整张设定图。
      */
-    private DramaAsset findBaseCharacterSheet(DramaAsset asset) {
-        DramaAsset base = findBaseCharacter(asset);
-        if (base == null) {
+    private DramaAsset findReferenceSheet(DramaAsset asset) {
+        if (asset == null || DramaAssetVersions.isBase(asset.getStateTag())) {
             return null;
         }
-        if (StringUtils.hasText(base.getImageStorageKey()) || base.getImageAssetId() != null) {
+        if (asset.getParentAssetId() != null) {
+            DramaAsset parent = assetMapper.selectById(asset.getParentAssetId());
+            if (parent != null
+                    && (StringUtils.hasText(parent.getImageStorageKey()) || parent.getImageAssetId() != null)) {
+                return parent;
+            }
+        }
+        DramaAsset base = findBaseCharacter(asset);
+        if (base != null
+                && (StringUtils.hasText(base.getImageStorageKey()) || base.getImageAssetId() != null)) {
             return base;
         }
         return null;
     }
 
-    /** 状态资产的本体（同系列、同类型、本体名、状态为 base），有没有图都返回。 */
+    /** 兼容旧调用名。 */
+    private DramaAsset findBaseCharacterSheet(DramaAsset asset) {
+        return findReferenceSheet(asset);
+    }
+
+    /** 版本资产的基础版（同系列、同类型、同名、state=base），有没有图都返回。 */
     private DramaAsset findBaseCharacter(DramaAsset asset) {
         if (asset == null
                 || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
                 || asset.getEpisodeId() == null) {
             return null;
         }
-        String state = StringUtils.hasText(asset.getStateTag())
-                ? asset.getStateTag().trim()
-                : DramaAssetDrafts.inferStateTag(asset.getName());
-        if (DramaContract.STATE_TAG_BASE.equals(state)) {
+        if (DramaAssetVersions.isBase(asset.getStateTag())) {
             return null;
         }
-        String baseName = DramaAssetDrafts.baseCharacterName(asset.getName());
+        String baseName = asset.getName() == null ? "" : asset.getName().trim();
+        if (!StringUtils.hasText(baseName)) {
+            baseName = DramaAssetDrafts.baseCharacterName(asset.getName());
+        }
         if (!StringUtils.hasText(baseName)) {
             return null;
         }
-        List<DramaAsset> mates = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
-                .eq(asset.getSeriesId() != null, DramaAsset::getSeriesId, asset.getSeriesId())
-                .eq(asset.getSeriesId() == null, DramaAsset::getEpisodeId, asset.getEpisodeId())
-                .eq(DramaAsset::getType, DramaContract.ASSET_TYPE_CHARACTER)
-                .eq(DramaAsset::getName, baseName));
-        DramaAsset fallback = null;
-        for (DramaAsset mate : mates) {
-            if (mate == null || mate.getId() != null && mate.getId().equals(asset.getId())) {
-                continue;
-            }
-            String mateState = StringUtils.hasText(mate.getStateTag())
-                    ? mate.getStateTag().trim()
-                    : DramaContract.STATE_TAG_BASE;
-            if (!DramaContract.STATE_TAG_BASE.equals(mateState)) {
-                continue;
-            }
-            if (fallback == null) {
-                fallback = mate;
-            }
-            // 优先挑带外形设定的那条，状态资产要继承本体的脸与发型。
-            if (StringUtils.hasText(mate.getIdentityInvariants())) {
-                return mate;
-            }
-        }
-        return fallback;
+        return findFamilyBase(asset.getSeriesId(), asset.getEpisodeId(), DramaContract.ASSET_TYPE_CHARACTER, baseName);
     }
 
     /** 是不是角色状态资产（本体名·状态名，非 base）。 */

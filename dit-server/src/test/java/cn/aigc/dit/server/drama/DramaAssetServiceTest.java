@@ -137,7 +137,9 @@ class DramaAssetServiceTest {
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "古铜怀表".equals(item.getName())));
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "幻梦侦探社".equals(item.getName())));
         assertTrue(captor.getAllValues().stream().anyMatch(item ->
-                "洛白·入梦".equals(item.getName()) && DramaContract.STATE_TAG_DREAM.equals(item.getStateTag())));
+                "洛白".equals(item.getName())
+                        && DramaContract.STATE_TAG_DREAM.equals(item.getStateTag())
+                        && "入梦".equals(item.getVersionLabel())));
         assertTrue(captor.getAllValues().stream().anyMatch(item ->
                 "洛白".equals(item.getName())
                         && item.getImagePrompt() != null
@@ -176,7 +178,10 @@ class DramaAssetServiceTest {
 
         ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
         verify(assetMapper, atLeastOnce()).insert(captor.capture());
-        assertTrue(captor.getAllValues().stream().noneMatch(item -> "洛白".equals(item.getName())));
+        assertTrue(captor.getAllValues().stream().noneMatch(item ->
+                "洛白".equals(item.getName()) && DramaContract.STATE_TAG_BASE.equals(item.getStateTag())));
+        assertTrue(captor.getAllValues().stream().anyMatch(item ->
+                "洛白".equals(item.getName()) && DramaContract.STATE_TAG_DREAM.equals(item.getStateTag())));
         assertTrue(captor.getAllValues().stream().anyMatch(item -> "古铜怀表".equals(item.getName())));
         verify(assetMapper, never()).updateById(luo);
     }

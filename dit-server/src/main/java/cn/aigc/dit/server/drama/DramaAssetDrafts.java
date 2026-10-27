@@ -95,13 +95,25 @@ public final class DramaAssetDrafts {
      * 换装 / 入梦走图生图时的提示词：版式和未写到的外观锁在本体图上，只描述变化。
      */
     public static String derivativePrompt(String change) {
+        return derivativePrompt(change, null);
+    }
+
+    /**
+     * 延伸版图生图提示词。固定保持句 + 变化；可选注入基础版外形摘要。
+     */
+    public static String derivativePrompt(String change, String baseIdentity) {
         String delta = StringUtils.hasText(change) ? change.trim() : "外观按该状态变化，脸与发型不变";
         if (!delta.endsWith("。") && !delta.endsWith(".")) {
             delta = delta + "。";
         }
-        return "保持原图的版式、构图、比例和背景不变。"
-                + "除下列变化外，面部、发型、体型及其余外观与原图一致。"
-                + "变化：" + delta;
+        StringBuilder text = new StringBuilder();
+        text.append("保持人物面部特征、发型轮廓、身高体型与基础设定一致；仅按下列描述改变服装或状态。");
+        text.append("保持原图的版式、构图、比例和背景不变。");
+        if (StringUtils.hasText(baseIdentity) && !isSkeletonIdentity(null, baseIdentity)) {
+            text.append("基础外形：").append(baseIdentity.trim()).append("。");
+        }
+        text.append("变化：").append(delta);
+        return text.toString();
     }
 
     /**
@@ -276,11 +288,17 @@ public final class DramaAssetDrafts {
         if (!StringUtils.hasText(rawName)) {
             return;
         }
-        String name = rawName.trim();
-        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type) && DramaDialogueSpeakers.isNarration(name)) {
+        String raw = rawName.trim();
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type) && DramaDialogueSpeakers.isNarration(raw)) {
             return;
         }
-        String stateTag = inferStateTag(name);
+        DramaAssetVersions.ParsedName parsed = DramaContract.ASSET_TYPE_CHARACTER.equals(type)
+                ? DramaAssetVersions.parseLegacyName(raw)
+                : new DramaAssetVersions.ParsedName(raw, "", DramaContract.STATE_TAG_BASE);
+        String name = parsed.familyName();
+        String stateTag = StringUtils.hasText(parsed.versionLabel())
+                ? parsed.stateTag()
+                : inferStateTag(raw);
         boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
         String key = uniqueKey(type, name, stateTag);
         if (unique.containsKey(key)) {
@@ -294,7 +312,13 @@ public final class DramaAssetDrafts {
         draft.setStateTag(stateTag);
         draft.setMustSplit(mustSplit);
         draft.setNeedsHuman(true);
-        draft.setDescription(prompt);
+        if (mustSplit && StringUtils.hasText(parsed.versionLabel())) {
+            // 变化描述留给 LLM/用户；骨架先用标签占位短句。
+            draft.setDescription(parsed.versionLabel());
+            // 草稿暂无 versionLabel 字段；用 description 短标签 + stateTag 表达版本。
+        } else {
+            draft.setDescription(prompt);
+        }
         // 场景/道具首屏不定骨架空话，等 LLM 写出真实设定；角色仍用外形占位句。
         draft.setIdentityInvariants(DramaContract.ASSET_TYPE_CHARACTER.equals(type)
                 ? defaultIdentity(type, name, stateTag)

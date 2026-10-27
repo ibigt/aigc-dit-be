@@ -62,22 +62,35 @@ public final class DramaContract {
     /** 状态名预设：资产名「本体名·状态名」的后缀候选，前端「扩展状态」下拉用。 */
     public static final List<String> STATE_NAME_PRESETS = List.of("入梦", "换装", "湿身", "战损", "受伤");
 
-    /** 状态标签归一：空 → base；不在词表内 → custom（特殊状态）。 */
+    /**
+     * 版本 slug 归一：空 → base；已知词表保留；其它小写短标识原样保留（自由 slug）。
+     * 非法字符剥掉后若空则 custom。
+     */
     public static String normalizeStateTag(String tag) {
         if (tag == null || tag.isBlank()) {
             return STATE_TAG_BASE;
         }
         String value = tag.trim().toLowerCase(java.util.Locale.ROOT);
-        return STATE_TAGS.contains(value) ? value : STATE_TAG_CUSTOM;
+        if (STATE_TAGS.contains(value)) {
+            return value;
+        }
+        String slug = value.replaceAll("[^a-z0-9\\-]+", "-").replaceAll("^-+|-+$", "");
+        if (slug.isBlank() || STATE_TAG_BASE.equals(slug)) {
+            return STATE_TAG_CUSTOM;
+        }
+        return slug.length() <= 64 ? slug : slug.substring(0, 64);
     }
 
-    /** 状态标签的默认状态名，用于「只给了标签没给状态名」时补资产名后缀。 */
+    /** 已知 slug 的默认展示名；自由 slug 用原 tag，否则「状态」。 */
     public static String stateWord(String tag) {
-        return switch (normalizeStateTag(tag)) {
+        String value = tag == null ? "" : tag.trim().toLowerCase(java.util.Locale.ROOT);
+        return switch (value) {
             case STATE_TAG_DREAM -> "入梦";
             case STATE_TAG_COSTUME -> "换装";
             case STATE_TAG_WET -> "湿身";
-            default -> "状态";
+            case STATE_TAG_CUSTOM -> "状态";
+            case STATE_TAG_BASE -> "基础";
+            default -> (tag != null && !tag.isBlank()) ? tag.trim() : "状态";
         };
     }
 

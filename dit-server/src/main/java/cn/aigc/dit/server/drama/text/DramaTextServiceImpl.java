@@ -2,6 +2,7 @@ package cn.aigc.dit.server.drama.text;
 
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.server.drama.DramaAssetDrafts;
+import cn.aigc.dit.server.drama.DramaAssetVersions;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaDialogueSpeakers;
 import cn.aigc.dit.server.drama.DramaDurations;
@@ -1240,25 +1241,26 @@ public class DramaTextServiceImpl implements DramaTextService {
                     && DramaDialogueSpeakers.isNarration(name)) {
                 continue;
             }
-            // 状态名在名字后缀里，标签以名字为准；模型标错标签按同一套词表纠正。
-            String tag = DramaAssetDrafts.inferStateTag(name);
+            // 「洛白·入梦」拆成族名 + 版本 slug；模型只标了 stateTag 时补默认标签。
+            DramaAssetVersions.ParsedName parsed = DramaAssetVersions.parseLegacyName(name);
+            String family = parsed.familyName();
+            String tag = StringUtils.hasText(parsed.versionLabel())
+                    ? parsed.stateTag()
+                    : DramaAssetDrafts.inferStateTag(name);
             if (DramaContract.STATE_TAG_BASE.equals(tag) && StringUtils.hasText(draft.getStateTag())) {
                 String requested = DramaContract.normalizeStateTag(draft.getStateTag().strip());
                 if (!DramaContract.STATE_TAG_BASE.equals(requested)) {
-                    // 模型标了状态却没给「本体名·状态名」，补上默认状态名，别把状态丢了
-                    name = name + "·" + DramaContract.stateWord(requested);
-                    tag = DramaAssetDrafts.inferStateTag(name);
+                    tag = requested;
                 }
             }
-            draft.setName(name);
+            draft.setName(family);
             draft.setType(draft.getType().strip());
             draft.setStateTag(tag);
-            // 入梦/换装态必须独立且 must_split，模型标错就按同一套词表纠正。
             draft.setMustSplit(!DramaContract.STATE_TAG_BASE.equals(tag));
             if (!StringUtils.hasText(draft.getIdentityInvariants())) {
                 draft.setNeedsHuman(true);
             }
-            unique.putIfAbsent(draft.getType() + "\0" + name + "\0" + tag, draft);
+            unique.putIfAbsent(draft.getType() + "\0" + family + "\0" + tag, draft);
         }
         if (unique.isEmpty()) {
             return null;

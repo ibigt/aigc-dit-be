@@ -95,7 +95,11 @@ class DramaTextDraftPathsTest {
                 DramaTextServiceImpl.parseJson(ASSETS_JSON, AssetDraftList.class));
 
         List<AssetDraftList.AssetDraft> assets = list.getAssets();
-        AssetDraftList.AssetDraft dream = named(assets, "洛白·入梦");
+        AssetDraftList.AssetDraft dream = assets.stream()
+                .filter(item -> "洛白".equals(item.getName())
+                        && DramaContract.STATE_TAG_DREAM.equals(item.getStateTag()))
+                .findFirst()
+                .orElseThrow();
         assertEquals(DramaContract.STATE_TAG_DREAM, dream.getStateTag());
         assertTrue(dream.getMustSplit());
         assertEquals(DramaContract.STATE_TAG_BASE, named(assets, "洛白").getStateTag());

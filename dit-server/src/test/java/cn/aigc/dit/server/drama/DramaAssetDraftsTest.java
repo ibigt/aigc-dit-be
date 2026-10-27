@@ -27,7 +27,8 @@ class DramaAssetDraftsTest {
         AssetDraftList list = DramaAssetDrafts.fromScript(doc);
         assertEquals(5, list.getAssets().size());
         AssetDraftList.AssetDraft dream = list.getAssets().stream()
-                .filter(item -> "洛白·入梦".equals(item.getName()))
+                .filter(item -> "洛白".equals(item.getName())
+                        && DramaContract.STATE_TAG_DREAM.equals(item.getStateTag()))
                 .findFirst()
                 .orElseThrow();
         assertEquals(DramaContract.ASSET_TYPE_CHARACTER, dream.getType());

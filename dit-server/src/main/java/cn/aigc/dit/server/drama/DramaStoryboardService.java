@@ -1223,10 +1223,11 @@ public class DramaStoryboardService {
         }
         List<DramaAsset> assets = listAssets(episode.getId());
         List<String> assetNames = assets.stream()
-                .map(DramaAsset::getName)
+                .map(DramaAssetVersions::mentionNameOf)
                 .filter(StringUtils::hasText)
                 .map(String::trim)
                 .distinct()
+                .sorted((left, right) -> Integer.compare(right.length(), left.length()))
                 .toList();
         ShotDraftList drafts = resolveDrafts(
                 episode.getSeriesId(), doc, assetNames, fallback, episodeBudgetSec, visualStyleOf(series));
@@ -1582,8 +1583,12 @@ public class DramaStoryboardService {
         }
         Set<String> names = new LinkedHashSet<>();
         for (DramaAsset asset : explicit) {
-            if (asset != null && StringUtils.hasText(asset.getName())) {
-                names.add(asset.getName().trim());
+            if (asset == null) {
+                continue;
+            }
+            String mention = DramaAssetVersions.mentionNameOf(asset);
+            if (StringUtils.hasText(mention)) {
+                names.add(mention);
             }
         }
         for (String mention : mentions) {
@@ -1740,7 +1745,10 @@ public class DramaStoryboardService {
 
     private static void addMention(Set<String> names, DramaAsset asset) {
         if (canMention(asset) && isMentionableType(asset.getType())) {
-            names.add(asset.getName().trim());
+            String mention = DramaAssetVersions.mentionNameOf(asset);
+            if (StringUtils.hasText(mention)) {
+                names.add(mention);
+            }
         }
     }
 
@@ -1752,8 +1760,8 @@ public class DramaStoryboardService {
                 if (!canMention(asset) || !type.equals(asset.getType())) {
                     continue;
                 }
-                String name = asset.getName().trim();
-                if (!pool.contains(name)) {
+                String name = DramaAssetVersions.mentionNameOf(asset);
+                if (StringUtils.hasText(name) && !pool.contains(name)) {
                     pool.add(name);
                 }
             }
@@ -1782,7 +1790,7 @@ public class DramaStoryboardService {
                     continue;
                 }
                 DramaAsset asset = assets.get(id);
-                if (asset != null && nameEquals(asset.getName(), name)) {
+                if (asset != null && nameMatchesAsset(asset, name)) {
                     picked = asset;
                     break;
                 }
@@ -1838,10 +1846,16 @@ public class DramaStoryboardService {
             return names;
         }
         for (DramaAsset asset : assets.values()) {
-            if (asset != null && StringUtils.hasText(asset.getName()) && !names.contains(asset.getName().trim())) {
-                names.add(asset.getName().trim());
+            if (asset == null) {
+                continue;
+            }
+            String mention = DramaAssetVersions.mentionNameOf(asset);
+            if (StringUtils.hasText(mention) && !names.contains(mention)) {
+                names.add(mention);
             }
         }
+        // 最长优先，供 narrativeAtNames / @ 解析。
+        names.sort((left, right) -> Integer.compare(right.length(), left.length()));
         return names;
     }
 
@@ -1965,13 +1979,12 @@ public class DramaStoryboardService {
         DramaAsset base = null;
         DramaAsset any = null;
         for (DramaAsset asset : assets) {
-            if (asset == null || !type.equals(asset.getType()) || !nameEquals(asset.getName(), name)) {
+            if (asset == null || !type.equals(asset.getType()) || !nameMatchesAsset(asset, name)) {
                 continue;
             }
             any = asset;
             boolean dreamTag = DramaContract.STATE_TAG_DREAM.equals(asset.getStateTag());
-            boolean baseTag = DramaContract.STATE_TAG_BASE.equals(asset.getStateTag())
-                    || !StringUtils.hasText(asset.getStateTag());
+            boolean baseTag = DramaAssetVersions.isBase(asset.getStateTag());
             if (dreamTag) {
                 dream = asset;
             } else if (baseTag) {
@@ -2011,6 +2024,22 @@ public class DramaStoryboardService {
             return base;
         }
         return dream != null ? dream : any;
+    }
+
+    /** 裸名匹配基础版；「名·标签」匹配对应版本；也兼容旧数据名里仍带间隔号。 */
+    private static boolean nameMatchesAsset(DramaAsset asset, String mention) {
+        if (asset == null || !StringUtils.hasText(mention)) {
+            return false;
+        }
+        String wanted = mention.trim();
+        if (nameEquals(DramaAssetVersions.mentionNameOf(asset), wanted)) {
+            return true;
+        }
+        if (nameEquals(asset.getName(), wanted)) {
+            // 裸名只绑基础版，避免「@洛白」误中湿身版。
+            return DramaAssetVersions.isBase(asset.getStateTag());
+        }
+        return false;
     }
 
     private static boolean nameEquals(String left, String right) {
@@ -2811,6 +2840,11 @@ public class DramaStoryboardService {
         resp.setName(asset.getName());
         resp.setType(asset.getType());
         resp.setStateTag(asset.getStateTag());
+        String displayLabel = DramaAssetVersions.displayLabel(asset.getStateTag(), asset.getVersionLabel());
+        resp.setVersionLabel(displayLabel);
+        resp.setStateLabel(StringUtils.hasText(asset.getVersionLabel()) ? asset.getVersionLabel().trim() : null);
+        resp.setParentAssetId(asset.getParentAssetId());
+        resp.setMentionName(DramaAssetVersions.mentionNameOf(asset));
         resp.setStatus(asset.getStatus());
         resp.setIdentityVersion(asset.getIdentityVersion() == null ? 0 : asset.getIdentityVersion());
         resp.setImageStorageKey(asset.getImageStorageKey());
@@ -2821,8 +2855,8 @@ public class DramaStoryboardService {
     }
 
     /**
-     * 提示词芯片用的资产。已出图的排在前面；同名还没出图的不重复放。
-     * 只有没出图的名字也放进来，这样 @ 能对上资产并显示成未出图。
+     * 提示词芯片用的资产。已出图的排在前面；同 mention 还没出图的不重复放。
+     * 按 mentionName 去重，避免同族多版本被「同名」挤掉。
      */
     private static List<DramaAsset> assetsForPromptChips(Collection<DramaAsset> assets) {
         List<DramaAsset> sorted = new ArrayList<>();
@@ -2836,27 +2870,35 @@ public class DramaStoryboardService {
         sorted.sort(Comparator.comparing(DramaAsset::getType, Comparator.nullsLast(String::compareTo))
                 .thenComparing(DramaAsset::getId));
         List<DramaAsset> imaged = new ArrayList<>();
-        Set<String> imagedNames = new HashSet<>();
+        Set<String> imagedMentions = new HashSet<>();
         for (DramaAsset asset : sorted) {
             if (!isReferenceEligible(asset)) {
                 continue;
             }
             imaged.add(asset);
-            imagedNames.add(asset.getName().trim());
+            imagedMentions.add(chipMentionKey(asset));
         }
         List<DramaAsset> chips = new ArrayList<>(imaged);
-        Set<String> waitingNames = new HashSet<>();
+        Set<String> waitingMentions = new HashSet<>();
         for (DramaAsset asset : sorted) {
             if (isReferenceEligible(asset)) {
                 continue;
             }
-            String name = asset.getName().trim();
-            if (imagedNames.contains(name) || !waitingNames.add(name)) {
+            String mention = chipMentionKey(asset);
+            if (imagedMentions.contains(mention) || !waitingMentions.add(mention)) {
                 continue;
             }
             chips.add(asset);
         }
         return chips;
+    }
+
+    private static String chipMentionKey(DramaAsset asset) {
+        String mention = DramaAssetVersions.mentionNameOf(asset);
+        if (StringUtils.hasText(mention)) {
+            return mention;
+        }
+        return asset.getName() == null ? "" : asset.getName().trim();
     }
 
     private static DramaStoryboardCompiler.ActiveReference toActive(DramaAsset asset) {

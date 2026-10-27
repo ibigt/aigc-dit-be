@@ -16,12 +16,19 @@ public class DramaAssetSaveReq {
     private String type;
 
     @Size(max = 64)
-    @Schema(description = "状态标签：base / dream / costume / wet / custom")
+    @Schema(description = "版本 slug：base 或自由短标识；新建角色请用 base，延伸版走 /versions")
     private String stateTag;
 
+    @Size(max = 16)
+    @Schema(description = "版本展示标签；更新非基础版时可改")
+    private String versionLabel;
+
     @Size(max = 32)
-    @Schema(description = "状态名（资产的「本体名·状态名」后缀），如 换装 / 湿身；状态资产必填")
+    @Schema(description = "兼容旧入参：状态名；新建时若带此字段且角色已有基础版，将创建为版本")
     private String stateName;
+
+    @Schema(description = "延伸父版本 id")
+    private Long parentAssetId;
 
     @Schema(description = "完整描述符")
     private String description;

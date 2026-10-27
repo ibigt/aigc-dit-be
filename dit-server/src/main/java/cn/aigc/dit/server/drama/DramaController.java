@@ -241,12 +241,20 @@ public class DramaController {
         return CommonResult.success(dramaAssetService.extractFromScript(id));
     }
 
-    @Operation(summary = "手工新增资产")
+    @Operation(summary = "手工新增资产（角色仅建基础版）")
     @PostMapping("/episodes/{id}/assets")
     public CommonResult<DramaAssetResp> createAsset(
             @PathVariable Long id,
             @Valid @RequestBody DramaAssetSaveReq req) {
         return CommonResult.success(dramaAssetService.create(id, req));
+    }
+
+    @Operation(summary = "基于某版本延伸新建角色版本")
+    @PostMapping("/assets/{id}/versions")
+    public CommonResult<DramaAssetResp> createAssetVersion(
+            @PathVariable Long id,
+            @Valid @RequestBody cn.aigc.dit.server.drama.model.req.DramaAssetVersionReq req) {
+        return CommonResult.success(dramaAssetService.createVersion(id, req));
     }
 
     @Operation(summary = "更新资产描述；已锁定后再改会回到待确认")

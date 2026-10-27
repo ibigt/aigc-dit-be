@@ -24,6 +24,14 @@ public class DramaAsset {
     private String type;
     private String stateTag;
 
+    /** 版本展示名（湿身/校服）；基础版可空。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private String versionLabel;
+
+    /** 延伸父版本；基础版为空。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private Long parentAssetId;
+
     /** 允许保存空值，否则清空提示词无法落库，列表会一直读到旧长文案。 */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String description;
