@@ -49,7 +49,12 @@ public class DramaAsset {
     private Boolean needsHuman;
     private String status;
     private Integer identityVersion;
+
+    /** 允许清空选用图，否则删光生成记录后列表仍读到旧预览。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String imageStorageKey;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long imageAssetId;
 
     /** 允许清空任务号，否则锁定资产上的陈旧任务号清不掉，迟到的回调仍会重开资产。 */

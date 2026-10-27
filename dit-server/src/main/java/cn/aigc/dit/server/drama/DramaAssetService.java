@@ -112,6 +112,7 @@ public class DramaAssetService {
                 .orderByAsc(DramaAsset::getType)
                 .orderByAsc(DramaAsset::getId));
         clearStaleTaskLinksOnLockedAssets(assets);
+        clearOrphanedPreviewImages(assets);
         applySucceededQuietly(assets);
         repairIncompletePrompts(assets, episode.getSeriesId());
         Map<Long, GenTask> tasks = loadTasks(assets);
@@ -133,6 +134,23 @@ public class DramaAssetService {
                 asset.setGenTaskId(null);
                 assetMapper.updateById(asset);
             }
+        }
+    }
+
+    /**
+     * 删光生成记录时曾只清掉 selectedGenerationId，imageStorageKey 因未标 ALWAYS 未能落库。
+     * 无选用记录却仍挂着预览图时，列表刷新顺带清掉，卡片回到「上传图片」空态。
+     */
+    private void clearOrphanedPreviewImages(List<DramaAsset> assets) {
+        for (DramaAsset asset : assets) {
+            if (asset.getSelectedGenerationId() != null) {
+                continue;
+            }
+            if (!StringUtils.hasText(asset.getImageStorageKey()) && asset.getImageAssetId() == null) {
+                continue;
+            }
+            clearSelectedImage(asset);
+            assetMapper.updateById(asset);
         }
     }
 
