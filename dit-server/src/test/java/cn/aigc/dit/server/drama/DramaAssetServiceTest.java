@@ -322,6 +322,7 @@ class DramaAssetServiceTest {
     void assetWithImageIsReferenceEligibleWithoutLock() {
         DramaAsset asset = ownedAsset();
         asset.setImageStorageKey("users/7/assets/a.png");
+        asset.setSelectedGenerationId(11L);
         asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         when(assetMapper.selectList(any())).thenReturn(List.of(asset));
         when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
@@ -329,6 +330,27 @@ class DramaAssetServiceTest {
 
         List<DramaAssetResp> list = service.listByEpisode(31L);
         assertTrue(list.get(0).getReferenceEligible());
+    }
+
+    @Test
+    void listByEpisodeClearsOrphanedPreviewWithoutSelection() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/gen/stale.png");
+        asset.setImageAssetId(88L);
+        asset.setSelectedGenerationId(null);
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        when(assetMapper.selectList(any())).thenReturn(List.of(asset));
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+
+        List<DramaAssetResp> list = service.listByEpisode(31L);
+
+        assertNull(list.get(0).getImageStorageKey());
+        assertNull(list.get(0).getImageAssetId());
+        assertFalse(list.get(0).getReferenceEligible());
+        verify(assetMapper, atLeastOnce()).updateById(asset);
+        assertNull(asset.getImageStorageKey());
+        assertNull(asset.getImageAssetId());
     }
 
     @Test
@@ -742,6 +764,12 @@ class DramaAssetServiceTest {
         assertNull(asset.getSelectedGenerationId());
         assertNull(asset.getImageStorageKey());
         assertNull(asset.getImageAssetId());
+        // 实体上 imageStorageKey / imageAssetId 须标 FieldStrategy.ALWAYS，否则 updateById 跳过 null，卡片仍显示旧预览。
+        ArgumentCaptor<DramaAsset> captor = ArgumentCaptor.forClass(DramaAsset.class);
+        verify(assetMapper).updateById(captor.capture());
+        assertNull(captor.getValue().getImageStorageKey());
+        assertNull(captor.getValue().getImageAssetId());
+        assertNull(captor.getValue().getSelectedGenerationId());
     }
 
     @Test
