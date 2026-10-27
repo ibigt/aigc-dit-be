@@ -91,6 +91,63 @@ public final class DramaAssetDrafts {
         }
     }
 
+    /** 延伸版文本继承切空时的回退：只锁脸与体型，不提发型。 */
+    static final String CORE_IDENTITY_FALLBACK = "同一张脸与身高体型，禁止换成另一个人";
+
+    /**
+     * 从基础版外形句抽出「还是同一个人」的稳定特征。
+     * 丢掉服装/配饰与发型发色；保留性别、年龄、脸型五官、肤色、身高体型等。
+     * 切空则回退固定短句。
+     */
+    public static String coreIdentityOnly(String identity) {
+        if (!StringUtils.hasText(identity) || isSkeletonIdentity(null, identity)) {
+            return CORE_IDENTITY_FALLBACK;
+        }
+        List<String> kept = new ArrayList<>();
+        for (String raw : identity.trim().split("[、，,；;]+")) {
+            String part = raw.trim();
+            if (part.isEmpty() || isVariableAppearancePart(part)) {
+                continue;
+            }
+            kept.add(part);
+        }
+        if (kept.isEmpty()) {
+            return CORE_IDENTITY_FALLBACK;
+        }
+        return String.join("、", kept);
+    }
+
+    /**
+     * 片段是否属于可变外观（服装/配饰/妆造，或发型发色），延伸版不应从基础版文本强制保留。
+     */
+    static boolean isVariableAppearancePart(String part) {
+        if (!StringUtils.hasText(part)) {
+            return false;
+        }
+        for (String marker : VARIABLE_APPEARANCE_MARKERS) {
+            if (part.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final String[] VARIABLE_APPEARANCE_MARKERS = {
+            // 服装 / 配饰 / 妆
+            "上装", "外套", "下装", "鞋履", "礼服", "晚礼", "衬衫", "夹克", "西装", "项链", "耳环",
+            "耳钉", "发簪", "发饰", "发卡", "发带", "头饰", "头纱", "手链", "手镯", "戒指", "胸针",
+            "围巾", "墨镜", "领带", "丝巾", "腰带", "披风", "披肩", "斗篷", "盔甲", "铠甲",
+            "T恤", "t恤", "工装", "背心", "牛仔", "汉服", "旗袍", "长衫", "广袖", "裙裾",
+            "连衣裙", "长裙", "短裙", "大衣", "风衣", "毛衣", "针织", "卫衣", "帽衫", "吊带",
+            "泳装", "校服", "制服", "常服", "便装", "正装", "婚纱", "靴", "高跟鞋", "凉鞋",
+            "拖鞋", "运动鞋", "皮鞋", "球鞋", "板鞋", "配饰", "首饰", "鞋", "袜", "帽", "袍",
+            "裙", "簪", "妆", "穿", "戴", "着装", "服饰", "上衣", "衣服", "服装", "衣着",
+            // 发型 / 发色（含单字「发」，覆盖短发/黑发/发型等）
+            "短发", "长发", "中长发", "马尾", "双马尾", "丸子头", "披肩发", "齐刘海", "碎盖",
+            "黑发", "金发", "棕发", "银发", "白发", "红发", "卷发", "直发", "波浪", "编发",
+            "寸头", "光头", "鬓角", "发色", "发型", "发尾", "湿发", "刘海", "辫", "染", "发"
+    };
+
     /**
      * 换装 / 入梦走图生图时的提示词：版式和未写到的外观锁在本体图上，只描述变化。
      */
@@ -99,18 +156,19 @@ public final class DramaAssetDrafts {
     }
 
     /**
-     * 延伸版图生图提示词。固定保持句 + 变化；可选注入基础版外形摘要。
+     * 延伸版图生图提示词。固定保持句 + 变化；可选注入基础版核心身份（不含服装/发型发色）。
      */
     public static String derivativePrompt(String change, String baseIdentity) {
-        String delta = StringUtils.hasText(change) ? change.trim() : "外观按该状态变化，脸与发型不变";
+        String delta = StringUtils.hasText(change) ? change.trim() : "外观按该状态变化，脸与体型不变";
         if (!delta.endsWith("。") && !delta.endsWith(".")) {
             delta = delta + "。";
         }
         StringBuilder text = new StringBuilder();
-        text.append("保持人物面部特征、发型轮廓、身高体型与基础设定一致；仅按下列描述改变服装或状态。");
+        text.append("保持面部特征与身高体型与参考一致；服装、发型发色可按变化描述与参考图调整；");
+        text.append("不要求与基础版服装或发型一致。");
         text.append("保持原图的版式、构图、比例和背景不变。");
-        if (StringUtils.hasText(baseIdentity) && !isSkeletonIdentity(null, baseIdentity)) {
-            text.append("基础外形：").append(baseIdentity.trim()).append("。");
+        if (StringUtils.hasText(baseIdentity)) {
+            text.append("基础外形：").append(coreIdentityOnly(baseIdentity)).append("。");
         }
         text.append("变化：").append(delta);
         return text.toString();

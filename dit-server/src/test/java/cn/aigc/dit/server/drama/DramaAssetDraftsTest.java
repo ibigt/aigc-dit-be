@@ -771,6 +771,57 @@ class DramaAssetDraftsTest {
     }
 
     @Test
+    void coreIdentityOnlyDropsCostumeAndHairKeepsFaceAndBuild() {
+        String base = "女性、青年、鹅蛋脸、杏眼、身形修长、黑色短发、红色晚礼服、珍珠耳环";
+        String core = DramaAssetDrafts.coreIdentityOnly(base);
+        assertTrue(core.contains("鹅蛋脸"));
+        assertTrue(core.contains("杏眼"));
+        assertTrue(core.contains("身形修长"));
+        assertTrue(core.contains("女性"));
+        assertTrue(core.contains("青年"));
+        assertTrue(!core.contains("晚礼服"));
+        assertTrue(!core.contains("衬衫"));
+        assertTrue(!core.contains("黑色短发"));
+        assertTrue(!core.contains("马尾"));
+        assertTrue(!core.contains("耳环"));
+
+        String withShirt = "男性；中年；方脸；穿白衬衫与黑西装；金发马尾";
+        String stripped = DramaAssetDrafts.coreIdentityOnly(withShirt);
+        assertTrue(stripped.contains("男性"));
+        assertTrue(stripped.contains("方脸"));
+        assertTrue(!stripped.contains("衬衫"));
+        assertTrue(!stripped.contains("西装"));
+        assertTrue(!stripped.contains("金发"));
+        assertTrue(!stripped.contains("马尾"));
+
+        assertEquals(DramaAssetDrafts.CORE_IDENTITY_FALLBACK,
+                DramaAssetDrafts.coreIdentityOnly("黑色短发，红色晚礼服"));
+        assertEquals(DramaAssetDrafts.CORE_IDENTITY_FALLBACK,
+                DramaAssetDrafts.coreIdentityOnly("夏安的外貌、发型、服装和年龄必须保持一致"));
+    }
+
+    @Test
+    void derivativePromptInjectsCoreIdentityWithoutCostumeOrHairLock() {
+        String prompt = DramaAssetDrafts.derivativePrompt(
+                "穿红色晚礼服，头发扎成马尾",
+                "女性、青年、鹅蛋脸、杏眼、身形修长、黑色短发、白色衬衫");
+        assertTrue(prompt.contains("保持面部特征与身高体型与参考一致"));
+        assertTrue(prompt.contains("服装、发型发色可按变化描述与参考图调整"));
+        assertTrue(prompt.contains("不要求与基础版服装或发型一致"));
+        assertTrue(prompt.contains("基础外形："));
+        assertTrue(prompt.contains("鹅蛋脸"));
+        assertTrue(prompt.contains("杏眼"));
+        assertTrue(prompt.contains("身形修长"));
+        assertTrue(prompt.contains("变化：穿红色晚礼服，头发扎成马尾。"));
+        // 注入段不应再锁基础版服装/发型发色
+        String identityBlock = prompt.substring(prompt.indexOf("基础外形："), prompt.indexOf("变化："));
+        assertTrue(!identityBlock.contains("晚礼服") && !identityBlock.contains("衬衫"));
+        assertTrue(!identityBlock.contains("黑色短发") && !identityBlock.contains("马尾"));
+        assertTrue(!prompt.contains("发型轮廓"));
+        assertTrue(!prompt.contains("仅按下列描述改变服装或状态"));
+    }
+
+    @Test
     void ensurePromptsPromotesAppearanceDescriptionOverSkeletonIdentity() {
         AssetDraftList.AssetDraft draft = new AssetDraftList.AssetDraft();
         draft.setName("夏安");

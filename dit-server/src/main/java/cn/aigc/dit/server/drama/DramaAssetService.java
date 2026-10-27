@@ -1498,10 +1498,14 @@ public class DramaAssetService {
      */
     private String compileImagePromptForGenerate(DramaAsset asset, DramaSeries series) {
         DramaStyles.Spec style = DramaStyles.require(series.getStyleKey());
-        String identity = identityForPrompt(asset, findBaseCharacter(asset));
+        DramaAsset base = findBaseCharacter(asset);
+        boolean derivative = base != null;
+        String identity = identityForPrompt(asset, base);
+        // 延伸版：模板不注入整段外形（避免「外形与服装」措辞）；约束改用核心身份。
         String rebuilt = DramaAssetDrafts.buildPrompt(
-                asset.getType(), asset.getName(), asset.getStateTag(), style, null, identity);
-        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity);
+                asset.getType(), asset.getName(), asset.getStateTag(), style, null,
+                derivative ? null : identity);
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity, derivative);
         rebuilt = withStateChange(rebuilt, asset);
         if (StringUtils.hasText(rebuilt) && !rebuilt.equals(blankToNull(asset.getImagePrompt()))) {
             asset.setImagePrompt(rebuilt);
@@ -1532,10 +1536,13 @@ public class DramaAssetService {
     }
 
     private void applyCompiledImagePrompt(DramaAsset asset, DramaStyles.Spec style) {
-        String identity = identityForPrompt(asset, findBaseCharacter(asset));
+        DramaAsset base = findBaseCharacter(asset);
+        boolean derivative = base != null;
+        String identity = identityForPrompt(asset, base);
         String rebuilt = DramaAssetDrafts.buildPrompt(
-                asset.getType(), asset.getName(), asset.getStateTag(), style, null, identity);
-        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity);
+                asset.getType(), asset.getName(), asset.getStateTag(), style, null,
+                derivative ? null : identity);
+        rebuilt = withIdentityConstraint(rebuilt, asset.getType(), identity, derivative);
         rebuilt = withStateChange(rebuilt, asset);
         asset.setImagePrompt(rebuilt);
         scrubTemplateDescription(asset, style);
@@ -1618,21 +1625,14 @@ public class DramaAssetService {
     }
 
     /**
-     * 状态资产继承本体的外形设定，而不是各存一份长句：本体改了外形，状态图跟着改。
+     * 基础版用自身完整外形；延伸版只继承基础版核心身份（脸型/体型等），服装与发型发色不锁。
      */
     private static String identityForPrompt(DramaAsset asset, DramaAsset base) {
         String own = asset == null ? null : asset.getIdentityInvariants();
         if (base == null || !StringUtils.hasText(base.getIdentityInvariants())) {
             return own;
         }
-        String baseIdentity = base.getIdentityInvariants().trim();
-        if (!StringUtils.hasText(own)) {
-            return baseIdentity;
-        }
-        if (own.contains("同一张脸")) {
-            return baseIdentity;
-        }
-        return baseIdentity + " " + own.trim();
+        return DramaAssetDrafts.coreIdentityOnly(base.getIdentityInvariants());
     }
 
     static String resolveImagePrompt(DramaAsset asset) {
@@ -1654,10 +1654,17 @@ public class DramaAssetService {
 
     /** 生图时把设定摘要并进 prompt，避免服装/发型只写在摘要里却未进入模型。 */
     static String withIdentityConstraint(String prompt, String identity) {
-        return withIdentityConstraint(prompt, DramaContract.ASSET_TYPE_CHARACTER, identity);
+        return withIdentityConstraint(prompt, DramaContract.ASSET_TYPE_CHARACTER, identity, false);
     }
 
     static String withIdentityConstraint(String prompt, String type, String identity) {
+        return withIdentityConstraint(prompt, type, identity, false);
+    }
+
+    /**
+     * @param coreFaceBodyOnly 延伸版为 true：约束「面部与体型」，不要求服装与基础版一致
+     */
+    static String withIdentityConstraint(String prompt, String type, String identity, boolean coreFaceBodyOnly) {
         if (!StringUtils.hasText(prompt) || !StringUtils.hasText(identity)) {
             return prompt;
         }
@@ -1674,6 +1681,9 @@ public class DramaAssetService {
         }
         if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
             return prompt + "外形材质必须符合：" + id + "。";
+        }
+        if (coreFaceBodyOnly) {
+            return prompt + "面部与体型必须符合：" + id + "。";
         }
         return prompt + "外形与服装必须符合：" + id + "。";
     }

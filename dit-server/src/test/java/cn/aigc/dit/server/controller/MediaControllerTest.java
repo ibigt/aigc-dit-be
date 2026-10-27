@@ -85,9 +85,30 @@ class MediaControllerTest {
         assertTrue(body.length > 0);
         assertTrue(body.length < png.length);
 
-        String cacheKey = ImageThumbnails.cacheKey(key, 480);
+        String cacheKey = ImageThumbnails.cacheKey(key, 480, png.length);
         assertTrue(objectExists(cacheKey));
         assertArrayEquals(body, storage.getBytes(cacheKey));
+    }
+
+    @Test
+    void overwrittenImageBustsStaleThumbnailCache() throws Exception {
+        String key = "users/7/outputs/420/1.png";
+        byte[] first = solidPng(800, 450, Color.RED);
+        storage.put(key, first, "image/png");
+        byte[] thumbFirst = controller.get(key, 480, new HttpHeaders()).getBody().getInputStream().readAllBytes();
+        String staleLegacy = ImageThumbnails.cacheKey(key, 480);
+        storage.put(staleLegacy, thumbFirst, "image/jpeg");
+
+        // 不同尺寸 → 不同字节数，才能让带 size 的缓存键失效。
+        byte[] second = solidPng(960, 540, Color.BLUE);
+        storage.put(key, second, "image/png");
+        assertTrue(second.length != first.length);
+
+        byte[] thumbSecond = controller.get(key, 480, new HttpHeaders()).getBody().getInputStream().readAllBytes();
+        String freshKey = ImageThumbnails.cacheKey(key, 480, second.length);
+        assertTrue(objectExists(freshKey));
+        assertTrue(!java.util.Arrays.equals(thumbFirst, thumbSecond));
+        assertArrayEquals(thumbSecond, storage.getBytes(freshKey));
     }
 
     @Test
@@ -106,9 +127,13 @@ class MediaControllerTest {
     }
 
     private static byte[] solidPng(int width, int height) throws Exception {
+        return solidPng(width, height, Color.BLUE);
+    }
+
+    private static byte[] solidPng(int width, int height, Color color) throws Exception {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         var g = image.createGraphics();
-        g.setColor(Color.BLUE);
+        g.setColor(color);
         g.fillRect(0, 0, width, height);
         g.dispose();
         ByteArrayOutputStream out = new ByteArrayOutputStream();

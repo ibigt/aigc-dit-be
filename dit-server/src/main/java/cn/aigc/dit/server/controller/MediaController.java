@@ -70,12 +70,22 @@ public class MediaController {
     }
 
     private ResponseEntity<InputStreamResource> serveThumbnail(String key, int width) {
-        String cacheKey = ImageThumbnails.cacheKey(key, width);
+        if (!objectStorage.exists(key)) {
+            return ResponseEntity.notFound().build();
+        }
+        long originalSize = objectStorage.size(key);
+        if (originalSize <= 0 || originalSize > MAX_THUMB_SOURCE_BYTES) {
+            log.warn("skip inline thumbnail, key={} bytes={}", key, originalSize);
+            return ResponseEntity.notFound().build();
+        }
+        // 缓存键含原图 size：原图被覆盖后旧缩略图自动失效，避免历史缩略图与大图不是同一张。
+        String cacheKey = ImageThumbnails.cacheKey(key, width, originalSize);
         ResponseEntity<InputStreamResource> cached = readCachedThumbnail(cacheKey);
         if (cached != null) {
             return cached;
         }
-        ReentrantLock lock = thumbnailLocks.computeIfAbsent(cacheKey, ignored -> new ReentrantLock());
+        final String lockKey = cacheKey;
+        ReentrantLock lock = thumbnailLocks.computeIfAbsent(lockKey, ignored -> new ReentrantLock());
         boolean locked;
         try {
             locked = lock.tryLock(200, TimeUnit.MILLISECONDS);
@@ -94,17 +104,15 @@ public class MediaController {
                             .build();
         }
         try {
-            cached = readCachedThumbnail(cacheKey);
+            // 锁内再读一次 size，防止等待期间原图被覆盖仍写入旧缓存键。
+            long sizeNow = objectStorage.size(key);
+            if (sizeNow <= 0 || sizeNow > MAX_THUMB_SOURCE_BYTES) {
+                return ResponseEntity.notFound().build();
+            }
+            String writeKey = ImageThumbnails.cacheKey(key, width, sizeNow);
+            cached = readCachedThumbnail(writeKey);
             if (cached != null) {
                 return cached;
-            }
-            if (!objectStorage.exists(key)) {
-                return ResponseEntity.notFound().build();
-            }
-            long originalSize = objectStorage.size(key);
-            if (originalSize <= 0 || originalSize > MAX_THUMB_SOURCE_BYTES) {
-                log.warn("skip inline thumbnail, key={} bytes={}", key, originalSize);
-                return ResponseEntity.notFound().build();
             }
             byte[] original = objectStorage.getBytes(key);
             ImageThumbnails.Thumb thumb = ImageThumbnails.resizeToJpeg(original, width);
@@ -112,15 +120,30 @@ public class MediaController {
                 return null;
             }
             try {
-                objectStorage.put(cacheKey, thumb.bytes(), thumb.contentType());
+                objectStorage.put(writeKey, thumb.bytes(), thumb.contentType());
+                purgeStaleThumbnails(key, width, sizeNow);
             } catch (Exception e) {
-                log.debug("thumbnail cache put failed, key={}", cacheKey, e);
+                log.debug("thumbnail cache put failed, key={}", writeKey, e);
             }
-            return okBytes(new ByteArrayInputStream(thumb.bytes()), thumb.bytes().length, thumb.contentType());
+            return okThumbnail(new ByteArrayInputStream(thumb.bytes()), thumb.bytes().length, thumb.contentType(), writeKey);
         } finally {
             lock.unlock();
             if (!lock.hasQueuedThreads()) {
-                thumbnailLocks.remove(cacheKey, lock);
+                thumbnailLocks.remove(lockKey, lock);
+            }
+        }
+    }
+
+    /** 清掉同 key 旧档位缩略图（不含 size 的历史键，以及其它 size 的残留）。 */
+    private void purgeStaleThumbnails(String storageKey, int keepWidth, long keepSourceBytes) {
+        String keep = ImageThumbnails.cacheKey(storageKey, keepWidth, keepSourceBytes);
+        for (String legacy : ImageThumbnails.legacyCacheKeys(storageKey)) {
+            if (!legacy.equals(keep) && objectStorage.exists(legacy)) {
+                try {
+                    objectStorage.delete(legacy);
+                } catch (Exception e) {
+                    log.debug("thumbnail cache purge failed, key={}", legacy, e);
+                }
             }
         }
     }
@@ -134,7 +157,7 @@ public class MediaController {
         if (length <= 0) {
             return null;
         }
-        return okBytes(objectStorage.get(cacheKey), length, "image/jpeg");
+        return okThumbnail(objectStorage.get(cacheKey), length, "image/jpeg", cacheKey);
     }
 
     private ResponseEntity<InputStreamResource> serveOriginal(String key, HttpHeaders headers) {
@@ -186,6 +209,20 @@ public class MediaController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
                 .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                 .cacheControl(CacheControl.maxAge(Duration.ofDays(7)).cachePrivate())
+                .contentLength(length)
+                .body(new SizedStreamResource(stream, length));
+    }
+
+    /** 缩略图：ETag 绑定带 size 的缓存键；短缓存 + must-revalidate，避免长期吃到旧 JPEG。 */
+    private static ResponseEntity<InputStreamResource> okThumbnail(
+            InputStream stream, long length, String contentType, String cacheKey) {
+        String etag = "W/\"" + Integer.toHexString(cacheKey.hashCode()) + "-" + length + "\"";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(contentType))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .eTag(etag)
+                .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePrivate().mustRevalidate())
                 .contentLength(length)
                 .body(new SizedStreamResource(stream, length));
     }
