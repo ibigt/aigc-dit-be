@@ -46,6 +46,7 @@ public final class GenerateRequests {
                 .setResolution(blankToNull(req.getResolution()))
                 .setQuality(blankToNull(req.getQuality()))
                 .setDurationSec(req.getDurationSec())
+                .setReferenceVideoSeconds(req.getReferenceVideoSeconds())
                 .setVoiceId(blankToNull(req.getVoiceId()))
                 .setSpeed(req.getSpeed())
                 .setAudioFormat(blankToNull(req.getAudioFormat()))
@@ -127,6 +128,9 @@ public final class GenerateRequests {
         params.put("resolution", request.getResolution());
         params.put("quality", request.getQuality());
         params.put("durationSec", request.getDurationSec());
+        if (request.getReferenceVideoSeconds() != null) {
+            params.put("referenceVideoSeconds", request.getReferenceVideoSeconds());
+        }
         params.put("voiceId", request.getVoiceId());
         params.put("speed", request.getSpeed());
         params.put("audioFormat", request.getAudioFormat());
@@ -189,6 +193,7 @@ public final class GenerateRequests {
                 .setResolution(stringVal(params.get("resolution"), null))
                 .setQuality(stringVal(params.get("quality"), null))
                 .setDurationSec(intVal(params.get("durationSec")))
+                .setReferenceVideoSeconds(intVal(params.get("referenceVideoSeconds")))
                 .setVoiceId(stringVal(params.get("voiceId"), null))
                 .setSpeed(doubleVal(params.get("speed")))
                 .setAudioFormat(stringVal(params.get("audioFormat"), null))
@@ -255,19 +260,22 @@ public final class GenerateRequests {
         for (GenerateSubmitReq.ReferenceInput input : req.getReferences()) {
             String key = input.getStorageKey();
             String type = input.getType();
+            Long durationMs = null;
             if (input.getAssetId() != null) {
                 Asset asset = assetService.requireOwned(input.getAssetId());
                 key = asset.getStorageKey();
                 type = asset.getKind();
+                durationMs = asset.getDurationMs();
             } else if (StringUtils.hasText(key)) {
                 assetService.assertOwnedStorageKey(key);
                 type = StringUtils.hasText(type) ? type : AssetKind.IMAGE;
+                durationMs = assetService.findOwnedDurationMs(key);
             } else {
                 throw new BizException(ErrorCode.BAD_REQUEST, "参考素材缺少 storageKey");
             }
             String normalized = AssetKind.VIDEO.equalsIgnoreCase(type) ? AssetKind.VIDEO
                     : AssetKind.AUDIO.equalsIgnoreCase(type) ? AssetKind.AUDIO : AssetKind.IMAGE;
-            result.add(new ReferenceAsset(normalized, key));
+            result.add(new ReferenceAsset(normalized, key, durationMs));
         }
         return result;
     }

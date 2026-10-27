@@ -37,6 +37,11 @@ public class GenerateSubmitReq {
     @Max(30)
     private Integer durationSec;
 
+    @Min(0)
+    @Max(3600)
+    @Schema(description = "参考视频合计秒数（前端读浏览器元数据估算）；仅在服务端探测不到素材时长时兜底，计费取与服务端实测的较大值")
+    private Integer referenceVideoSeconds;
+
     @Size(max = 128)
     @Schema(description = "语音音色标识；category=audio 时使用")
     private String voiceId;

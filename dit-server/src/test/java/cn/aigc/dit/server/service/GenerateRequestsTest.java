@@ -178,6 +178,29 @@ class GenerateRequestsTest {
     }
 
     @Test
+    void referenceVideoCarriesTheServerMeasuredDuration() {
+        // 参考视频秒数以素材行实测时长为准（前端上报不可信）
+        Asset asset = new Asset();
+        asset.setId(13L);
+        asset.setKind(AssetKind.VIDEO);
+        asset.setStorageKey("users/1/assets/clip.mp4");
+        asset.setDurationMs(6500L);
+        when(assetService.requireOwned(13L)).thenReturn(asset);
+
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setCategory("video");
+        req.setDurationSec(5);
+        GenerateSubmitReq.ReferenceInput ref = new GenerateSubmitReq.ReferenceInput();
+        ref.setAssetId(13L);
+        req.setReferences(List.of(ref));
+
+        GenerateRequest request = GenerateRequests.fromSubmit(1L, "mock-video", req, assetService);
+        assertEquals(6500L, request.getReferences().get(0).getDurationMs());
+        // 6.5 秒 → 7 个计费秒
+        assertEquals(7, GenerateService.referenceVideoSeconds(request));
+    }
+
+    @Test
     void preservesAudioReferenceKind() {
         Asset asset = new Asset();
         asset.setId(12L);

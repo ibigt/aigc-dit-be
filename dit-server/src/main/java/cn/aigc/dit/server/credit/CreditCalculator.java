@@ -20,6 +20,18 @@ public final class CreditCalculator {
     public static long calculate(Map<String, Object> pricing, String category,
                                  String resolution, String quality,
                                  Integer durationSec, int copies) {
+        return calculate(pricing, category, resolution, quality, durationSec, copies, 0);
+    }
+
+    /**
+     * 参考视频（r2v 的视频输入）秒数按模型<b>最高档价</b>计费，不按输出所选分辨率档价：
+     * 上游中转把输入视频 token 也按最高档价扣我们的钱（官方直连的输入价更低），
+     * 而参考视频本身的分辨率/码率由用户决定、无从得知——只能统一取最高标准，保证不亏本。
+     * 能力之间不分价：同一模型的各生成能力共用这一套标准。
+     */
+    public static long calculate(Map<String, Object> pricing, String category,
+                                 String resolution, String quality,
+                                 Integer durationSec, int copies, int referenceVideoSeconds) {
         Double configuredPrice = saleOutput(pricing);
         double unitPrice = configuredPrice == null
                 ? (ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
@@ -34,13 +46,40 @@ public final class CreditCalculator {
         double quantity = perUnit;
         if (ModelCategory.VIDEO.equalsIgnoreCase(category) && isPerSecond(pricing)) {
             int duration = durationSec == null ? 1 : Math.max(1, durationSec);
-            quantity = perUnit * duration;
+            int safeCopies = Math.min(4, Math.max(1, copies));
+            // 输出部分按所选分辨率档价 × 副本数。
+            quantity = perUnit * duration * safeCopies;
+            // 参考视频（r2v 的视频输入）按模型最高档价计一次（同一份输入多副本不重复计）：
+            // 上游把输入视频 token 也按最高档价扣我们的钱，参考视频本身规格又由用户决定、
+            // 无从得知——统一取最高标准，保证任何能力组合都不亏本。
+            if (referenceVideoSeconds > 0) {
+                quantity += highestUnitPrice(pricing, unitPrice) * referenceVideoSeconds;
+            }
+            return (long) Math.ceil(quantity * qualityMultiplier(category, quality));
         }
         if (ModelCategory.AUDIO.equalsIgnoreCase(category)) {
             quantity = unitPrice * characterUnits(pricing, durationSec);
         }
         int safeCopies = Math.min(4, Math.max(1, copies));
         return (long) Math.ceil(quantity * qualityMultiplier(category, quality) * safeCopies);
+    }
+
+    /**
+     * 模型最高档单价（每单位）：取 sale.tiers 中的最高档价与基准价里的较大者。
+     * 能力之间不分价：所有能力共用这一套标准，参考视频按最高档计。
+     */
+    static double highestUnitPrice(Map<String, Object> pricing, double fallbackUnitPrice) {
+        double highest = Math.max(0D, fallbackUnitPrice);
+        Object sale = pricing == null ? null : pricing.get("sale");
+        if (sale instanceof Map<?, ?> saleMap && saleMap.get("tiers") instanceof Map<?, ?> tiers) {
+            for (Object value : tiers.values()) {
+                Double amount = parseAmount(value);
+                if (amount != null && amount > highest) {
+                    highest = amount;
+                }
+            }
+        }
+        return highest;
     }
 
     /**

@@ -30,6 +30,56 @@ public final class PricingPolicy {
         validateSide("售价", pricing.get("sale"));
         validateSide("成本", pricing.get("cost"));
         validateCjkWeight(pricing);
+        validateCapabilityUnifiedPrice(category, pricing);
+    }
+
+    /** 1 元 = 10 积分（充值口径）。 */
+    static final double CREDITS_PER_YUAN = 10D;
+
+    /**
+     * 能力统一价的不亏本校验：能力之间不分价——同一模型的所有能力共用同一套「分辨率分档价」，
+     * 所以任一档的售价都必须覆盖该档成本，否则用户无论选哪个能力我们都会亏本。
+     */
+    private static void validateCapabilityUnifiedPrice(String category, Map<String, Object> pricing) {
+        Object saleSide = pricing.get("sale");
+        Object costSide = pricing.get("cost");
+        if (!(saleSide instanceof Map<?, ?> sale) || !(costSide instanceof Map<?, ?> cost)) {
+            return;
+        }
+        Object saleTiers = sale.get("tiers");
+        Object costTiers = cost.get("tiers");
+        Map<?, ?> saleTierMap = saleTiers instanceof Map<?, ?> map ? map : Map.of();
+        Map<?, ?> costTierMap = costTiers instanceof Map<?, ?> map ? map : Map.of();
+        if (!saleTierMap.isEmpty()) {
+            for (Map.Entry<?, ?> entry : saleTierMap.entrySet()) {
+                Double saleAmount = parseAmount(entry.getValue());
+                Double costAmount = parseAmount(costTierMap.get(entry.getKey()));
+                if (saleAmount == null || costAmount == null || costAmount <= 0) {
+                    continue;
+                }
+                if (saleAmount / CREDITS_PER_YUAN < costAmount) {
+                    throw new BizException(ErrorCode.BAD_REQUEST,
+                            entry.getKey() + " 档售价 " + trimAmount(saleAmount) + " 积分（约 ¥"
+                                    + trimAmount(saleAmount / CREDITS_PER_YUAN) + "）低于成本 ¥"
+                                    + trimAmount(costAmount) + "，会亏本");
+                }
+            }
+            return;
+        }
+        Double saleAmount = parseAmount(sale.get("output"));
+        Double costAmount = parseAmount(cost.get("output"));
+        if (saleAmount == null || costAmount == null || costAmount <= 0) {
+            return;
+        }
+        if (saleAmount / CREDITS_PER_YUAN < costAmount) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "售价 " + trimAmount(saleAmount) + " 积分（约 ¥" + trimAmount(saleAmount / CREDITS_PER_YUAN)
+                            + "）低于成本 ¥" + trimAmount(costAmount) + "，会亏本");
+        }
+    }
+
+    private static String trimAmount(double value) {
+        return String.valueOf(Math.round(value * 100D) / 100D);
     }
 
     /**
@@ -82,5 +132,15 @@ public final class PricingPolicy {
         if (!Double.isFinite(amount) || amount < 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, label + "不能为负数");
         }
+    }
+
+    private static Double parseAmount(Object raw) {
+        if (raw == null || String.valueOf(raw).isBlank()) return null;
+        if (raw instanceof Number number) {
+            return number.doubleValue();
+        }
+        Matcher matcher = AMOUNT.matcher(String.valueOf(raw));
+        if (!matcher.find()) return null;
+        return Double.parseDouble(matcher.group(1));
     }
 }

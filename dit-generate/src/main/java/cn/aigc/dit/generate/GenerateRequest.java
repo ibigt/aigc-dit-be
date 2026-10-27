@@ -24,6 +24,8 @@ public class GenerateRequest {
     private String resolution;
     private String quality;
     private Integer durationSec;
+    /** 前端上报的参考视频秒数（仅服务端探测不到素材时长时兜底；计费取与服务端实测的较大值）。 */
+    private Integer referenceVideoSeconds;
     /** 语音生成参数；仅 category=audio/t2a 使用。 */
     private String voiceId;
     private Double speed;
@@ -147,6 +149,15 @@ public class GenerateRequest {
 
     public GenerateRequest setDurationSec(Integer durationSec) {
         this.durationSec = durationSec;
+        return this;
+    }
+
+    public Integer getReferenceVideoSeconds() {
+        return referenceVideoSeconds;
+    }
+
+    public GenerateRequest setReferenceVideoSeconds(Integer referenceVideoSeconds) {
+        this.referenceVideoSeconds = referenceVideoSeconds;
         return this;
     }
 

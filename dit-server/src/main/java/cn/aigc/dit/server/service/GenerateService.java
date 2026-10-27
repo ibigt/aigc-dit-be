@@ -99,7 +99,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getResolution(),
                 request.getQuality(),
                 billingQuantity(model, request),
-                request.resolvedCopies());
+                request.resolvedCopies(),
+                referenceVideoSeconds(request));
         boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
         CreationSession session = bindSession
                 ? creationService.ensureSession(req.getSessionId(), userId, request.getCategory(), request.getPrompt())
@@ -147,6 +148,35 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
             return CreditCalculator.billableCharacters(request.getPrompt(), weight);
         }
         return request.getDurationSec();
+    }
+
+    /**
+     * 参考视频秒数：以服务端探测到的素材时长为准（前端可少报，不可信）。
+     * 服务端探测不到时长时（缺 ffprobe 等）退用前端上报值兜底——取两者较大值，
+     * 前端只能把自己算得更贵、不能更便宜，任何情况下都不亏本。
+     */
+    static int referenceVideoSeconds(GenerateRequest request) {
+        if (request == null || request.getReferences() == null) {
+            return 0;
+        }
+        boolean hasVideoRef = false;
+        long totalMs = 0L;
+        for (ReferenceAsset ref : request.getReferences()) {
+            if (ref == null || !AssetKind.VIDEO.equalsIgnoreCase(ref.getType())) {
+                continue;
+            }
+            hasVideoRef = true;
+            if (ref.getDurationMs() != null && ref.getDurationMs() > 0) {
+                totalMs += ref.getDurationMs();
+            }
+        }
+        if (!hasVideoRef) {
+            return 0;
+        }
+        int measured = totalMs > 0 ? (int) Math.max(1, Math.round(totalMs / 1000D)) : 0;
+        Integer reported = request.getReferenceVideoSeconds();
+        int fallback = reported == null ? 0 : Math.max(0, reported);
+        return Math.max(measured, fallback);
     }
 
     private static void validatePromptAndAudio(AiModel model, GenerateRequest request) {

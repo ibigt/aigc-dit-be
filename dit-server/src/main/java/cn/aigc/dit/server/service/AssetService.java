@@ -130,6 +130,23 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
         return asset;
     }
 
+    /**
+     * 按对象存储 key 取本人素材的实测时长（毫秒）；没有素材行或未探测出时长时返回 null。
+     * 参考视频计费以此为准，不信前端上报的秒数。
+     */
+    public Long findOwnedDurationMs(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        Long userId = UserContext.requireUserId();
+        Asset asset = getOne(new LambdaQueryWrapper<Asset>()
+                .select(Asset::getDurationMs)
+                .eq(Asset::getUserId, userId)
+                .eq(Asset::getStorageKey, storageKey)
+                .last("LIMIT 1"));
+        return asset == null ? null : asset.getDurationMs();
+    }
+
     @Transactional
     public void deleteMine(Long id) {
         Asset asset = requireOwned(id);
