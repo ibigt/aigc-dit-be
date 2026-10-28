@@ -256,6 +256,7 @@ public class DramaAssetService {
         if (DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
             DramaAssetVersions.validateFamilyName(name);
         }
+        rejectPrefixOverlappingName(episode.getSeriesId(), episode.getId(), type, name);
         String stateTag = DramaContract.STATE_TAG_BASE;
         if (StringUtils.hasText(parsed.versionLabel())) {
             // 剧本式「洛白·湿身」直接新建时落成版本行；无基础版时一并建基础占位不在此路径。
@@ -677,11 +678,15 @@ public class DramaAssetService {
         return resp;
     }
 
+    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution) {
+        return convertToSeedream(assetId, resolution, null);
+    }
+
     /**
      * 外部上传/引用图 → 图生文 → Seedream 5.0 纯 T2I，落 generation source=roundtrip 并获得 origin 资格。
-     * 图生文在事务外执行，避免长时间占用 DB 连接；submit 在短事务内完成。
+     * 图生文在事务外执行；{@code mode=refresh} 时若有存盘 prompt 则跳过 Vision。
      */
-    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution) {
+    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution, String mode) {
         DramaAsset asset = requireAsset(assetId);
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         if (!StringUtils.hasText(asset.getImageStorageKey())) {
@@ -695,22 +700,60 @@ public class DramaAssetService {
         assertSameArkAccountForConvert(series, model);
         assertGenerateCapacity(asset.getEpisodeId());
         String storageKey = asset.getImageStorageKey();
-        String apiKey = decryptModelApiKey(model);
-        String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
-        byte[] imageBytes = objectStorage.getBytes(storageKey);
-        String mime = mimeFromStorageKey(storageKey);
-        String describePrompt = ImageDescribePrompts.forAssetType(asset.getType());
-        ImageDescribeResult described = imageDescribeClient.describe(
-                imageBytes, mime, describePrompt, endpoint, apiKey, null);
-        String prompt = described == null ? "" : described.assembledPrompt();
-        if (!StringUtils.hasText(prompt)) {
-            throw new BizException(ErrorCode.INTERNAL, "图生文未得到可用提示词");
+        boolean refresh = mode != null && "refresh".equalsIgnoreCase(mode.trim());
+        String trimmedPrompt;
+        if (refresh) {
+            trimmedPrompt = loadRoundtripPrompt(storageKey);
+            if (!StringUtils.hasText(trimmedPrompt)) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "没有可复用的转图提示词，请使用完整转资产图");
+            }
+        } else {
+            String apiKey = decryptModelApiKey(model);
+            String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
+            byte[] imageBytes = objectStorage.getBytes(storageKey);
+            String mime = mimeFromStorageKey(storageKey);
+            String describePrompt = ImageDescribePrompts.forAssetType(asset.getType());
+            ImageDescribeResult described = imageDescribeClient.describe(
+                    imageBytes, mime, describePrompt, endpoint, apiKey, null);
+            String prompt = described == null ? "" : described.assembledPrompt();
+            if (!StringUtils.hasText(prompt)) {
+                throw new BizException(ErrorCode.INTERNAL, "图生文未得到可用提示词");
+            }
+            trimmedPrompt = trimPrompt(prompt);
         }
-        String trimmedPrompt = trimPrompt(prompt);
         String normalizedResolution = normalizeImageResolution(resolution);
         return transactionTemplate.execute(status ->
                 submitConvertRoundtrip(assetId, storageKey, model.getId(), series.getId(),
                         series.getAspectRatio(), trimmedPrompt, normalizedResolution));
+    }
+
+    static String roundtripPromptKey(String storageKey) {
+        return storageKey + ".roundtrip-prompt.txt";
+    }
+
+    private String loadRoundtripPrompt(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        String key = roundtripPromptKey(storageKey);
+        if (!objectStorage.exists(key)) {
+            return null;
+        }
+        byte[] bytes = objectStorage.getBytes(key);
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+    }
+
+    private void saveRoundtripPrompt(String storageKey, String prompt) {
+        if (!StringUtils.hasText(storageKey) || !StringUtils.hasText(prompt)) {
+            return;
+        }
+        objectStorage.put(
+                roundtripPromptKey(storageKey),
+                prompt.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "text/plain; charset=utf-8");
     }
 
     private DramaAssetGenerateResp submitConvertRoundtrip(
@@ -743,6 +786,7 @@ public class DramaAssetService {
         extra.put("episodeId", asset.getEpisodeId());
         extra.put("assetId", asset.getId());
         extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
+        extra.put("roundtripPrompt", prompt);
         GenerateTaskResp task = generateService.submit(req, extra);
         asset.setGenTaskId(task.getId());
         reopenIfConfirmed(asset);
@@ -1091,7 +1135,11 @@ public class DramaAssetService {
             return;
         }
         String resolution = resolutionFromTask(task);
-        insertAndSelectGeneration(asset, key, task.getId(), generationSourceFromTask(task), resolution, null);
+        String source = generationSourceFromTask(task);
+        insertAndSelectGeneration(asset, key, task.getId(), source, resolution, null);
+        if (SOURCE_ROUNDTRIP.equals(source) && task.getParams() != null && task.getParams().get("roundtripPrompt") != null) {
+            saveRoundtripPrompt(key, String.valueOf(task.getParams().get("roundtripPrompt")));
+        }
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -1199,6 +1247,31 @@ public class DramaAssetService {
             return SOURCE_ROUNDTRIP;
         }
         return "generate";
+    }
+
+    /** 同集同类型名称禁止前缀互相包含，避免 @韩警官 / @韩警官全身 绑定歧义。 */
+    private void rejectPrefixOverlappingName(Long seriesId, Long episodeId, String type, String name) {
+        if (!StringUtils.hasText(name) || seriesId == null || episodeId == null) {
+            return;
+        }
+        String candidate = name.trim();
+        List<DramaAsset> existing = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getSeriesId, seriesId)
+                .eq(DramaAsset::getEpisodeId, episodeId)
+                .eq(DramaAsset::getType, type));
+        for (DramaAsset other : existing) {
+            if (other == null || !StringUtils.hasText(other.getName())) {
+                continue;
+            }
+            String peer = other.getName().trim();
+            if (!StringUtils.hasText(peer) || peer.equals(candidate)) {
+                continue;
+            }
+            if (peer.startsWith(candidate) || candidate.startsWith(peer)) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "资产名「" + candidate + "」与已有「" + peer + "」前缀重叠，请改用互不包含的名称");
+            }
+        }
     }
 
     private void requireSeedream50ForConvert(AiModel model) {

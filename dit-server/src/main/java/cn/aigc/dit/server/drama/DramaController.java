@@ -317,9 +317,10 @@ public class DramaController {
     @PostMapping("/assets/{id}/convert-to-seedream")
     public CommonResult<DramaAssetGenerateResp> convertAssetToSeedream(
             @PathVariable Long id,
+            @RequestParam(required = false) String mode,
             @RequestBody(required = false) DramaAssetGenerateReq req) {
         return CommonResult.success(dramaAssetService.convertToSeedream(
-                id, req == null ? null : req.getResolution()));
+                id, req == null ? null : req.getResolution(), mode));
     }
 
     @Operation(summary = "查询资产生图任务；成功后写入参考图")

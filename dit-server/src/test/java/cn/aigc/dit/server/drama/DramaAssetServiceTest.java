@@ -452,7 +452,9 @@ class DramaAssetServiceTest {
         task.setStatus("SUCCEEDED");
         task.setOutputStorageKey("users/7/gen/roundtrip.png");
         task.setOutputKeys(List.of("users/7/gen/roundtrip.png"));
-        task.setParams(Map.of("assetGenerationSource", DramaAssetService.SOURCE_ROUNDTRIP));
+        task.setParams(Map.of(
+                "assetGenerationSource", DramaAssetService.SOURCE_ROUNDTRIP,
+                "roundtripPrompt", "【identity】警官\n【t2i_prompt】全身"));
         when(generateService.getMine(200L)).thenReturn(task);
 
         service.getGenerateTask(9L, 200L);
@@ -462,6 +464,74 @@ class DramaAssetServiceTest {
         assertEquals(DramaAssetService.SOURCE_ROUNDTRIP, captor.getValue().getSource());
         assertTrue(captor.getValue().getLabel().startsWith("转资产图"));
         assertEquals("users/7/gen/roundtrip.png", asset.getImageStorageKey());
+        verify(objectStorage).put(
+                eq(DramaAssetService.roundtripPromptKey("users/7/gen/roundtrip.png")),
+                any(byte[].class),
+                eq("text/plain; charset=utf-8"));
+    }
+
+    @Test
+    void convertToSeedreamRefreshSkipsDescribeWhenPromptPersisted() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        String promptKey = DramaAssetService.roundtripPromptKey("users/7/upload/ref.png");
+        when(objectStorage.exists(promptKey)).thenReturn(true);
+        when(objectStorage.getBytes(promptKey)).thenReturn("复用提示词内容".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(220L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.convertToSeedream(9L, "2K", "refresh");
+
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        assertEquals("复用提示词内容", reqCaptor.getValue().getPrompt());
+    }
+
+    @Test
+    void convertToSeedreamRefreshRejectsWhenNoSavedPrompt() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(objectStorage.exists(DramaAssetService.roundtripPromptKey("users/7/upload/ref.png"))).thenReturn(false);
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, null, "refresh"));
+        assertTrue(error.getMessage().contains("没有可复用的转图提示词"));
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void createRejectsPrefixOverlappingName() {
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        DramaAsset peer = new DramaAsset();
+        peer.setId(9L);
+        peer.setSeriesId(21L);
+        peer.setEpisodeId(11L);
+        peer.setName("韩警官");
+        peer.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        peer.setStateTag(DramaContract.STATE_TAG_BASE);
+        when(assetMapper.selectList(any())).thenReturn(List.of(peer));
+        cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq req = new cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq();
+        req.setName("韩警官全身");
+        req.setType("角色");
+
+        BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
+
+        assertTrue(error.getMessage().contains("前缀重叠"));
+        verify(assetMapper, never()).insert(any(DramaAsset.class));
     }
 
     @Test
