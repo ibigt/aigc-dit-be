@@ -4,6 +4,7 @@ import cn.aigc.dit.common.model.resp.CommonResult;
 import cn.aigc.dit.server.drama.model.req.DramaAssetGenerateReq;
 import cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaEpisodeUpdateReq;
+import cn.aigc.dit.server.drama.model.req.DramaCaptionCueSaveReq;
 import cn.aigc.dit.server.drama.model.req.DramaFilmAssembleReq;
 import cn.aigc.dit.server.drama.model.req.DramaImageModelBindReq;
 import cn.aigc.dit.server.drama.model.req.DramaScriptImportReq;
@@ -23,6 +24,7 @@ import cn.aigc.dit.server.drama.model.resp.DramaAssetResp;
 import cn.aigc.dit.server.drama.model.resp.DramaArkReviewAvailabilityResp;
 import cn.aigc.dit.server.drama.model.resp.DramaAssetReviewResp;
 import cn.aigc.dit.server.drama.model.resp.DramaEpisodeResp;
+import cn.aigc.dit.server.drama.model.resp.DramaCaptionDocumentResp;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotBatchGenerateResp;
 import cn.aigc.dit.server.drama.model.resp.DramaShotGenerateResp;
@@ -39,6 +41,7 @@ import cn.aigc.dit.server.service.ArkReviewCredentialService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -66,6 +69,7 @@ public class DramaController {
     private final DramaShotBatchGenerateService dramaShotBatchGenerateService;
     private final DramaFilmService dramaFilmService;
     private final DramaCaptionService dramaCaptionService;
+    private final ObjectProvider<DramaShotCaptionPostProcessService> captionPostProcess;
     private final ArkReviewCredentialService arkReviewCredentialService;
 
     public DramaController(DramaService dramaService,
@@ -74,6 +78,7 @@ public class DramaController {
                            DramaShotBatchGenerateService dramaShotBatchGenerateService,
                            DramaFilmService dramaFilmService,
                            DramaCaptionService dramaCaptionService,
+                           ObjectProvider<DramaShotCaptionPostProcessService> captionPostProcess,
                            ArkReviewCredentialService arkReviewCredentialService) {
         this.dramaService = dramaService;
         this.dramaAssetService = dramaAssetService;
@@ -81,6 +86,7 @@ public class DramaController {
         this.dramaShotBatchGenerateService = dramaShotBatchGenerateService;
         this.dramaFilmService = dramaFilmService;
         this.dramaCaptionService = dramaCaptionService;
+        this.captionPostProcess = captionPostProcess;
         this.arkReviewCredentialService = arkReviewCredentialService;
     }
 
@@ -549,12 +555,40 @@ public class DramaController {
         return CommonResult.success();
     }
 
-    // 暂关分镜预览字幕，保证出片视频画面/播放器均无字幕；恢复时取消注释。
-    // @Operation(summary = "当前分镜中文字幕（按实际视频时长生成 WebVTT）")
-    // @GetMapping(value = "/shots/{id}/captions.vtt", produces = "text/vtt;charset=UTF-8")
-    // public ResponseEntity<String> getShotCaptions(@PathVariable Long id) {
-    //     return vtt(dramaCaptionService.shotVtt(id));
-    // }
+    @Operation(summary = "当前分镜中文字幕（WebVTT 软字幕预览）")
+    @GetMapping(value = "/shots/{id}/captions.vtt", produces = "text/vtt;charset=UTF-8")
+    public ResponseEntity<String> getShotCaptions(@PathVariable Long id) {
+        return vtt(dramaCaptionService.shotVtt(id));
+    }
+
+    @Operation(summary = "当前分镜字幕文档（cue 列表与对齐元数据）")
+    @GetMapping("/shots/{id}/captions")
+    public CommonResult<DramaCaptionDocumentResp> getShotCaptionDocument(@PathVariable Long id) {
+        return CommonResult.success(dramaCaptionService.getDocument(id));
+    }
+
+    @Operation(summary = "保存分镜字幕 cue 轻编辑（sourceType=MANUAL）")
+    @PutMapping("/shots/{id}/captions")
+    public CommonResult<DramaCaptionDocumentResp> saveShotCaptions(
+            @PathVariable Long id,
+            @Valid @RequestBody DramaCaptionCueSaveReq req) {
+        return CommonResult.success(dramaCaptionService.saveManualCues(id, req));
+    }
+
+    @Operation(summary = "重新生成分镜字幕（对白变更或失败后重试）")
+    @PostMapping("/shots/{id}/captions/retry")
+    public CommonResult<DramaShotResp> retryShotCaptions(@PathVariable Long id) {
+        DramaShotCaptionPostProcessService service = requireCaptionPostProcess();
+        service.retryOwned(id);
+        return CommonResult.success(dramaStoryboardService.getShot(id));
+    }
+
+    @Operation(summary = "按需生成分镜烧录字幕视频")
+    @PostMapping("/shots/{id}/captions/burn")
+    public CommonResult<DramaCaptionDocumentResp> burnShotCaptions(@PathVariable Long id) {
+        requireCaptionPostProcess().burnOwned(id);
+        return CommonResult.success(dramaCaptionService.getDocument(id));
+    }
 
     @Operation(summary = "本集成片状态（指纹过期、缺镜清单）")
     @GetMapping("/episodes/{id}/film")
@@ -570,11 +604,27 @@ public class DramaController {
         return CommonResult.success(dramaFilmService.assemble(id, req == null ? null : req.getShotIds()));
     }
 
-    // 成片字幕暂保留接口；若也要关掉，一并取消注释块即可。
+    @Operation(summary = "导出带字幕硬烧成片（不替换软字幕成片）")
+    @PostMapping("/episodes/{id}/film/export-burned")
+    public CommonResult<DramaFilmResp> exportBurnedFilm(
+            @PathVariable Long id,
+            @RequestBody(required = false) DramaFilmAssembleReq req) {
+        return CommonResult.success(dramaFilmService.assembleBurned(id, req == null ? null : req.getShotIds()));
+    }
+
     @Operation(summary = "本集成片中文字幕（按镜头实际时长累计 WebVTT）")
     @GetMapping(value = "/episodes/{id}/film/captions.vtt", produces = "text/vtt;charset=UTF-8")
     public ResponseEntity<String> getFilmCaptions(@PathVariable Long id) {
         return vtt(dramaCaptionService.episodeVtt(id));
+    }
+
+    private DramaShotCaptionPostProcessService requireCaptionPostProcess() {
+        DramaShotCaptionPostProcessService service = captionPostProcess.getIfAvailable();
+        if (service == null) {
+            throw new cn.aigc.dit.common.exception.BizException(
+                    cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "字幕后处理未启用");
+        }
+        return service;
     }
 
     private static ResponseEntity<String> vtt(String body) {

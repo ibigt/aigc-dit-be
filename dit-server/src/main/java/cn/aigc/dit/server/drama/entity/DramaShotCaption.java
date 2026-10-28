@@ -25,6 +25,8 @@ public class DramaShotCaption {
     private String status;
     private String processorVersion;
     private String errorMessage;
+    /** Soft retry counter for worker exponential backoff. */
+    private Integer attemptCount;
 
     @TableField(fill = FieldFill.INSERT)
     private OffsetDateTime createdAt;

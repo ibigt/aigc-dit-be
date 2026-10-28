@@ -19,11 +19,13 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -50,6 +52,8 @@ class DramaFilmServiceTest {
     private DramaCaptionService captionService;
     @Mock
     private CreationService creationService;
+    @Mock
+    private ObjectProvider<DramaShotCaptionPostProcessService> captionPostProcess;
 
     private LocalObjectStorage storage;
     private DramaFilmService service;
@@ -61,9 +65,11 @@ class DramaFilmServiceTest {
     @BeforeEach
     void setUp() {
         storage = new LocalObjectStorage(tempDir.resolve("obj"));
-        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat, captionService, creationService);
+        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat,
+                captionService, creationService, captionPostProcess);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         concatPayloads.clear();
+        org.mockito.Mockito.lenient().when(captionService.readyCaptionFlags(any())).thenReturn(Map.of());
         org.mockito.Mockito.lenient().when(posterExtractor.extract(any())).thenReturn("users/7/drama/31/film-poster.webp");
         org.mockito.Mockito.lenient().doAnswer(invocation -> {
             List<Path> inputs = invocation.getArgument(0);

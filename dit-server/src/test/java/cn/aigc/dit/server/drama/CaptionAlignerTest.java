@@ -40,4 +40,11 @@ class CaptionAlignerTest {
                 new SubtitleCue(5000, 7000, "丙。")),
                 CaptionAligner.align("旁白：甲，乙，丙。", List.of(new SpeechSegment(1000, 7000))));
     }
+
+    @Test
+    void softMaxSplitsLongUnpunctuatedCjkAt24CodePoints() {
+        String words = "一".repeat(30);
+        List<String> phrases = CaptionAligner.phrases("旁白：" + words);
+        assertEquals(List.of("一".repeat(24), "一".repeat(6)), phrases);
+    }
 }

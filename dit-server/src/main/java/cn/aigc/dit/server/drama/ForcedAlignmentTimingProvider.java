@@ -14,7 +14,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
 /** Uses VAD only to trim the search audio, then aligns the known dialogue. */
 @Slf4j
@@ -39,29 +38,28 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
     public TimingResult provide(Path audioFile, String dialogue, List<SpeechSegment> speechSegments) {
         GenerateProperties.ForcedAlignment config = properties.getForcedAlignment();
         if (config == null || !config.isEnabled()) return failure("FORCED_ALIGNMENT_DISABLED");
-        boolean vadEmpty = speechSegments == null || speechSegments.isEmpty();
         List<String> phrases = CaptionAligner.phrases(dialogue);
         if (phrases.isEmpty()) return failure("TRANSCRIPT_EMPTY");
+        if (speechSegments == null || speechSegments.isEmpty()) {
+            return alignFullAudio(audioFile, phrases, config);
+        }
+        // One island: crop that span once. Two+: distribute phrases by duration weight per island.
+        return alignIslands(audioFile, phrases, speechSegments, config);
+    }
+
+    private TimingResult alignFullAudio(Path audioFile, List<String> phrases,
+                                        GenerateProperties.ForcedAlignment config) {
         String rawText = String.join("", phrases);
         String normalizedText = AlignmentTextNormalizer.normalizeText(rawText);
         if (normalizedText.isBlank()) return failure("TRANSCRIPT_EMPTY");
 
         Path cropped = null;
-        long cropStartMs = vadEmpty ? 0L : speechSegments.get(0).startMs();
-        long cropEndMs = 0L;
         try {
             Pcm16Audio audio = Pcm16Audio.read(audioFile, config.getSampleRate());
-            int start = (int) Math.min(audio.samples().length,
-                    Math.max(0L, Math.round(cropStartMs * config.getSampleRate() / 1000D)));
-            if (vadEmpty) {
-                cropEndMs = Math.round(audio.samples().length * 1000D / config.getSampleRate());
-            } else {
-                cropEndMs = speechSegments.get(speechSegments.size() - 1).endMs();
-            }
+            long cropEndMs = Math.round(audio.samples().length * 1000D / config.getSampleRate());
             int end = (int) Math.min(audio.samples().length,
-                    Math.max(start + 1L, Math.round(cropEndMs * config.getSampleRate() / 1000D)));
-            if (end <= start) return failure("INVALID_VAD_CROP");
-            float[] crop = java.util.Arrays.copyOfRange(audio.samples(), start, end);
+                    Math.max(1L, Math.round(cropEndMs * config.getSampleRate() / 1000D)));
+            float[] crop = java.util.Arrays.copyOfRange(audio.samples(), 0, end);
             cropped = Files.createTempFile("dit-forced-alignment-", ".wav");
             Pcm16WavWriter.write(cropped, crop, config.getSampleRate());
 
@@ -70,17 +68,17 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
                     result, normalizedText.codePointCount(0, normalizedText.length()),
                     Math.max(1L, Math.round(crop.length * 1000D / config.getSampleRate())));
             if (!decision.accepted()) return failure(decision.reason(), result);
-            if (vadEmpty && result.confidence() < MIN_CONFIDENCE_WITHOUT_VAD) {
+            if (result.confidence() < MIN_CONFIDENCE_WITHOUT_VAD) {
                 return failure("ALIGNMENT_LOW_CONFIDENCE_WITHOUT_VAD", result);
             }
 
             List<AlignmentToken> absoluteTokens = result.tokens().stream()
-                    .map(token -> new AlignmentToken(token.text(), token.startMs() + cropStartMs,
-                            token.endMs() + cropStartMs, token.confidence(), token.normalizedIndex()))
+                    .map(token -> new AlignmentToken(token.text(), token.startMs(),
+                            token.endMs(), token.confidence(), token.normalizedIndex()))
                     .toList();
             List<SubtitleCue> captions = captions(phrases, absoluteTokens);
             if (captions.isEmpty()) return failure("ALIGNMENT_NO_CAPTIONS", result);
-            return new TimingResult(vadEmpty ? "FORCED_ALIGNMENT_FULL_AUDIO" : "FORCED_ALIGNMENT",
+            return new TimingResult("FORCED_ALIGNMENT_FULL_AUDIO",
                     result.confidence(), result.coverage(), captions,
                     absoluteTokens, null, result.modelVersion());
         } catch (Exception e) {
@@ -88,6 +86,84 @@ public class ForcedAlignmentTimingProvider implements CaptionTimingProvider {
             return failure(e.getMessage() == null ? "ALIGNMENT_EXCEPTION" : e.getMessage());
         } finally {
             if (cropped != null) try { Files.deleteIfExists(cropped); } catch (Exception ignored) { }
+        }
+    }
+
+    private TimingResult alignIslands(Path audioFile, List<String> phrases,
+                                      List<SpeechSegment> speechSegments,
+                                      GenerateProperties.ForcedAlignment config) {
+        int[] phraseCounts = CaptionAligner.distributeByWeight(
+                phrases.size(),
+                speechSegments.stream().map(SpeechSegment::durationMs).toList());
+        List<Path> crops = new ArrayList<>();
+        try {
+            Pcm16Audio audio = Pcm16Audio.read(audioFile, config.getSampleRate());
+            List<SubtitleCue> allCaptions = new ArrayList<>();
+            List<AlignmentToken> allTokens = new ArrayList<>();
+            double weightedConfidence = 0D;
+            double weightedCoverage = 0D;
+            long weightSum = 0L;
+            String modelVersion = properties.getForcedAlignment().getProcessorVersion();
+            int phraseCursor = 0;
+
+            for (int i = 0; i < speechSegments.size(); i++) {
+                int count = phraseCounts[i];
+                if (count <= 0) continue;
+                int phraseEnd = phraseCursor + count;
+                List<String> assigned = phrases.subList(phraseCursor, phraseEnd);
+                phraseCursor = phraseEnd;
+
+                SpeechSegment island = speechSegments.get(i);
+                String rawText = String.join("", assigned);
+                String normalizedText = AlignmentTextNormalizer.normalizeText(rawText);
+                if (normalizedText.isBlank()) continue;
+
+                int start = (int) Math.min(audio.samples().length,
+                        Math.max(0L, Math.round(island.startMs() * config.getSampleRate() / 1000D)));
+                int end = (int) Math.min(audio.samples().length,
+                        Math.max(start + 1L, Math.round(island.endMs() * config.getSampleRate() / 1000D)));
+                if (end <= start) return failure("INVALID_VAD_CROP");
+                float[] crop = java.util.Arrays.copyOfRange(audio.samples(), start, end);
+                Path cropped = Files.createTempFile("dit-forced-alignment-", ".wav");
+                crops.add(cropped);
+                Pcm16WavWriter.write(cropped, crop, config.getSampleRate());
+
+                AlignmentResult result = alignmentService.align(cropped, normalizedText);
+                long cropDurationMs = Math.max(1L, Math.round(crop.length * 1000D / config.getSampleRate()));
+                AlignmentConfidenceEvaluator.Decision decision = confidenceEvaluator.evaluate(
+                        result, normalizedText.codePointCount(0, normalizedText.length()), cropDurationMs);
+                if (!decision.accepted()) return failure(decision.reason(), result);
+
+                List<AlignmentToken> absoluteTokens = result.tokens().stream()
+                        .map(token -> new AlignmentToken(token.text(),
+                                token.startMs() + island.startMs(),
+                                token.endMs() + island.startMs(),
+                                token.confidence(), token.normalizedIndex()))
+                        .toList();
+                List<SubtitleCue> islandCaptions = captions(assigned, absoluteTokens);
+                if (islandCaptions.isEmpty()) return failure("ALIGNMENT_NO_CAPTIONS", result);
+
+                allCaptions.addAll(islandCaptions);
+                allTokens.addAll(absoluteTokens);
+                long weight = Math.max(1L, island.durationMs());
+                weightedConfidence += result.confidence() * weight;
+                weightedCoverage += result.coverage() * weight;
+                weightSum += weight;
+                modelVersion = result.modelVersion();
+            }
+
+            if (allCaptions.isEmpty()) return failure("ALIGNMENT_NO_CAPTIONS");
+            double confidence = weightSum == 0L ? 0D : weightedConfidence / weightSum;
+            double coverage = weightSum == 0L ? 0D : weightedCoverage / weightSum;
+            return new TimingResult("FORCED_ALIGNMENT", confidence, coverage,
+                    List.copyOf(allCaptions), List.copyOf(allTokens), null, modelVersion);
+        } catch (Exception e) {
+            log.warn("forced-alignment timing provider failed for {}", audioFile, e);
+            return failure(e.getMessage() == null ? "ALIGNMENT_EXCEPTION" : e.getMessage());
+        } finally {
+            for (Path cropped : crops) {
+                try { Files.deleteIfExists(cropped); } catch (Exception ignored) { }
+            }
         }
     }
 

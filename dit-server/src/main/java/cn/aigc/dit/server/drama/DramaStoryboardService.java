@@ -432,6 +432,13 @@ public class DramaStoryboardService {
         });
     }
 
+    public DramaShotResp getShot(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        return toShotResp(shot, chapterOf(shot.getChapterId()), assets,
+                stylePrefix(shot.getSeriesId()), loadTask(shot.getGenTaskId()));
+    }
+
     @Transactional
     public DramaShotResp updateShot(Long shotId, DramaShotSaveReq req) {
         DramaShot shot = requireShot(shotId);
@@ -441,6 +448,7 @@ public class DramaStoryboardService {
         if (DramaContract.STATUS_LOCKED.equals(shot.getStatus())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "已确认分镜请先等资产/剧本过期后再改");
         }
+        String dialogueBefore = AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue()).normalizedText();
         applySave(shot, req);
         if (req.getVideoGenerateMode() != null
                 && DramaVideoGenerateModes.isI2v(shot.getVideoGenerateMode())) {
@@ -469,6 +477,17 @@ public class DramaStoryboardService {
             shot.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         }
         shotMapper.updateById(shot);
+        String dialogueAfter = AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue()).normalizedText();
+        if (captionPostProcessService != null
+                && StringUtils.hasText(shot.getVideoKey())
+                && !dialogueBefore.equals(dialogueAfter)) {
+            try {
+                captionPostProcessService.requeue(
+                        shot.getId(), shot.getGenTaskId(), shot.getUserId(), shot.getVideoKey(), true);
+            } catch (RuntimeException e) {
+                log.warn("requeue caption after dialogue change failed, shot={}", shot.getId(), e);
+            }
+        }
         touchSeries(shot.getSeriesId());
         return toShotResp(shot, chapterOf(shot.getChapterId()), assets, prefix, loadTask(shot.getGenTaskId()));
     }
@@ -2403,6 +2422,8 @@ public class DramaStoryboardService {
                 resp.setCaptionVideoUrl(MediaUrls.of(caption.getCaptionVideoKey()));
                 resp.setSubtitleJsonKey(caption.getSubtitleJsonKey());
                 resp.setSubtitleJsonUrl(MediaUrls.of(caption.getSubtitleJsonKey()));
+                resp.setCaptionErrorMessage(caption.getErrorMessage());
+                fillCaptionMeta(resp, caption);
             }
         }
         resp.setSelectedGenerationId(shot.getSelectedGenerationId());
@@ -2491,6 +2512,23 @@ public class DramaStoryboardService {
                             shot.getId(), shot.getGenTaskId(), e.getMessage());
                 }
             }
+        }
+    }
+
+    private void fillCaptionMeta(DramaShotResp resp, DramaShotCaption caption) {
+        if (resp == null || caption == null || objectMapper == null || objectStorage == null
+                || !StringUtils.hasText(caption.getSubtitleJsonKey())) {
+            return;
+        }
+        try {
+            SubtitleDocument document = objectMapper.readValue(
+                    objectStorage.getBytes(caption.getSubtitleJsonKey()), SubtitleDocument.class);
+            resp.setCaptionSourceType(document.sourceType());
+            resp.setCaptionFallbackReason(document.fallbackReason());
+            resp.setCaptionConfidence(document.alignmentConfidence());
+            resp.setCaptionCoverage(document.alignmentCoverage());
+        } catch (Exception e) {
+            log.debug("fill caption meta failed shot={}", caption.getShotId(), e);
         }
     }
 

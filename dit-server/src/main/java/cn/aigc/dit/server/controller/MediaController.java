@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpRange;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,11 +48,12 @@ public class MediaController {
     /** 同一张缩略图只生成一次。没抢到锁的请求立刻返回，不占着浏览器连接。 */
     private final ConcurrentHashMap<String, ReentrantLock> thumbnailLocks = new ConcurrentHashMap<>();
 
-    @Operation(summary = "读取对象存储文件（不直连 MinIO）；支持 Range；图片可传 w 返回缩略图")
+    @Operation(summary = "读取对象存储文件（不直连 MinIO）；支持 Range；图片可传 w 返回缩略图；filename 用于下载文件名")
     @RequestMapping(method = {RequestMethod.GET, RequestMethod.HEAD})
     public ResponseEntity<InputStreamResource> get(
             @RequestParam String key,
             @RequestParam(required = false) Integer w,
+            @RequestParam(required = false) String filename,
             @RequestHeader HttpHeaders headers) {
         if (!StringUtils.hasText(key) || key.contains("..")) {
             throw new BizException(ErrorCode.BAD_REQUEST, "非法对象路径");
@@ -66,7 +69,7 @@ public class MediaController {
                 return thumb;
             }
         }
-        return serveOriginal(key, headers);
+        return serveOriginal(key, headers, filename);
     }
 
     private ResponseEntity<InputStreamResource> serveThumbnail(String key, int width) {
@@ -160,7 +163,7 @@ public class MediaController {
         return okThumbnail(objectStorage.get(cacheKey), length, "image/jpeg", cacheKey);
     }
 
-    private ResponseEntity<InputStreamResource> serveOriginal(String key, HttpHeaders headers) {
+    private ResponseEntity<InputStreamResource> serveOriginal(String key, HttpHeaders headers, String filename) {
         long contentLength = objectStorage.size(key);
         List<HttpRange> ranges;
         try {
@@ -175,10 +178,11 @@ public class MediaController {
             return unsatisfiable(contentLength);
         }
         String contentType = MediaUrls.contentType(key, MediaType.APPLICATION_OCTET_STREAM_VALUE);
+        String disposition = inlineDisposition(key, filename);
         if (contentLength <= 0) {
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(contentType))
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
                     .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                     .cacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePrivate())
                     .contentLength(0)
@@ -186,7 +190,7 @@ public class MediaController {
         }
         InputStream stream = objectStorage.getRange(key, slice.start(), slice.end());
         HttpHeaders responseHeaders = new HttpHeaders();
-        responseHeaders.set(HttpHeaders.CONTENT_DISPOSITION, "inline");
+        responseHeaders.set(HttpHeaders.CONTENT_DISPOSITION, disposition);
         responseHeaders.set(HttpHeaders.ACCEPT_RANGES, "bytes");
         responseHeaders.setCacheControl(CacheControl.maxAge(Duration.ofHours(1)).cachePrivate());
         responseHeaders.setContentType(MediaType.parseMediaType(contentType));
@@ -201,6 +205,44 @@ public class MediaController {
         return ResponseEntity.ok()
                 .headers(responseHeaders)
                 .body(new SizedStreamResource(stream, slice.length()));
+    }
+
+    /** 播放用 inline；带 filename，避免浏览器把 /api/media 存成 media。 */
+    static String inlineDisposition(String key, String filename) {
+        String name = sanitizeDownloadName(filename);
+        if (!StringUtils.hasText(name)) {
+            name = sanitizeDownloadName(basename(key));
+        }
+        if (!StringUtils.hasText(name)) {
+            return "inline";
+        }
+        return ContentDisposition.inline()
+                .filename(name, StandardCharsets.UTF_8)
+                .build()
+                .toString();
+    }
+
+    static String sanitizeDownloadName(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return "";
+        }
+        String cleaned = raw.replace('\\', '/')
+                .replaceAll(".*/", "")
+                .replaceAll("[\\r\\n\"\\\\]", "")
+                .replaceAll("[\\x00-\\x1f\\x7f]", "")
+                .trim();
+        if (cleaned.length() > 120) {
+            cleaned = cleaned.substring(0, 120);
+        }
+        return cleaned;
+    }
+
+    private static String basename(String key) {
+        if (!StringUtils.hasText(key)) {
+            return "";
+        }
+        int slash = key.lastIndexOf('/');
+        return slash >= 0 ? key.substring(slash + 1) : key;
     }
 
     private static ResponseEntity<InputStreamResource> okBytes(InputStream stream, long length, String contentType) {
