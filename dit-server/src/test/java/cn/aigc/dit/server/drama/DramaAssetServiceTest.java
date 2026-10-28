@@ -39,6 +39,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -55,6 +57,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -95,16 +98,21 @@ class DramaAssetServiceTest {
     private AesGcmEncryptor encryptor;
     @Mock
     private ImageDescribeClient imageDescribeClient;
+    @Mock
+    private PlatformTransactionManager transactionManager;
 
     private DramaAssetService service;
     private final AtomicLong generationIds = new AtomicLong(500);
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).commit(any());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).rollback(any());
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient);
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
@@ -286,6 +294,7 @@ class DramaAssetServiceTest {
     @Test
     void convertToSeedreamDescribesAndSubmitsPureT2iWithRoundtripSource() {
         DramaAsset asset = ownedAsset();
+        asset.setType(DramaContract.ASSET_TYPE_CHARACTER);
         asset.setImageStorageKey("users/7/upload/ref.png");
         when(assetMapper.selectById(9L)).thenReturn(asset);
         DramaSeries series = ownedSeries();
@@ -295,7 +304,9 @@ class DramaAssetServiceTest {
         when(aiModelMapper.selectById(12L)).thenReturn(model);
         when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
         when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1, 2, 3});
-        when(imageDescribeClient.describe(any(), eq("image/png"), anyString(), anyString(), eq("ark-test-key"), isNull()))
+        when(imageDescribeClient.describe(any(), eq("image/png"),
+                eq(cn.aigc.dit.generate.describe.ImageDescribePrompts.CHARACTER_FULL),
+                anyString(), eq("ark-test-key"), isNull()))
                 .thenReturn(new ImageDescribeResult(
                         "中年男性短发",
                         "方脸浓眉，深灰外套",
@@ -320,6 +331,81 @@ class DramaAssetServiceTest {
         assertEquals(GenerateRequests.SOURCE_DRAMA, extraCaptor.getValue().get("source"));
         assertEquals(DramaAssetService.SOURCE_ROUNDTRIP, extraCaptor.getValue().get("assetGenerationSource"));
         assertEquals(200L, asset.getGenTaskId());
+        verify(transactionManager).commit(any());
+    }
+
+    @Test
+    void convertToSeedreamUsesScenePromptForSceneAsset() {
+        DramaAsset asset = ownedAsset();
+        asset.setType(DramaContract.ASSET_TYPE_SCENE);
+        asset.setName("警局走廊");
+        asset.setImageStorageKey("users/7/upload/scene.jpg");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        when(objectStorage.getBytes("users/7/upload/scene.jpg")).thenReturn(new byte[]{9});
+        when(imageDescribeClient.describe(any(), eq("image/jpeg"),
+                eq(cn.aigc.dit.generate.describe.ImageDescribePrompts.SCENE),
+                anyString(), eq("ark-test-key"), isNull()))
+                .thenReturn(new ImageDescribeResult("走廊", "冷光门廊", "【identity】走廊\n【t2i_prompt】冷光门廊"));
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(201L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.convertToSeedream(9L, null);
+
+        verify(imageDescribeClient).describe(any(), eq("image/jpeg"),
+                eq(cn.aigc.dit.generate.describe.ImageDescribePrompts.SCENE),
+                anyString(), eq("ark-test-key"), isNull());
+        verify(generateService).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void convertToSeedreamDescribeFailureDoesNotSubmit() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1});
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        when(imageDescribeClient.describe(any(), any(), any(), any(), any(), any()))
+                .thenThrow(new BizException(cn.aigc.dit.common.exception.ErrorCode.BAD_REQUEST, "图生文失败"));
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertEquals("图生文失败", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+        verify(transactionManager, never()).getTransaction(any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsWhenImageChangedBeforeSubmit() {
+        DramaAsset before = ownedAsset();
+        before.setImageStorageKey("users/7/upload/ref.png");
+        DramaAsset after = ownedAsset();
+        after.setImageStorageKey("users/7/upload/other.png");
+        when(assetMapper.selectById(9L)).thenReturn(before, after);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1});
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        when(imageDescribeClient.describe(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ImageDescribeResult("a", "b", "【identity】a\n【t2i_prompt】b"));
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertEquals("参考图已变更，请重新转资产图", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 
     @Test

@@ -53,9 +53,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -90,6 +92,7 @@ public class DramaAssetService {
     private final ObjectStorage objectStorage;
     private final AesGcmEncryptor encryptor;
     private final ImageDescribeClient imageDescribeClient;
+    private final TransactionTemplate transactionTemplate;
 
     public DramaAssetService(DramaAssetMapper assetMapper,
                              DramaAssetGenerationMapper assetGenerationMapper,
@@ -106,7 +109,8 @@ public class DramaAssetService {
                              MediaRetentionService mediaRetention,
                              ObjectStorage objectStorage,
                              AesGcmEncryptor encryptor,
-                             ImageDescribeClient imageDescribeClient) {
+                             ImageDescribeClient imageDescribeClient,
+                             PlatformTransactionManager transactionManager) {
         this.assetMapper = assetMapper;
         this.assetGenerationMapper = assetGenerationMapper;
         this.episodeMapper = episodeMapper;
@@ -123,6 +127,7 @@ public class DramaAssetService {
         this.objectStorage = objectStorage;
         this.encryptor = encryptor;
         this.imageDescribeClient = imageDescribeClient;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Transactional
@@ -667,38 +672,66 @@ public class DramaAssetService {
 
     /**
      * 外部上传/引用图 → 图生文 → Seedream 5.0 纯 T2I，落 generation source=roundtrip 并获得 origin 资格。
+     * 图生文在事务外执行，避免长时间占用 DB 连接；submit 在短事务内完成。
      */
-    @Transactional
     public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution) {
         DramaAsset asset = requireAsset(assetId);
         DramaSeries series = requireOwnedSeries(asset.getSeriesId());
         if (!StringUtils.hasText(asset.getImageStorageKey())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先上传或引用参考图");
         }
+        if (isGenerating(loadTask(asset.getGenTaskId()))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产正在生成中，请稍后再转");
+        }
         AiModel model = requireBoundImageModel(series);
         requireSeedream50ForConvert(model);
+        assertGenerateCapacity(asset.getEpisodeId());
+        String storageKey = asset.getImageStorageKey();
         String apiKey = decryptModelApiKey(model);
         String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
-        byte[] imageBytes = objectStorage.getBytes(asset.getImageStorageKey());
-        String mime = mimeFromStorageKey(asset.getImageStorageKey());
+        byte[] imageBytes = objectStorage.getBytes(storageKey);
+        String mime = mimeFromStorageKey(storageKey);
+        String describePrompt = ImageDescribePrompts.forAssetType(asset.getType());
         ImageDescribeResult described = imageDescribeClient.describe(
-                imageBytes, mime, ImageDescribePrompts.CHARACTER_FULL, endpoint, apiKey, null);
+                imageBytes, mime, describePrompt, endpoint, apiKey, null);
         String prompt = described == null ? "" : described.assembledPrompt();
         if (!StringUtils.hasText(prompt)) {
             throw new BizException(ErrorCode.INTERNAL, "图生文未得到可用提示词");
         }
-        assertGenerateCapacity(asset.getEpisodeId());
+        String trimmedPrompt = trimPrompt(prompt);
+        String normalizedResolution = normalizeImageResolution(resolution);
+        return transactionTemplate.execute(status ->
+                submitConvertRoundtrip(assetId, storageKey, model.getId(), series.getId(),
+                        series.getAspectRatio(), trimmedPrompt, normalizedResolution));
+    }
+
+    private DramaAssetGenerateResp submitConvertRoundtrip(
+            Long assetId,
+            String expectedStorageKey,
+            Long modelId,
+            Long seriesId,
+            String aspectRatio,
+            String prompt,
+            String resolution) {
+        DramaAsset asset = requireAsset(assetId);
+        if (!StringUtils.hasText(asset.getImageStorageKey())
+                || !expectedStorageKey.equals(asset.getImageStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考图已变更，请重新转资产图");
+        }
+        if (isGenerating(loadTask(asset.getGenTaskId()))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产正在生成中，请稍后再转");
+        }
         GenerateSubmitReq req = new GenerateSubmitReq();
-        req.setModelId(model.getId());
+        req.setModelId(modelId);
         req.setCategory(ModelCategory.IMAGE);
-        req.setPrompt(trimPrompt(prompt));
-        req.setRatio(series.getAspectRatio());
-        req.setResolution(normalizeImageResolution(resolution));
+        req.setPrompt(prompt);
+        req.setRatio(aspectRatio);
+        req.setResolution(resolution);
         req.setCopies(1);
         // 故意不设 references：I2I 不写 SeedreamOriginUrls
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("source", GenerateRequests.SOURCE_DRAMA);
-        extra.put("seriesId", series.getId());
+        extra.put("seriesId", seriesId);
         extra.put("episodeId", asset.getEpisodeId());
         extra.put("assetId", asset.getId());
         extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
@@ -706,7 +739,7 @@ public class DramaAssetService {
         asset.setGenTaskId(task.getId());
         reopenIfConfirmed(asset);
         assetMapper.updateById(asset);
-        touchSeries(series.getId());
+        touchSeries(seriesId);
         log.info("convert-to-seedream assetId={} taskId={} storageKey={}",
                 asset.getId(), task.getId(), asset.getImageStorageKey());
         DramaAssetGenerateResp resp = new DramaAssetGenerateResp();

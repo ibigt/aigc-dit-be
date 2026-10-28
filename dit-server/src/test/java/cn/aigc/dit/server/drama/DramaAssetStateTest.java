@@ -85,15 +85,21 @@ class DramaAssetStateTest {
     private AesGcmEncryptor encryptor;
     @Mock
     private ImageDescribeClient imageDescribeClient;
+    @Mock
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
 
     private DramaAssetService service;
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any()))
+                .thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).commit(any());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).rollback(any());
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient);
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
     }
