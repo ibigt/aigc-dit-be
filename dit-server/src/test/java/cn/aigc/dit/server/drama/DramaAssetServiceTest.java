@@ -38,6 +38,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -112,7 +113,8 @@ class DramaAssetServiceTest {
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager);
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager,
+                new ObjectMapper());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
@@ -363,6 +365,35 @@ class DramaAssetServiceTest {
                 eq(cn.aigc.dit.generate.describe.ImageDescribePrompts.SCENE),
                 anyString(), eq("ark-test-key"), isNull());
         verify(generateService).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsMismatchedArkImageAndVideoKeys() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        series.setVideoModelId(6L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel image = seedream50Model();
+        image.setProvider("官方API");
+        when(aiModelMapper.selectById(12L)).thenReturn(image);
+        AiModel video = new AiModel();
+        video.setId(6L);
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setProvider("官方API");
+        video.setAdapterKey("seedance-2.0");
+        video.setApiKeyEnc("enc-video");
+        when(aiModelMapper.selectById(6L)).thenReturn(video);
+        when(encryptor.decrypt("enc-key")).thenReturn("ark-image-key");
+        when(encryptor.decrypt("enc-video")).thenReturn("ark-video-other");
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertTrue(error.getMessage().contains("同一方舟 API Key"));
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
     }
 
     @Test

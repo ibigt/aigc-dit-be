@@ -50,6 +50,7 @@ import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -61,6 +62,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -93,6 +97,7 @@ public class DramaAssetService {
     private final AesGcmEncryptor encryptor;
     private final ImageDescribeClient imageDescribeClient;
     private final TransactionTemplate transactionTemplate;
+    private final ObjectMapper objectMapper;
 
     public DramaAssetService(DramaAssetMapper assetMapper,
                              DramaAssetGenerationMapper assetGenerationMapper,
@@ -110,7 +115,8 @@ public class DramaAssetService {
                              ObjectStorage objectStorage,
                              AesGcmEncryptor encryptor,
                              ImageDescribeClient imageDescribeClient,
-                             PlatformTransactionManager transactionManager) {
+                             PlatformTransactionManager transactionManager,
+                             ObjectMapper objectMapper) {
         this.assetMapper = assetMapper;
         this.assetGenerationMapper = assetGenerationMapper;
         this.episodeMapper = episodeMapper;
@@ -128,6 +134,7 @@ public class DramaAssetService {
         this.encryptor = encryptor;
         this.imageDescribeClient = imageDescribeClient;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -685,6 +692,7 @@ public class DramaAssetService {
         }
         AiModel model = requireBoundImageModel(series);
         requireSeedream50ForConvert(model);
+        assertSameArkAccountForConvert(series, model);
         assertGenerateCapacity(asset.getEpisodeId());
         String storageKey = asset.getImageStorageKey();
         String apiKey = decryptModelApiKey(model);
@@ -1201,6 +1209,38 @@ public class DramaAssetService {
         }
     }
 
+    /**
+     * Seedance 只信任同账号 Seedream 5.0 原 HTTPS。双方都是方舟官方类时，要求解密后 Key 一致。
+     */
+    private void assertSameArkAccountForConvert(DramaSeries series, AiModel imageModel) {
+        if (series == null || series.getVideoModelId() == null || imageModel == null) {
+            return;
+        }
+        if (!isArkOfficialProvider(imageModel.getProvider())) {
+            return;
+        }
+        AiModel videoModel = aiModelMapper.selectById(series.getVideoModelId());
+        if (videoModel == null || !isArkOfficialProvider(videoModel.getProvider())) {
+            return;
+        }
+        String imageKey = decryptModelApiKey(imageModel);
+        String videoKey = decryptModelApiKey(videoModel);
+        if (!imageKey.equals(videoKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "转资产图与视频模型须使用同一方舟 API Key，否则 Seedance 不信任 origin");
+        }
+    }
+
+    private static boolean isArkOfficialProvider(String provider) {
+        if (!StringUtils.hasText(provider)) {
+            return false;
+        }
+        String value = provider.trim();
+        return AdapterCatalog.PROVIDER_OFFICIAL.equals(value)
+                || AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN.equals(value)
+                || value.contains("官方API");
+    }
+
     private String decryptModelApiKey(AiModel model) {
         if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
@@ -1252,6 +1292,12 @@ public class DramaAssetService {
         if (review != null && StringUtils.hasText(review.status())) {
             resp.setArkReviewStatus(review.status());
             resp.setArkReviewError(blankToNull(review.error()));
+        }
+        SeedreamOriginUrls.OriginInfo origin = SeedreamOriginUrls.inspect(
+                objectStorage, objectMapper, generation.getStorageKey(), Instant.now());
+        resp.setOriginStatus(origin.status());
+        if (origin.expiresAt() != null) {
+            resp.setOriginExpiresAt(OffsetDateTime.ofInstant(origin.expiresAt(), ZoneOffset.UTC));
         }
         return resp;
     }

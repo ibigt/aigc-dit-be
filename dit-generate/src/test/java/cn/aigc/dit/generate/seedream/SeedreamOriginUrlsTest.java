@@ -45,6 +45,30 @@ class SeedreamOriginUrlsTest {
         assertNull(SeedreamOriginUrls.resolve(storage, mapper, key, Instant.parse("2026-10-09T04:00:00Z")));
     }
 
+    @Test
+    void inspectReportsActiveExpiringExpiredAbsent() {
+        LocalObjectStorage storage = new LocalObjectStorage(tempDir);
+        String key = "users/1/outputs/9/2.png";
+        String url = "https://cdn.example/lite.png";
+        Instant saved = Instant.parse("2026-10-09T03:00:00Z");
+        SeedreamOriginUrls.save(storage, mapper, key, url, saved);
+
+        var active = SeedreamOriginUrls.inspect(storage, mapper, key, Instant.parse("2026-10-09T04:00:00Z"));
+        assertEquals(SeedreamOriginUrls.STATUS_ACTIVE, active.status());
+        assertEquals(url, SeedreamOriginUrls.resolve(storage, mapper, key, Instant.parse("2026-10-09T04:00:00Z")));
+
+        var soon = SeedreamOriginUrls.inspect(storage, mapper, key, Instant.parse("2026-10-10T01:30:00Z"));
+        assertEquals(SeedreamOriginUrls.STATUS_EXPIRING_SOON, soon.status());
+        assertEquals(url, SeedreamOriginUrls.resolve(storage, mapper, key, Instant.parse("2026-10-10T01:30:00Z")));
+
+        var expired = SeedreamOriginUrls.inspect(storage, mapper, key, Instant.parse("2026-10-10T04:00:00Z"));
+        assertEquals(SeedreamOriginUrls.STATUS_EXPIRED, expired.status());
+        assertNull(SeedreamOriginUrls.resolve(storage, mapper, key, Instant.parse("2026-10-10T04:00:00Z")));
+
+        assertEquals(SeedreamOriginUrls.STATUS_ABSENT,
+                SeedreamOriginUrls.inspect(storage, mapper, "missing.png", Instant.parse("2026-10-09T04:00:00Z")).status());
+    }
+
     private static GenerateRequest request(String mode, String adapter, String model) {
         return new GenerateRequest()
                 .setMode(mode)

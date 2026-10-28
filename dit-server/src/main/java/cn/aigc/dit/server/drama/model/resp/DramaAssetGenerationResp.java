@@ -25,5 +25,12 @@ public class DramaAssetGenerationResp {
     /** Active / Processing / Failed。没有审核记录时为空。 */
     private String arkReviewStatus;
     private String arkReviewError;
+    /**
+     * Seedream 5.0 origin：active / expiring_soon / expired / absent。
+     * 无 sidecar 时为 absent。
+     */
+    private String originStatus;
+    /** Origin 失效时刻（UTC）；absent 时为空。 */
+    private OffsetDateTime originExpiresAt;
     private OffsetDateTime createdAt;
 }
