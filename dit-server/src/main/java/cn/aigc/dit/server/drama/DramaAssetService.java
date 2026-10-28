@@ -9,10 +9,7 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.ark.ArkKeys;
-import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.describe.ImageDescribeClient;
-import cn.aigc.dit.generate.describe.ImageDescribePrompts;
-import cn.aigc.dit.generate.describe.ImageDescribeResult;
 import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
@@ -79,6 +76,12 @@ public class DramaAssetService {
 
     /** generation.source：上传图经图生文→Seedream 5.0 转成的可信资产图。 */
     public static final String SOURCE_ROUNDTRIP = "roundtrip";
+
+    /** 异步 convert：任务先入库，worker 再图生文；占位 prompt 仅用于通过 submit 校验。 */
+    public static final String PENDING_DESCRIBE_PROMPT = "转资产图：图生文进行中";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_PENDING = "roundtripDescribePending";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY = "roundtripDescribeStorageKey";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE = "roundtripDescribeAssetType";
 
     private final DramaAssetMapper assetMapper;
     private final DramaAssetGenerationMapper assetGenerationMapper;
@@ -684,7 +687,7 @@ public class DramaAssetService {
 
     /**
      * 外部上传/引用图 → 图生文 → Seedream 5.0 纯 T2I，落 generation source=roundtrip 并获得 origin 资格。
-     * 图生文在事务外执行；{@code mode=refresh} 时若有存盘 prompt 则跳过 Vision。
+     * 默认先建 task 再由 worker 异步图生文+T2I（全程可轮询）；{@code mode=refresh} 复用存盘 prompt 跳过 Vision。
      */
     public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution, String mode) {
         DramaAsset asset = requireAsset(assetId);
@@ -702,29 +705,23 @@ public class DramaAssetService {
         String storageKey = asset.getImageStorageKey();
         boolean refresh = mode != null && "refresh".equalsIgnoreCase(mode.trim());
         String trimmedPrompt;
+        boolean describePending;
         if (refresh) {
             trimmedPrompt = loadRoundtripPrompt(storageKey);
             if (!StringUtils.hasText(trimmedPrompt)) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "没有可复用的转图提示词，请使用完整转资产图");
             }
+            describePending = false;
         } else {
-            String apiKey = decryptModelApiKey(model);
-            String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
-            byte[] imageBytes = objectStorage.getBytes(storageKey);
-            String mime = mimeFromStorageKey(storageKey);
-            String describePrompt = ImageDescribePrompts.forAssetType(asset.getType());
-            ImageDescribeResult described = imageDescribeClient.describe(
-                    imageBytes, mime, describePrompt, endpoint, apiKey, null);
-            String prompt = described == null ? "" : described.assembledPrompt();
-            if (!StringUtils.hasText(prompt)) {
-                throw new BizException(ErrorCode.INTERNAL, "图生文未得到可用提示词");
-            }
-            trimmedPrompt = trimPrompt(prompt);
+            trimmedPrompt = PENDING_DESCRIBE_PROMPT;
+            describePending = true;
         }
         String normalizedResolution = normalizeImageResolution(resolution);
+        String assetType = asset.getType();
         return transactionTemplate.execute(status ->
                 submitConvertRoundtrip(assetId, storageKey, model.getId(), series.getId(),
-                        series.getAspectRatio(), trimmedPrompt, normalizedResolution));
+                        series.getAspectRatio(), trimmedPrompt, normalizedResolution,
+                        describePending, assetType));
     }
 
     static String roundtripPromptKey(String storageKey) {
@@ -763,7 +760,9 @@ public class DramaAssetService {
             Long seriesId,
             String aspectRatio,
             String prompt,
-            String resolution) {
+            String resolution,
+            boolean describePending,
+            String assetType) {
         DramaAsset asset = requireAsset(assetId);
         if (!StringUtils.hasText(asset.getImageStorageKey())
                 || !expectedStorageKey.equals(asset.getImageStorageKey())) {
@@ -786,7 +785,13 @@ public class DramaAssetService {
         extra.put("episodeId", asset.getEpisodeId());
         extra.put("assetId", asset.getId());
         extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
-        extra.put("roundtripPrompt", prompt);
+        if (describePending) {
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_PENDING, true);
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY, expectedStorageKey);
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE, assetType);
+        } else {
+            extra.put("roundtripPrompt", prompt);
+        }
         GenerateTaskResp task = generateService.submit(req, extra);
         asset.setGenTaskId(task.getId());
         reopenIfConfirmed(asset);
@@ -1326,7 +1331,7 @@ public class DramaAssetService {
         return key;
     }
 
-    static String mimeFromStorageKey(String storageKey) {
+    public static String mimeFromStorageKey(String storageKey) {
         if (!StringUtils.hasText(storageKey)) {
             return "image/jpeg";
         }
@@ -1965,7 +1970,7 @@ public class DramaAssetService {
         return prompt + "外形与服装必须符合：" + id + "。";
     }
 
-    static String trimPrompt(String prompt) {
+    public static String trimPrompt(String prompt) {
         String value = prompt.trim();
         return value.length() <= 4000 ? value : value.substring(0, 4000);
     }

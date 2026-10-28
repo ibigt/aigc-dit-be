@@ -96,6 +96,11 @@ public class GenerateWorker {
     /** Caption processing is optional so the raw video generation path stays independent. */
     @Autowired(required = false)
     private DramaShotCaptionPostProcessService captionPostProcessService;
+    /** Convert-to-seedream：worker 内异步图生文（可选注入，测试可无）。 */
+    @Autowired(required = false)
+    private cn.aigc.dit.generate.describe.ImageDescribeClient imageDescribeClient;
+    @Autowired(required = false)
+    private cn.aigc.dit.storage.ObjectStorage objectStorage;
     private final CreditService creditService;
     private final AesGcmEncryptor encryptor;
 
@@ -318,6 +323,69 @@ public class GenerateWorker {
         }
     }
 
+    /**
+     * convert-to-seedream 异步路径：HTTP 仅建 task，此处完成图生文并写回 prompt。
+     */
+    void resolvePendingRoundtripDescribe(GenTask task, AiModel model) {
+        if (task == null || task.getParams() == null) {
+            return;
+        }
+        Map<String, Object> params = task.getParams();
+        if (!truthy(params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_PENDING))) {
+            return;
+        }
+        if (imageDescribeClient == null || objectStorage == null) {
+            throw new IllegalStateException("图生文客户端未配置");
+        }
+        if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
+            throw new IllegalStateException("图像模型缺少 API Key");
+        }
+        Object keyObj = params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY);
+        String storageKey = keyObj == null ? null : String.valueOf(keyObj).trim();
+        if (!StringUtils.hasText(storageKey)) {
+            throw new IllegalStateException("转资产图缺少参考图");
+        }
+        Object typeObj = params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE);
+        String assetType = typeObj == null ? null : String.valueOf(typeObj);
+        String apiKey = encryptor.decrypt(model.getApiKeyEnc());
+        String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
+        byte[] imageBytes = objectStorage.getBytes(storageKey);
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new IllegalStateException("参考图不存在或为空");
+        }
+        String mime = cn.aigc.dit.server.drama.DramaAssetService.mimeFromStorageKey(storageKey);
+        String describePrompt = cn.aigc.dit.generate.describe.ImageDescribePrompts.forAssetType(assetType);
+        log.info("roundtrip describe start taskId={} storageKey={} type={}", task.getId(), storageKey, assetType);
+        cn.aigc.dit.generate.describe.ImageDescribeResult described = imageDescribeClient.describe(
+                imageBytes, mime, describePrompt, endpoint, apiKey, null);
+        String prompt = described == null ? "" : described.assembledPrompt();
+        if (!StringUtils.hasText(prompt)) {
+            throw new IllegalStateException("图生文未得到可用提示词");
+        }
+        String trimmed = cn.aigc.dit.server.drama.DramaAssetService.trimPrompt(prompt);
+        Map<String, Object> next = new LinkedHashMap<>(params);
+        next.put("roundtripPrompt", trimmed);
+        next.remove(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_PENDING);
+        next.remove(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY);
+        next.remove(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE);
+        task.setPrompt(trimmed);
+        task.setParams(next);
+        task.setProgress(Math.max(task.getProgress() == null ? 0 : task.getProgress(), 3));
+        genTaskMapper.updateById(task);
+        log.info("roundtrip describe done taskId={} promptLen={}", task.getId(), trimmed.length());
+    }
+
+    private static boolean truthy(Object value) {
+        if (value instanceof Boolean flag) {
+            return flag;
+        }
+        if (value == null) {
+            return false;
+        }
+        String text = String.valueOf(value).trim();
+        return "true".equalsIgnoreCase(text) || "1".equals(text);
+    }
+
     private void processLocked(Long taskId) {
         GenTask task = genTaskMapper.selectById(taskId);
         if (task == null) {
@@ -354,6 +422,12 @@ public class GenerateWorker {
         try {
             AiModel model = task.getModelId() == null ? null : aiModelMapper.selectById(task.getModelId());
             String modelKey = model == null ? null : model.getModelKey();
+            resolvePendingRoundtripDescribe(task, model);
+            // 可能已在图生文阶段刷新 prompt/params，重新装载
+            task = genTaskMapper.selectById(taskId);
+            if (task == null) {
+                return;
+            }
             GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
             GenerateProvider provider = bindAndResolve(task, model, request);
             task.setStatus(TaskStatus.RUNNING);
