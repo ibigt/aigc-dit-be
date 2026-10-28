@@ -34,7 +34,7 @@ public final class CaptionAligner {
         if (phrases.size() > segments.size()) {
             // More phrases than VAD islands: keep each phrase in its assigned
             // speech island and divide that island by character weight.
-            int[] phraseCounts = distribute(phrases.size(), segments.stream()
+            int[] phraseCounts = distributeByWeight(phrases.size(), segments.stream()
                     .map(SpeechSegment::durationMs).toList());
             List<SubtitleCue> result = new ArrayList<>();
             int phraseCursor = 0;
@@ -49,7 +49,7 @@ public final class CaptionAligner {
         // More VAD islands than phrases: assign adjacent islands to a phrase.
         // We still emit one cue per real island, so a silent gap never gets a
         // subtitle even though the logical phrase owns multiple islands.
-        int[] segmentCounts = distribute(segments.size(), phrases.stream()
+        int[] segmentCounts = distributeByWeight(segments.size(), phrases.stream()
                 .map(CaptionAligner::weight).toList());
         List<SubtitleCue> result = new ArrayList<>();
         int segmentCursor = 0;
@@ -86,7 +86,8 @@ public final class CaptionAligner {
                 offset += count;
                 current.appendCodePoint(codePoint);
                 codePoints++;
-                if (isBoundary(codePoint) || codePoints >= 16) {
+                // Punctuation always splits; otherwise soft-max at 24 code points for long CJK runs.
+                if (isBoundary(codePoint) || codePoints >= 24) {
                     addPhrase(result, current);
                     current.setLength(0);
                     codePoints = 0;
@@ -134,6 +135,17 @@ public final class CaptionAligner {
         }
     }
 
+    /** Distributes {@code total} items across buckets proportional to {@code weights}. */
+    static int[] distributeByWeight(int total, List<Long> weights) {
+        if (weights == null || weights.isEmpty()) {
+            return new int[0];
+        }
+        if (total < weights.size()) {
+            return distributeAllowingZeros(total, weights);
+        }
+        return distribute(total, weights);
+    }
+
     private static int[] distribute(int total, List<Long> weights) {
         int[] result = new int[weights.size()];
         java.util.Arrays.fill(result, 1);
@@ -152,6 +164,34 @@ public final class CaptionAligner {
             fractions[i] = exact - whole;
         }
         while (assigned < extra) {
+            int best = 0;
+            for (int i = 1; i < fractions.length; i++) {
+                if (fractions[i] > fractions[best]) best = i;
+            }
+            result[best]++;
+            fractions[best] = -1D;
+            assigned++;
+        }
+        return result;
+    }
+
+    /** Largest-remainder allocation that may leave some buckets at zero. */
+    private static int[] distributeAllowingZeros(int total, List<Long> weights) {
+        int[] result = new int[weights.size()];
+        if (total <= 0) {
+            return result;
+        }
+        long totalWeight = weights.stream().mapToLong(value -> Math.max(1L, value)).sum();
+        double[] fractions = new double[weights.size()];
+        int assigned = 0;
+        for (int i = 0; i < weights.size(); i++) {
+            double exact = total * Math.max(1L, weights.get(i)) / (double) totalWeight;
+            int whole = (int) Math.floor(exact);
+            result[i] = whole;
+            assigned += whole;
+            fractions[i] = exact - whole;
+        }
+        while (assigned < total) {
             int best = 0;
             for (int i = 1; i < fractions.length; i++) {
                 if (fractions[i] > fractions[best]) best = i;

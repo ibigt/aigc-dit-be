@@ -115,6 +115,15 @@ public final class DramaFilms {
     }
 
     public static DramaFilmResp describe(DramaEpisode episode, List<DramaShot> shots) {
+        return describe(episode, shots, null);
+    }
+
+    /**
+     * @param readyCaptionByShotId when non-null, {@code hasCaptions} means subtitle READY
+     *                             and dialogue text matches stored JSON (not merely "has dialogue").
+     */
+    public static DramaFilmResp describe(DramaEpisode episode, List<DramaShot> shots,
+                                         Map<Long, Boolean> readyCaptionByShotId) {
         List<DramaShot> ordered = ordered(shots);
         List<Integer> missing = missingShotIndexes(ordered);
         DramaFilmResp resp = new DramaFilmResp();
@@ -142,7 +151,9 @@ public final class DramaFilms {
             item.setDurationSec(shot.getDurationSec());
             boolean ready = StringUtils.hasText(shot.getVideoKey());
             item.setReady(ready);
-            boolean shotHasCaptions = ready && !DramaStoryboardCompiler.captionLines(shot.getDialogue()).isEmpty();
+            boolean shotHasCaptions = readyCaptionByShotId != null
+                    ? Boolean.TRUE.equals(readyCaptionByShotId.get(shot.getId()))
+                    : ready && !DramaStoryboardCompiler.captionLines(shot.getDialogue()).isEmpty();
             item.setHasCaptions(shotHasCaptions);
             hasCaptions = hasCaptions || shotHasCaptions;
             item.setVideoUrl(MediaUrls.of(shot.getVideoKey()));

@@ -1,12 +1,15 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
+import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.audio.FfmpegAudioExtractor;
 import cn.aigc.dit.generate.caption.AssVideoCaptionBurner;
 import cn.aigc.dit.generate.caption.CaptionCue;
 import cn.aigc.dit.generate.ffmpeg.FfmpegSupport;
-import cn.aigc.dit.generate.vad.SpeechSegment;
 import cn.aigc.dit.storage.ObjectStorage;
+import cn.aigc.dit.generate.vad.SpeechSegment;
 import cn.aigc.dit.generate.vad.VoiceActivityDetector;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.entity.DramaShotCaption;
@@ -30,7 +33,7 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class DramaShotCaptionPostProcessService {
 
-    public static final String PROCESSOR_VERSION = "caption-6";
+    public static final String PROCESSOR_VERSION = "caption-7";
 
     private final DramaShotCaptionMapper captionMapper;
     private final DramaShotMapper shotMapper;
@@ -46,11 +49,7 @@ public class DramaShotCaptionPostProcessService {
         if (shotId == null || !StringUtils.hasText(sourceVideoKey)) {
             return;
         }
-        DramaShotCaption existing = captionMapper.selectOne(new LambdaQueryWrapper<DramaShotCaption>()
-                .eq(DramaShotCaption::getShotId, shotId)
-                .eq(DramaShotCaption::getSourceVideoKey, sourceVideoKey)
-                .eq(DramaShotCaption::getProcessorVersion, PROCESSOR_VERSION)
-                .last("limit 1"));
+        DramaShotCaption existing = findForSource(shotId, sourceVideoKey);
         if (existing != null) {
             return;
         }
@@ -61,6 +60,7 @@ public class DramaShotCaptionPostProcessService {
         task.setSourceVideoKey(sourceVideoKey);
         task.setStatus("PENDING");
         task.setProcessorVersion(PROCESSOR_VERSION);
+        task.setAttemptCount(0);
         try {
             captionMapper.insert(task);
         } catch (RuntimeException e) {
@@ -69,13 +69,49 @@ public class DramaShotCaptionPostProcessService {
         }
     }
 
+    /**
+     * Force a new caption run for the same source video (dialogue edit / manual retry).
+     * Resets the existing row to PENDING so the unique key does not block reprocessing.
+     */
+    public DramaShotCaption requeue(Long shotId, Long genTaskId, Long userId, String sourceVideoKey, boolean force) {
+        if (shotId == null || !StringUtils.hasText(sourceVideoKey)) {
+            return null;
+        }
+        DramaShotCaption existing = findForSource(shotId, sourceVideoKey);
+        if (existing == null) {
+            enqueue(shotId, genTaskId, userId, sourceVideoKey);
+            return findForSource(shotId, sourceVideoKey);
+        }
+        if (!force && ("PENDING".equals(existing.getStatus()) || "RUNNING".equals(existing.getStatus()))) {
+            return existing;
+        }
+        existing.setGenTaskId(genTaskId != null ? genTaskId : existing.getGenTaskId());
+        existing.setUserId(userId != null ? userId : existing.getUserId());
+        existing.setStatus("PENDING");
+        existing.setErrorMessage(null);
+        existing.setAttemptCount(0);
+        existing.setAudioKey(null);
+        existing.setSubtitleJsonKey(null);
+        existing.setCaptionVideoKey(null);
+        captionMapper.updateById(existing);
+        return existing;
+    }
+
+    public DramaShotCaption retryOwned(Long shotId) {
+        DramaShot shot = requireOwnedShot(shotId);
+        if (!StringUtils.hasText(shot.getVideoKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "分镜尚无视频，无法生成字幕");
+        }
+        return requeue(shot.getId(), shot.getGenTaskId(), shot.getUserId(), shot.getVideoKey(), true);
+    }
+
     public void process(DramaShotCaption task) {
         if (task == null) return;
         Path work = null;
         try {
             DramaShot shot = shotMapper.selectById(task.getShotId());
             if (shot == null || !StringUtils.hasText(task.getSourceVideoKey())) {
-                fail(task, "分镜或原始视频不存在");
+                fail(task, "分镜或原始视频不存在", false);
                 return;
             }
             work = Files.createTempDirectory("dit-shot-caption-");
@@ -108,34 +144,65 @@ public class DramaShotCaptionPostProcessService {
             storage.put(subtitleKey, objectMapper.writeValueAsBytes(document), "application/json");
             task.setAudioKey(audioKey);
             task.setSubtitleJsonKey(subtitleKey);
+            task.setCaptionVideoKey(null);
             if (captions.isEmpty()) {
-                if (speech.isEmpty() && normalizedText.normalizedText().isBlank()) {
+                // Empty VAD + empty cues: treat as no speech even when dialogue text exists,
+                // so we do not FAIL after refusing ESTIMATED over silence.
+                if (speech.isEmpty()) {
                     task.setStatus("NO_SPEECH");
                     task.setErrorMessage(null);
                     captionMapper.updateById(task);
                     refreshFilmCaptions(task);
                 } else {
-                    fail(task, fallbackReason);
+                    fail(task, fallbackReason, true);
                 }
                 return;
             }
-            List<CaptionCue> burnCues = CaptionAligner.toCaptionCues(captions);
-            String captionVideoKey = assVideoCaptionBurner.burn(
-                    task.getSourceVideoKey(), burnCues, PROCESSOR_VERSION);
-            if (!StringUtils.hasText(captionVideoKey) || captionVideoKey.equals(task.getSourceVideoKey())) {
-                fail(task, "ASS 字幕视频生成失败");
-                return;
-            }
-            task.setCaptionVideoKey(captionVideoKey);
+            // Soft-preview path: READY once JSON/VTT cues exist. Burn is on-demand.
             task.setStatus("READY");
             task.setErrorMessage(null);
+            task.setAttemptCount(0);
             captionMapper.updateById(task);
             refreshFilmCaptions(task);
         } catch (Exception e) {
             log.warn("shot caption post-process failed shot={} source={}", task.getShotId(), task.getSourceVideoKey(), e);
-            fail(task, e.getMessage() == null ? "字幕后处理失败" : e.getMessage());
+            fail(task, e.getMessage() == null ? "字幕后处理失败" : e.getMessage(), true);
         } finally {
             deleteTree(work);
+        }
+    }
+
+    /** On-demand ASS burn for export / 「生成烧录版」. */
+    public DramaShotCaption burnOwned(Long shotId) {
+        DramaShot shot = requireOwnedShot(shotId);
+        DramaShotCaption task = findForSource(shot.getId(), shot.getVideoKey());
+        if (task == null || !"READY".equals(task.getStatus()) || !StringUtils.hasText(task.getSubtitleJsonKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "字幕尚未就绪，无法烧录");
+        }
+        if (StringUtils.hasText(task.getCaptionVideoKey())) {
+            return task;
+        }
+        try {
+            SubtitleDocument document = objectMapper.readValue(
+                    storage.getBytes(task.getSubtitleJsonKey()), SubtitleDocument.class);
+            List<CaptionCue> burnCues = CaptionAligner.toCaptionCues(
+                    document.captions() == null ? List.of() : document.captions());
+            if (burnCues.isEmpty()) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "没有可烧录的字幕条目");
+            }
+            String captionVideoKey = assVideoCaptionBurner.burn(
+                    task.getSourceVideoKey(), burnCues, PROCESSOR_VERSION);
+            if (!StringUtils.hasText(captionVideoKey) || captionVideoKey.equals(task.getSourceVideoKey())) {
+                throw new BizException(ErrorCode.INTERNAL, "ASS 字幕视频生成失败");
+            }
+            task.setCaptionVideoKey(captionVideoKey);
+            captionMapper.updateById(task);
+            return task;
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("on-demand caption burn failed shot={}", shotId, e);
+            throw new BizException(ErrorCode.INTERNAL, "字幕烧录失败");
         }
     }
 
@@ -148,9 +215,18 @@ public class DramaShotCaptionPostProcessService {
                 .last("limit 1"));
     }
 
-    private void fail(DramaShotCaption task, String message) {
+    private void fail(DramaShotCaption task, String message, boolean allowRetry) {
+        int attempt = task.getAttemptCount() == null ? 0 : task.getAttemptCount();
+        String msg = message == null ? "字幕后处理失败" : message;
+        if (allowRetry && attempt < 3) {
+            task.setAttemptCount(attempt + 1);
+            task.setStatus("PENDING");
+            task.setErrorMessage(msg);
+            captionMapper.updateById(task);
+            return;
+        }
         task.setStatus("FAILED");
-        task.setErrorMessage(message == null ? "字幕后处理失败" : message);
+        task.setErrorMessage(msg);
         captionMapper.updateById(task);
     }
 
@@ -160,6 +236,14 @@ public class DramaShotCaptionPostProcessService {
         } catch (Exception e) {
             log.warn("refresh assembled film captions failed shot={}", task.getShotId(), e);
         }
+    }
+
+    private DramaShot requireOwnedShot(Long shotId) {
+        DramaShot shot = shotMapper.selectById(shotId);
+        if (shot == null || !shot.getUserId().equals(UserContext.requireUserId())) {
+            throw new BizException(ErrorCode.NOT_FOUND, "分镜不存在");
+        }
+        return shot;
     }
 
     private boolean vadEnabled() {

@@ -11,10 +11,12 @@ import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
+import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -41,6 +43,7 @@ public class DramaFilmService {
     private final DramaFilmConcat filmConcat;
     private final DramaCaptionService captionService;
     private final CreationService creationService;
+    private final ObjectProvider<DramaShotCaptionPostProcessService> captionPostProcess;
 
     public DramaFilmResp get(Long episodeId) {
         DramaEpisode episode = requireEpisode(episodeId);
@@ -51,7 +54,8 @@ public class DramaFilmService {
         if (episode == null) {
             return DramaFilms.describe(null, List.of());
         }
-        return DramaFilms.describe(episode, listShots(episode.getId()));
+        List<DramaShot> shots = listShots(episode.getId());
+        return DramaFilms.describe(episode, shots, captionService.readyCaptionFlags(shots));
     }
 
     public DramaFilmResp assemble(Long episodeId) {
@@ -98,12 +102,69 @@ public class DramaFilmService {
             } catch (Exception recorded) {
                 log.warn("record drama film into creations failed, episode={}", episode.getId(), recorded);
             }
-            return DramaFilms.describe(episode, shots);
+            return DramaFilms.describe(episode, shots, captionService.readyCaptionFlags(shots));
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
             log.warn("assemble film failed, episode={}", episode.getId(), e);
             throw new BizException(ErrorCode.INTERNAL, "拼接成片失败");
+        } finally {
+            for (Path temp : temps) {
+                deleteQuietly(temp);
+            }
+        }
+    }
+
+    /**
+     * Assemble a hard-burned film by burning each clip's current cues (on demand) then concatenating.
+     * Returns the burned film object key URL via a one-off storage key (does not replace soft film).
+     */
+    public DramaFilmResp assembleBurned(Long episodeId, List<Long> shotIds) {
+        DramaShotCaptionPostProcessService postProcess = captionPostProcess.getIfAvailable();
+        if (postProcess == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "字幕后处理未启用，无法导出带字成片");
+        }
+        DramaEpisode episode = requireEpisode(episodeId);
+        List<DramaShot> shots = listShots(episode.getId());
+        List<DramaShot> clips = resolveAssembleClips(shots, shotIds);
+        if (clips.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集还没有已出片镜头，无法导出带字成片");
+        }
+        String filmKey = "users/" + episode.getUserId() + "/drama/" + episode.getId()
+                + "/film-burned-" + DramaShotCaptionPostProcessService.PROCESSOR_VERSION + ".mp4";
+        List<Path> temps = new ArrayList<>();
+        try {
+            List<Path> inputs = new ArrayList<>();
+            for (DramaShot clip : clips) {
+                String videoKey = clip.getVideoKey();
+                try {
+                    var caption = postProcess.findForSource(clip.getId(), clip.getVideoKey());
+                    if (caption != null && "READY".equals(caption.getStatus())) {
+                        caption = postProcess.burnOwned(clip.getId());
+                        if (StringUtils.hasText(caption.getCaptionVideoKey())) {
+                            videoKey = caption.getCaptionVideoKey();
+                        }
+                    }
+                } catch (BizException e) {
+                    log.warn("burn clip for film export skipped shot={} reason={}", clip.getId(), e.getMessage());
+                }
+                Path input = FfmpegSupport.tempFile("dit-film-burn-", suffix(videoKey));
+                temps.add(input);
+                Files.write(input, objectStorage.getBytes(videoKey));
+                inputs.add(input);
+            }
+            Path output = FfmpegSupport.tempFile("dit-film-burn-out-", ".mp4");
+            temps.add(output);
+            filmConcat.concat(inputs, output);
+            objectStorage.put(filmKey, Files.readAllBytes(output), "video/mp4");
+            DramaFilmResp resp = DramaFilms.describe(episode, shots, captionService.readyCaptionFlags(shots));
+            resp.setFilmUrl(MediaUrls.of(filmKey));
+            return resp;
+        } catch (BizException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("assemble burned film failed, episode={}", episodeId, e);
+            throw new BizException(ErrorCode.INTERNAL, "导出带字成片失败");
         } finally {
             for (Path temp : temps) {
                 deleteQuietly(temp);

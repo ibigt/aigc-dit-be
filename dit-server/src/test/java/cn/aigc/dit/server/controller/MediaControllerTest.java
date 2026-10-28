@@ -44,19 +44,29 @@ class MediaControllerTest {
 
     @Test
     void fullResponseAdvertisesByteRanges() throws Exception {
-        var response = controller.get("users/7/drama/1/film.mp4", null, new HttpHeaders());
+        var response = controller.get("users/7/drama/1/film.mp4", null, null, new HttpHeaders());
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("bytes", response.getHeaders().getFirst(HttpHeaders.ACCEPT_RANGES));
         assertEquals(8L, response.getHeaders().getContentLength());
         assertEquals("video/mp4", response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
+        String disposition = response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+        assertTrue(disposition != null && disposition.contains("film.mp4"));
         assertArrayEquals(new byte[]{1, 2, 3, 4, 5, 6, 7, 8}, response.getBody().getInputStream().readAllBytes());
+    }
+
+    @Test
+    void customFilenameIsAdvertisedForDownload() {
+        var response = controller.get("users/7/drama/1/film.mp4", null, "短剧名-第1集.mp4", new HttpHeaders());
+        String disposition = response.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION);
+        assertTrue(disposition != null && disposition.contains("UTF-8''"));
+        assertTrue(disposition.contains("%E7%9F%AD%E5%89%A7%E5%90%8D") || disposition.contains("短剧名"));
     }
 
     @Test
     void rangeRequestReturnsPartialContent() throws Exception {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.RANGE, "bytes=2-5");
-        var response = controller.get("users/7/drama/1/film.mp4", null, headers);
+        var response = controller.get("users/7/drama/1/film.mp4", null, null, headers);
         assertEquals(HttpStatus.PARTIAL_CONTENT, response.getStatusCode());
         assertEquals("bytes 2-5/8", response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE));
         assertEquals(4L, response.getHeaders().getContentLength());
@@ -67,7 +77,7 @@ class MediaControllerTest {
     void unsatisfiableRangeReturns416() {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.RANGE, "bytes=20-30");
-        var response = controller.get("users/7/drama/1/film.mp4", null, headers);
+        var response = controller.get("users/7/drama/1/film.mp4", null, null, headers);
         assertEquals(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, response.getStatusCode());
         assertEquals("bytes */8", response.getHeaders().getFirst(HttpHeaders.CONTENT_RANGE));
     }
@@ -78,7 +88,7 @@ class MediaControllerTest {
         String key = "users/7/assets/hero.png";
         storage.put(key, png, "image/png");
 
-        var response = controller.get(key, 400, new HttpHeaders());
+        var response = controller.get(key, 400, null, new HttpHeaders());
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("image/jpeg", response.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE));
         byte[] body = response.getBody().getInputStream().readAllBytes();
@@ -95,7 +105,7 @@ class MediaControllerTest {
         String key = "users/7/outputs/420/1.png";
         byte[] first = solidPng(800, 450, Color.RED);
         storage.put(key, first, "image/png");
-        byte[] thumbFirst = controller.get(key, 480, new HttpHeaders()).getBody().getInputStream().readAllBytes();
+        byte[] thumbFirst = controller.get(key, 480, null, new HttpHeaders()).getBody().getInputStream().readAllBytes();
         String staleLegacy = ImageThumbnails.cacheKey(key, 480);
         storage.put(staleLegacy, thumbFirst, "image/jpeg");
 
@@ -104,7 +114,7 @@ class MediaControllerTest {
         storage.put(key, second, "image/png");
         assertTrue(second.length != first.length);
 
-        byte[] thumbSecond = controller.get(key, 480, new HttpHeaders()).getBody().getInputStream().readAllBytes();
+        byte[] thumbSecond = controller.get(key, 480, null, new HttpHeaders()).getBody().getInputStream().readAllBytes();
         String freshKey = ImageThumbnails.cacheKey(key, 480, second.length);
         assertTrue(objectExists(freshKey));
         assertTrue(!java.util.Arrays.equals(thumbFirst, thumbSecond));
@@ -113,7 +123,7 @@ class MediaControllerTest {
 
     @Test
     void missingImageThumbnailReturnsNotFoundWithoutReading() {
-        var response = controller.get("users/7/outputs/287/1.png", 480, new HttpHeaders());
+        var response = controller.get("users/7/outputs/287/1.png", 480, null, new HttpHeaders());
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
     }
 

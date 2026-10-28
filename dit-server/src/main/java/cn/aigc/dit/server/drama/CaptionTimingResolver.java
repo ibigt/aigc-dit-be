@@ -23,6 +23,11 @@ public class CaptionTimingResolver {
             return new Resolution(forced, speech.isEmpty() ? "VAD_EMPTY_FULL_AUDIO_ALIGNMENT" : null);
         }
 
+        // No voiced intervals: do not invent an ESTIMATED timeline over silence.
+        if (speech.isEmpty()) {
+            return new Resolution(forced, append(forced.failureReason(), "NO_SPEECH_NO_ESTIMATED"));
+        }
+
         TimingResult vad = vadTimingProvider.provide(audioFile, dialogue, speech);
         if (vad.usable()) {
             return new Resolution(vad, append(forced.failureReason(), "FORCED_ALIGNMENT_FALLBACK_VAD"));

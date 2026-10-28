@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.drama;
 
 import cn.aigc.dit.generate.caption.CaptionCue;
+import cn.aigc.dit.generate.caption.CaptionTexts;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -47,7 +48,7 @@ public final class DramaCaptionVtt {
             vtt.append(i + 1).append('\n');
             vtt.append(timestamp(cue.startSec())).append(" --> ").append(timestamp(cue.endSec()))
                     .append(" line:94%,end position:50% align:middle size:92%\n");
-            vtt.append(cue.text().replace("-->", "→").trim()).append("\n\n");
+            vtt.append(CaptionTexts.stripTrailingPunctuation(cue.text()).replace("-->", "→")).append("\n\n");
         }
         return vtt.toString();
     }

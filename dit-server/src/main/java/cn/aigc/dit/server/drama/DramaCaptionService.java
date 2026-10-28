@@ -11,6 +11,9 @@ import cn.aigc.dit.server.drama.entity.DramaShotCaption;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotCaptionMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
+import cn.aigc.dit.server.drama.model.req.DramaCaptionCueSaveReq;
+import cn.aigc.dit.server.drama.model.resp.DramaCaptionDocumentResp;
+import cn.aigc.dit.server.media.MediaUrls;
 import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,7 +26,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -121,6 +126,113 @@ public class DramaCaptionService {
                 vtt.getBytes(StandardCharsets.UTF_8), "text/vtt; charset=UTF-8");
     }
 
+    /** READY + normalized dialogue matches stored subtitle JSON. */
+    public boolean hasReadyCaptions(DramaShot shot) {
+        return loadConsistentDocument(shot) != null;
+    }
+
+    /** Batch lookup for film describe: shotId → hasReadyCaptions. */
+    public Map<Long, Boolean> readyCaptionFlags(List<DramaShot> shots) {
+        Map<Long, Boolean> flags = new HashMap<>();
+        if (shots == null) return flags;
+        for (DramaShot shot : shots) {
+            if (shot == null || shot.getId() == null) continue;
+            flags.put(shot.getId(), hasReadyCaptions(shot));
+        }
+        return flags;
+    }
+
+    public DramaCaptionDocumentResp getDocument(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        DramaShotCaption caption = findCaption(shot);
+        DramaCaptionDocumentResp resp = new DramaCaptionDocumentResp();
+        resp.setShotId(shotId);
+        if (caption == null) {
+            resp.setStatus(null);
+            return resp;
+        }
+        resp.setStatus(caption.getStatus());
+        resp.setCaptionVideoUrl(MediaUrls.of(caption.getCaptionVideoKey()));
+        resp.setSubtitleJsonUrl(MediaUrls.of(caption.getSubtitleJsonKey()));
+        SubtitleDocument document = readDocument(caption);
+        if (document == null) return resp;
+        resp.setSourceType(document.sourceType());
+        resp.setProcessorVersion(document.processorVersion());
+        resp.setDurationMs(document.durationMs());
+        resp.setAlignmentConfidence(document.alignmentConfidence());
+        resp.setAlignmentCoverage(document.alignmentCoverage());
+        resp.setFallbackReason(document.fallbackReason());
+        resp.setModelVersion(document.modelVersion());
+        resp.setRawText(document.rawText());
+        resp.setNormalizedText(document.normalizedText());
+        if (document.captions() != null) {
+            for (SubtitleCue cue : document.captions()) {
+                if (cue == null) continue;
+                DramaCaptionDocumentResp.CueItem item = new DramaCaptionDocumentResp.CueItem();
+                item.setStartMs(cue.startMs());
+                item.setEndMs(cue.endMs());
+                item.setText(cue.text());
+                resp.getCues().add(item);
+            }
+        }
+        return resp;
+    }
+
+    public DramaCaptionDocumentResp saveManualCues(Long shotId, DramaCaptionCueSaveReq req) {
+        DramaShot shot = requireShot(shotId);
+        DramaShotCaption caption = findCaption(shot);
+        if (caption == null || !StringUtils.hasText(caption.getSubtitleJsonKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "字幕尚未生成，无法编辑");
+        }
+        if (!"READY".equals(caption.getStatus()) && !"NO_SPEECH".equals(caption.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "字幕处理中，请稍后再编辑");
+        }
+        List<SubtitleCue> cues = new ArrayList<>();
+        for (DramaCaptionCueSaveReq.CueItem item : req.getCues()) {
+            if (item == null || item.getStartMs() == null || item.getEndMs() == null) continue;
+            String text = item.getText() == null ? "" : item.getText().trim();
+            if (!StringUtils.hasText(text) || item.getEndMs() <= item.getStartMs() || item.getStartMs() < 0) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "字幕时间或文本无效");
+            }
+            cues.add(new SubtitleCue(item.getStartMs(), item.getEndMs(), text));
+        }
+        if (cues.isEmpty()) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "至少保留一条字幕");
+        }
+        SubtitleDocument previous = readDocument(caption);
+        AlignmentTextNormalizer.NormalizedText normalized =
+                AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue());
+        long durationMs = previous != null && previous.durationMs() > 0
+                ? previous.durationMs()
+                : Math.round(actualDuration(shot) * 1000D);
+        SubtitleDocument document = new SubtitleDocument(
+                "MANUAL",
+                DramaShotCaptionPostProcessService.PROCESSOR_VERSION,
+                durationMs,
+                previous == null ? List.of() : previous.speechSegments(),
+                cues,
+                previous == null ? 1D : previous.alignmentConfidence(),
+                previous == null ? 1D : previous.alignmentCoverage(),
+                previous == null ? null : previous.fallbackReason(),
+                "manual-1",
+                previous == null ? List.of() : previous.alignmentTokens(),
+                normalized.rawText(),
+                normalized.normalizedText());
+        try {
+            objectStorage.put(caption.getSubtitleJsonKey(),
+                    objectMapper.writeValueAsBytes(document), "application/json");
+        } catch (Exception e) {
+            throw new BizException(ErrorCode.INTERNAL, "保存字幕失败");
+        }
+        // Invalidate burned video so export re-burns from edited cues.
+        caption.setCaptionVideoKey(null);
+        caption.setStatus("READY");
+        caption.setErrorMessage(null);
+        shotCaptionMapper.updateById(caption);
+        refreshEpisodeVttForShot(shot.getId(), shot.getVideoKey());
+        return getDocument(shotId);
+    }
+
     private String buildFromStorage(List<DramaShot> clips) {
         List<CaptionCue> timeline = new ArrayList<>();
         double offset = 0D;
@@ -133,19 +245,24 @@ public class DramaCaptionService {
     }
 
     private List<CaptionCue> cuesForShot(DramaShot shot, double durationSec) {
-        if (shot == null || !StringUtils.hasText(shot.getVideoKey())) return List.of();
-        DramaShotCaption caption = shotCaptionMapper.selectOne(new LambdaQueryWrapper<DramaShotCaption>()
-                .eq(DramaShotCaption::getShotId, shot.getId())
-                .eq(DramaShotCaption::getSourceVideoKey, shot.getVideoKey())
-                .eq(DramaShotCaption::getProcessorVersion, DramaShotCaptionPostProcessService.PROCESSOR_VERSION)
-                .last("limit 1"));
-        if (caption == null) {
-            // The async caption task will refresh the film track when it finishes.
-            return List.of();
-        }
-        if ("NO_SPEECH".equals(caption.getStatus())) return List.of();
+        SubtitleDocument document = loadConsistentDocument(shot);
+        if (document == null || document.captions() == null) return List.of();
+        return document.captions().stream()
+                .filter(cue -> cue != null && cue.endMs() > cue.startMs()
+                        && StringUtils.hasText(cue.text())
+                        && cue.startMs() >= 0 && cue.startMs() < durationSec * 1000D)
+                .map(cue -> new CaptionCue(cue.startMs() / 1000D,
+                        Math.min(durationSec, cue.endMs() / 1000D), cue.text()))
+                .toList();
+    }
+
+    private SubtitleDocument loadConsistentDocument(DramaShot shot) {
+        if (shot == null || !StringUtils.hasText(shot.getVideoKey())) return null;
+        DramaShotCaption caption = findCaption(shot);
+        if (caption == null) return null;
+        if ("NO_SPEECH".equals(caption.getStatus())) return null;
         if (!"READY".equals(caption.getStatus()) || !StringUtils.hasText(caption.getSubtitleJsonKey())) {
-            return List.of();
+            return null;
         }
         try {
             SubtitleDocument document = objectMapper.readValue(
@@ -153,19 +270,32 @@ public class DramaCaptionService {
             if (!AlignmentTextNormalizer.normalizeDialogue(shot.getDialogue()).normalizedText()
                     .equals(document.normalizedText())) {
                 log.warn("caption dialogue changed after processing, shot={}", shot.getId());
-                return List.of();
+                return null;
             }
-            if (document.captions() == null) return List.of();
-            return document.captions().stream()
-                    .filter(cue -> cue != null && cue.endMs() > cue.startMs()
-                            && StringUtils.hasText(cue.text())
-                            && cue.startMs() >= 0 && cue.startMs() < durationSec * 1000D)
-                    .map(cue -> new CaptionCue(cue.startMs() / 1000D,
-                            Math.min(durationSec, cue.endMs() / 1000D), cue.text()))
-                    .toList();
+            return document;
         } catch (Exception e) {
             log.warn("read processed caption failed, shot={}", shot.getId(), e);
-            return List.of();
+            return null;
+        }
+    }
+
+    private DramaShotCaption findCaption(DramaShot shot) {
+        if (shot == null || !StringUtils.hasText(shot.getVideoKey())) return null;
+        return shotCaptionMapper.selectOne(new LambdaQueryWrapper<DramaShotCaption>()
+                .eq(DramaShotCaption::getShotId, shot.getId())
+                .eq(DramaShotCaption::getSourceVideoKey, shot.getVideoKey())
+                .eq(DramaShotCaption::getProcessorVersion, DramaShotCaptionPostProcessService.PROCESSOR_VERSION)
+                .last("limit 1"));
+    }
+
+    private SubtitleDocument readDocument(DramaShotCaption caption) {
+        if (caption == null || !StringUtils.hasText(caption.getSubtitleJsonKey())) return null;
+        try {
+            return objectMapper.readValue(
+                    objectStorage.getBytes(caption.getSubtitleJsonKey()), SubtitleDocument.class);
+        } catch (Exception e) {
+            log.warn("read subtitle document failed key={}", caption.getSubtitleJsonKey(), e);
+            return null;
         }
     }
 

@@ -64,6 +64,16 @@ public class DramaShotResp {
     private String subtitleJsonKey;
     @Schema(description = "字幕 JSON 地址")
     private String subtitleJsonUrl;
+    @Schema(description = "字幕时间轴来源：FORCED_ALIGNMENT / VAD / ESTIMATED / MANUAL 等")
+    private String captionSourceType;
+    @Schema(description = "字幕降级原因")
+    private String captionFallbackReason;
+    @Schema(description = "字幕对齐置信度")
+    private Double captionConfidence;
+    @Schema(description = "字幕对齐覆盖率")
+    private Double captionCoverage;
+    @Schema(description = "字幕后处理错误信息")
+    private String captionErrorMessage;
     @Schema(description = "当前选用的生成记录 id")
     private Long selectedGenerationId;
     @Schema(description = "成片首帧对象 key")

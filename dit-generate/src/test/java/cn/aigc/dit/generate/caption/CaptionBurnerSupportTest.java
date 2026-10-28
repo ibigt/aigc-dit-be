@@ -26,6 +26,14 @@ class CaptionBurnerSupportTest {
     }
 
     @Test
+    void stripTrailingPunctuationRemovesDisplayEndingMarks() {
+        assertEquals("科学解决不了的", CaptionTexts.stripTrailingPunctuation("科学解决不了的，"));
+        assertEquals("找猫抓狗去居委会", CaptionTexts.stripTrailingPunctuation("找猫抓狗去居委会。"));
+        assertEquals("你好", CaptionTexts.stripTrailingPunctuation("你好！！"));
+        assertEquals("短句", CaptionTexts.wrap("短句，"));
+    }
+
+    @Test
     void toCaptionKeyKeepsDirectoryAndExtension() {
         assertEquals("users/1/out-caption.mp4", FfmpegVideoCaptionBurner.toCaptionKey("users/1/out.mp4"));
         assertTrue(FfmpegVideoCaptionBurner.alreadyCaptioned("users/1/out-caption.mp4"));
