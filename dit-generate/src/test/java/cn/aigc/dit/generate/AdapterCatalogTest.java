@@ -55,6 +55,9 @@ class AdapterCatalogTest {
                 AdapterCatalog.require(AdapterCatalog.SEEDREAM_5_0).providerLabel());
         assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
                 AdapterCatalog.officialProviderOf("官方API（token plan）", AdapterCatalog.SEEDREAM_5_0));
+        // Seedream 5.0 默认固定 token plan；按量需 ARK_ALLOW_PAYG_PROVIDER（见 AdminModelService）
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN,
+                AdapterCatalog.officialProviderOf("官方API", AdapterCatalog.SEEDREAM_5_0));
         assertEquals(AdapterCatalog.MOCK, AdapterCatalog.infer("mock", "video", "mock-video"));
         assertEquals(AdapterCatalog.OPENAI_SPEECH, AdapterCatalog.infer("自定义配置", "audio", "gpt-4o-mini-tts"));
         assertEquals(AdapterCatalog.MINIMAX_SPEECH, AdapterCatalog.infer("官方API", "audio", "speech-2.8-hd"));

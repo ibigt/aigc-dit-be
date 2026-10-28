@@ -524,6 +524,46 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void generateWarnsOnlyWhenRoundtripOriginSidecarExpired() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = pendingShot();
+        shot.setChapterId(chapter.getId());
+        storedShots.add(shot);
+        DramaAsset withExpired = lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER);
+        withExpired.setImageStorageKey("users/7/gen/roundtrip.png");
+        DramaAsset externalNoSidecar = lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE);
+        externalNoSidecar.setImageStorageKey("users/7/upload/scene.jpg");
+        when(assetMapper.selectList(any())).thenReturn(List.of(withExpired, externalNoSidecar));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setAspectRatio("16:9");
+        series.setDefaultResolution("720P");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(500L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+        cn.aigc.dit.storage.ObjectStorage storage = org.mockito.Mockito.mock(cn.aigc.dit.storage.ObjectStorage.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "objectStorage", storage);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "objectMapper", new com.fasterxml.jackson.databind.ObjectMapper());
+        when(storage.exists("users/7/gen/roundtrip.png.origin.json")).thenReturn(true);
+        when(storage.exists("users/7/upload/scene.jpg.origin.json")).thenReturn(false);
+        String expiredSidecar = """
+                {"url":"https://ark.cn-beijing.volces.com/x","savedAt":"2020-01-01T00:00:00Z"}
+                """;
+        when(storage.getBytes("users/7/gen/roundtrip.png.origin.json"))
+                .thenReturn(expiredSidecar.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        DramaShotGenerateResp resp = service.generateShot(201L);
+
+        assertEquals(1, resp.getOriginWarnings().size());
+        assertTrue(resp.getOriginWarnings().get(0).contains("洛白"));
+        assertTrue(resp.getOriginWarnings().get(0).contains("origin"));
+    }
+
+    @Test
     void generateSubmitsR2vWithLockedRefsAndNoFrames() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);

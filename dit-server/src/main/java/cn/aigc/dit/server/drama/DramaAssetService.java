@@ -8,6 +8,10 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.ark.ArkKeys;
+import cn.aigc.dit.generate.describe.ImageDescribeClient;
+import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
+import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaAssetGeneration;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -41,26 +45,43 @@ import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
+import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 @Service
 @Slf4j
 public class DramaAssetService {
+
+    /** generation.source：上传图经图生文→Seedream 5.0 转成的可信资产图。 */
+    public static final String SOURCE_ROUNDTRIP = "roundtrip";
+
+    /** 异步 convert：任务先入库，worker 再图生文；占位 prompt 仅用于通过 submit 校验。 */
+    public static final String PENDING_DESCRIBE_PROMPT = "转资产图：图生文进行中";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_PENDING = "roundtripDescribePending";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY = "roundtripDescribeStorageKey";
+    public static final String PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE = "roundtripDescribeAssetType";
 
     private final DramaAssetMapper assetMapper;
     private final DramaAssetGenerationMapper assetGenerationMapper;
@@ -75,6 +96,11 @@ public class DramaAssetService {
     private final ArkCharacterReview characterReview;
     private final CreationService creationService;
     private final MediaRetentionService mediaRetention;
+    private final ObjectStorage objectStorage;
+    private final AesGcmEncryptor encryptor;
+    private final ImageDescribeClient imageDescribeClient;
+    private final TransactionTemplate transactionTemplate;
+    private final ObjectMapper objectMapper;
 
     public DramaAssetService(DramaAssetMapper assetMapper,
                              DramaAssetGenerationMapper assetGenerationMapper,
@@ -88,7 +114,12 @@ public class DramaAssetService {
                              DramaStoryboardService storyboardService,
                              ArkCharacterReview characterReview,
                              CreationService creationService,
-                             MediaRetentionService mediaRetention) {
+                             MediaRetentionService mediaRetention,
+                             ObjectStorage objectStorage,
+                             AesGcmEncryptor encryptor,
+                             ImageDescribeClient imageDescribeClient,
+                             PlatformTransactionManager transactionManager,
+                             ObjectMapper objectMapper) {
         this.assetMapper = assetMapper;
         this.assetGenerationMapper = assetGenerationMapper;
         this.episodeMapper = episodeMapper;
@@ -102,6 +133,11 @@ public class DramaAssetService {
         this.characterReview = characterReview;
         this.creationService = creationService;
         this.mediaRetention = mediaRetention;
+        this.objectStorage = objectStorage;
+        this.encryptor = encryptor;
+        this.imageDescribeClient = imageDescribeClient;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -223,6 +259,7 @@ public class DramaAssetService {
         if (DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
             DramaAssetVersions.validateFamilyName(name);
         }
+        rejectPrefixOverlappingName(episode.getSeriesId(), episode.getId(), type, name);
         String stateTag = DramaContract.STATE_TAG_BASE;
         if (StringUtils.hasText(parsed.versionLabel())) {
             // 剧本式「洛白·湿身」直接新建时落成版本行；无基础版时一并建基础占位不在此路径。
@@ -644,6 +681,133 @@ public class DramaAssetService {
         return resp;
     }
 
+    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution) {
+        return convertToSeedream(assetId, resolution, null);
+    }
+
+    /**
+     * 外部上传/引用图 → 图生文 → Seedream 5.0 纯 T2I，落 generation source=roundtrip 并获得 origin 资格。
+     * 默认先建 task 再由 worker 异步图生文+T2I（全程可轮询）；{@code mode=refresh} 复用存盘 prompt 跳过 Vision。
+     */
+    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution, String mode) {
+        DramaAsset asset = requireAsset(assetId);
+        DramaSeries series = requireOwnedSeries(asset.getSeriesId());
+        if (!StringUtils.hasText(asset.getImageStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先上传或引用参考图");
+        }
+        if (isGenerating(loadTask(asset.getGenTaskId()))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产正在生成中，请稍后再转");
+        }
+        AiModel model = requireBoundImageModel(series);
+        requireSeedream50ForConvert(model);
+        assertSameArkAccountForConvert(series, model);
+        assertGenerateCapacity(asset.getEpisodeId());
+        String storageKey = asset.getImageStorageKey();
+        boolean refresh = mode != null && "refresh".equalsIgnoreCase(mode.trim());
+        String trimmedPrompt;
+        boolean describePending;
+        if (refresh) {
+            trimmedPrompt = loadRoundtripPrompt(storageKey);
+            if (!StringUtils.hasText(trimmedPrompt)) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "没有可复用的转图提示词，请使用完整转资产图");
+            }
+            describePending = false;
+        } else {
+            trimmedPrompt = PENDING_DESCRIBE_PROMPT;
+            describePending = true;
+        }
+        String normalizedResolution = normalizeImageResolution(resolution);
+        String assetType = asset.getType();
+        return transactionTemplate.execute(status ->
+                submitConvertRoundtrip(assetId, storageKey, model.getId(), series.getId(),
+                        series.getAspectRatio(), trimmedPrompt, normalizedResolution,
+                        describePending, assetType));
+    }
+
+    static String roundtripPromptKey(String storageKey) {
+        return storageKey + ".roundtrip-prompt.txt";
+    }
+
+    private String loadRoundtripPrompt(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        String key = roundtripPromptKey(storageKey);
+        if (!objectStorage.exists(key)) {
+            return null;
+        }
+        byte[] bytes = objectStorage.getBytes(key);
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+    }
+
+    private void saveRoundtripPrompt(String storageKey, String prompt) {
+        if (!StringUtils.hasText(storageKey) || !StringUtils.hasText(prompt)) {
+            return;
+        }
+        objectStorage.put(
+                roundtripPromptKey(storageKey),
+                prompt.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                "text/plain; charset=utf-8");
+    }
+
+    private DramaAssetGenerateResp submitConvertRoundtrip(
+            Long assetId,
+            String expectedStorageKey,
+            Long modelId,
+            Long seriesId,
+            String aspectRatio,
+            String prompt,
+            String resolution,
+            boolean describePending,
+            String assetType) {
+        DramaAsset asset = requireAsset(assetId);
+        if (!StringUtils.hasText(asset.getImageStorageKey())
+                || !expectedStorageKey.equals(asset.getImageStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考图已变更，请重新转资产图");
+        }
+        if (isGenerating(loadTask(asset.getGenTaskId()))) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "资产正在生成中，请稍后再转");
+        }
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(modelId);
+        req.setCategory(ModelCategory.IMAGE);
+        req.setPrompt(prompt);
+        req.setRatio(aspectRatio);
+        req.setResolution(resolution);
+        req.setCopies(1);
+        // 故意不设 references：I2I 不写 SeedreamOriginUrls
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("source", GenerateRequests.SOURCE_DRAMA);
+        extra.put("seriesId", seriesId);
+        extra.put("episodeId", asset.getEpisodeId());
+        extra.put("assetId", asset.getId());
+        extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
+        if (describePending) {
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_PENDING, true);
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY, expectedStorageKey);
+            extra.put(PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE, assetType);
+        } else {
+            extra.put("roundtripPrompt", prompt);
+        }
+        GenerateTaskResp task = generateService.submit(req, extra);
+        asset.setGenTaskId(task.getId());
+        reopenIfConfirmed(asset);
+        assetMapper.updateById(asset);
+        touchSeries(seriesId);
+        log.info("convert-to-seedream assetId={} taskId={} storageKey={}",
+                asset.getId(), task.getId(), asset.getImageStorageKey());
+        DramaAssetGenerateResp resp = new DramaAssetGenerateResp();
+        resp.setAsset(toResp(asset, null));
+        resp.setTask(task);
+        resp.getAsset().setGenerating(true);
+        resp.getAsset().setGenTaskId(task.getId());
+        resp.getAsset().setGenTaskStatus(task.getStatus());
+        return resp;
+    }
+
     @Transactional
     public DramaAssetGenerateResp getGenerateTask(Long assetId, Long taskId) {
         DramaAsset asset = requireAsset(assetId);
@@ -976,7 +1140,11 @@ public class DramaAssetService {
             return;
         }
         String resolution = resolutionFromTask(task);
-        insertAndSelectGeneration(asset, key, task.getId(), "generate", resolution, null);
+        String source = generationSourceFromTask(task);
+        insertAndSelectGeneration(asset, key, task.getId(), source, resolution, null);
+        if (SOURCE_ROUNDTRIP.equals(source) && task.getParams() != null && task.getParams().get("roundtripPrompt") != null) {
+            saveRoundtripPrompt(key, String.valueOf(task.getParams().get("roundtripPrompt")));
+        }
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -1069,7 +1237,115 @@ public class DramaAssetService {
         if ("library".equals(source)) {
             return "引用 " + next;
         }
+        if (SOURCE_ROUNDTRIP.equals(source)) {
+            return "转资产图 " + next;
+        }
         return "生成方案 " + next;
+    }
+
+    private static String generationSourceFromTask(GenerateTaskResp task) {
+        if (task == null || task.getParams() == null || task.getParams().get("assetGenerationSource") == null) {
+            return "generate";
+        }
+        String source = String.valueOf(task.getParams().get("assetGenerationSource")).trim();
+        if (SOURCE_ROUNDTRIP.equals(source)) {
+            return SOURCE_ROUNDTRIP;
+        }
+        return "generate";
+    }
+
+    /** 同集同类型名称禁止前缀互相包含，避免 @韩警官 / @韩警官全身 绑定歧义。 */
+    private void rejectPrefixOverlappingName(Long seriesId, Long episodeId, String type, String name) {
+        if (!StringUtils.hasText(name) || seriesId == null || episodeId == null) {
+            return;
+        }
+        String candidate = name.trim();
+        List<DramaAsset> existing = assetMapper.selectList(new LambdaQueryWrapper<DramaAsset>()
+                .eq(DramaAsset::getSeriesId, seriesId)
+                .eq(DramaAsset::getEpisodeId, episodeId)
+                .eq(DramaAsset::getType, type));
+        for (DramaAsset other : existing) {
+            if (other == null || !StringUtils.hasText(other.getName())) {
+                continue;
+            }
+            String peer = other.getName().trim();
+            if (!StringUtils.hasText(peer) || peer.equals(candidate)) {
+                continue;
+            }
+            if (peer.startsWith(candidate) || candidate.startsWith(peer)) {
+                throw new BizException(ErrorCode.BAD_REQUEST,
+                        "资产名「" + candidate + "」与已有「" + peer + "」前缀重叠，请改用互不包含的名称");
+            }
+        }
+    }
+
+    private void requireSeedream50ForConvert(AiModel model) {
+        String adapterKey = AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (!SeedreamOriginUrls.isSeedream50(adapterKey, model.getModelKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "转资产图须绑定 Seedream 5.0 系列图像模型");
+        }
+    }
+
+    /**
+     * Seedance 只信任同账号 Seedream 5.0 原 HTTPS。双方都是方舟官方类时，要求解密后 Key 一致。
+     */
+    private void assertSameArkAccountForConvert(DramaSeries series, AiModel imageModel) {
+        if (series == null || series.getVideoModelId() == null || imageModel == null) {
+            return;
+        }
+        if (!isArkOfficialProvider(imageModel.getProvider())) {
+            return;
+        }
+        AiModel videoModel = aiModelMapper.selectById(series.getVideoModelId());
+        if (videoModel == null || !isArkOfficialProvider(videoModel.getProvider())) {
+            return;
+        }
+        String imageKey = decryptModelApiKey(imageModel);
+        String videoKey = decryptModelApiKey(videoModel);
+        if (!imageKey.equals(videoKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "转资产图与视频模型须使用同一方舟 API Key，否则 Seedance 不信任 origin");
+        }
+    }
+
+    private static boolean isArkOfficialProvider(String provider) {
+        if (!StringUtils.hasText(provider)) {
+            return false;
+        }
+        String value = provider.trim();
+        return AdapterCatalog.PROVIDER_OFFICIAL.equals(value)
+                || AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN.equals(value)
+                || value.contains("官方API");
+    }
+
+    private String decryptModelApiKey(AiModel model) {
+        if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+        }
+        String decrypted = encryptor.decrypt(model.getApiKeyEnc());
+        String key = ArkKeys.normalize(decrypted);
+        if (!StringUtils.hasText(key)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+        }
+        return key;
+    }
+
+    public static String mimeFromStorageKey(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return "image/jpeg";
+        }
+        String lower = storageKey.trim().toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "image/jpeg";
     }
 
     private DramaAssetGenerationResp toGenerationResp(
@@ -1094,6 +1370,12 @@ public class DramaAssetService {
         if (review != null && StringUtils.hasText(review.status())) {
             resp.setArkReviewStatus(review.status());
             resp.setArkReviewError(blankToNull(review.error()));
+        }
+        SeedreamOriginUrls.OriginInfo origin = SeedreamOriginUrls.inspect(
+                objectStorage, objectMapper, generation.getStorageKey(), Instant.now());
+        resp.setOriginStatus(origin.status());
+        if (origin.expiresAt() != null) {
+            resp.setOriginExpiresAt(OffsetDateTime.ofInstant(origin.expiresAt(), ZoneOffset.UTC));
         }
         return resp;
     }
@@ -1688,7 +1970,7 @@ public class DramaAssetService {
         return prompt + "外形与服装必须符合：" + id + "。";
     }
 
-    static String trimPrompt(String prompt) {
+    public static String trimPrompt(String prompt) {
         String value = prompt.trim();
         return value.length() <= 4000 ? value : value.substring(0, 4000);
     }

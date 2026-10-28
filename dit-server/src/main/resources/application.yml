@@ -142,6 +142,9 @@ dit:
       rate-limit-backoff-seconds: ${ARK_RATE_LIMIT_BACKOFF_SECONDS:8}
       download-timeout-seconds: ${ARK_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${ARK_DOWNLOAD_RETRIES:3}
+      vision-model: ${ARK_VISION_MODEL:doubao-seed-2-1-pro-260915}
+      # 默认关闭：Seedream/Ark 管理端固定 token plan；实验按量 Key 时再开
+      allow-payg-provider: ${ARK_ALLOW_PAYG_PROVIDER:false}
     minimax:
       base-url: ${MINIMAX_BASE_URL:https://api.minimax.cn}
       api-key: ${MINIMAX_API_KEY:}

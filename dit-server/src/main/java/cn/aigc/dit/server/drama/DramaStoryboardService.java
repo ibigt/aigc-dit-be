@@ -12,6 +12,9 @@ import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
 import cn.aigc.dit.generate.ImageReferenceCapabilities;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
+import cn.aigc.dit.storage.ObjectStorage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaChapter;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -66,6 +69,7 @@ import org.springframework.util.StringUtils;
 
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -111,6 +115,10 @@ public class DramaStoryboardService {
     private DramaShotBatchGenerateService batchGenerateService;
     @Autowired(required = false)
     private DramaShotCaptionPostProcessService captionPostProcessService;
+    @Autowired(required = false)
+    private ObjectStorage objectStorage;
+    @Autowired(required = false)
+    private ObjectMapper objectMapper;
 
     public DramaStoryboardService(DramaSeriesMapper seriesMapper,
                                   DramaEpisodeMapper episodeMapper,
@@ -1099,7 +1107,34 @@ public class DramaStoryboardService {
         shot.setGenTaskId(task.getId());
         shotMapper.updateById(shot);
         touchSeries(series.getId());
-        return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, task);
+        DramaShotGenerateResp resp = toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, task);
+        resp.setOriginWarnings(originWarningsForRefs(refs));
+        return resp;
+    }
+
+    /** 仅提示已有 origin sidecar 但不可用的参考；未 convert 的外图不警告。 */
+    private List<String> originWarningsForRefs(List<DramaAsset> refs) {
+        if (refs == null || refs.isEmpty() || objectStorage == null || objectMapper == null) {
+            return List.of();
+        }
+        Instant now = Instant.now();
+        List<String> warnings = new ArrayList<>();
+        for (DramaAsset asset : refs) {
+            if (asset == null || !StringUtils.hasText(asset.getImageStorageKey())) {
+                continue;
+            }
+            String sidecar = SeedreamOriginUrls.sidecarKey(asset.getImageStorageKey());
+            if (!objectStorage.exists(sidecar)) {
+                continue;
+            }
+            SeedreamOriginUrls.OriginInfo info = SeedreamOriginUrls.inspect(
+                    objectStorage, objectMapper, asset.getImageStorageKey(), now);
+            if (SeedreamOriginUrls.STATUS_EXPIRED.equals(info.status())
+                    || SeedreamOriginUrls.STATUS_ABSENT.equals(info.status())) {
+                warnings.add("资产「" + asset.getName() + "」的 Seedream origin 已失效，建议重新转资产图后再出片");
+            }
+        }
+        return warnings;
     }
 
     @Transactional

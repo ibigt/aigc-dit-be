@@ -23,10 +23,13 @@ import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.model.resp.AssetResp;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
+import cn.aigc.dit.generate.describe.ImageDescribeClient;
+import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
+import cn.aigc.dit.storage.ObjectStorage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +37,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -47,7 +53,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -82,16 +92,28 @@ class DramaAssetServiceTest {
     private CreationService creationService;
     @Mock
     private MediaRetentionService mediaRetention;
+    @Mock
+    private ObjectStorage objectStorage;
+    @Mock
+    private AesGcmEncryptor encryptor;
+    @Mock
+    private ImageDescribeClient imageDescribeClient;
+    @Mock
+    private PlatformTransactionManager transactionManager;
 
     private DramaAssetService service;
     private final AtomicLong generationIds = new AtomicLong(500);
 
     @BeforeEach
     void setUp() {
+        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).commit(any());
+        org.mockito.Mockito.lenient().doNothing().when(transactionManager).rollback(any());
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention);
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager,
+                new ObjectMapper());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
         org.mockito.Mockito.lenient().when(assetGenerationMapper.insert(any(DramaAssetGeneration.class))).thenAnswer(invocation -> {
@@ -234,6 +256,248 @@ class DramaAssetServiceTest {
         BizException error = assertThrows(BizException.class, () -> service.generateImage(9L));
         assertEquals("请先选择图像模型", error.getMessage());
         verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsMissingImage() {
+        DramaAsset asset = ownedAsset();
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, null));
+        assertEquals("请先上传或引用参考图", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsNonSeedream50() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel model = new AiModel();
+        model.setId(12L);
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setAdapterKey("seedream-4.5");
+        model.setModelKey("doubao-seedream-4-5-251128");
+        model.setCapabilities(List.of("image", "t2i"));
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertEquals("转资产图须绑定 Seedream 5.0 系列图像模型", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void convertToSeedreamSubmitsPendingDescribeWithoutVisionInHttp() {
+        DramaAsset asset = ownedAsset();
+        asset.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel model = seedream50Model();
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(200L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.convertToSeedream(9L, "2K");
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
+        assertEquals(12L, reqCaptor.getValue().getModelId());
+        assertEquals("2K", reqCaptor.getValue().getResolution());
+        assertEquals(DramaAssetService.PENDING_DESCRIBE_PROMPT, reqCaptor.getValue().getPrompt());
+        assertTrue(reqCaptor.getValue().getReferences() == null || reqCaptor.getValue().getReferences().isEmpty());
+        assertEquals(GenerateRequests.SOURCE_DRAMA, extraCaptor.getValue().get("source"));
+        assertEquals(DramaAssetService.SOURCE_ROUNDTRIP, extraCaptor.getValue().get("assetGenerationSource"));
+        assertEquals(true, extraCaptor.getValue().get(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_PENDING));
+        assertEquals("users/7/upload/ref.png",
+                extraCaptor.getValue().get(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY));
+        assertEquals(DramaContract.ASSET_TYPE_CHARACTER,
+                extraCaptor.getValue().get(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE));
+        assertEquals(200L, asset.getGenTaskId());
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+        verify(transactionManager).commit(any());
+    }
+
+    @Test
+    void convertToSeedreamPendingDescribeCarriesSceneAssetType() {
+        DramaAsset asset = ownedAsset();
+        asset.setType(DramaContract.ASSET_TYPE_SCENE);
+        asset.setName("警局走廊");
+        asset.setImageStorageKey("users/7/upload/scene.jpg");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(201L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.convertToSeedream(9L, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(generateService).submit(any(GenerateSubmitReq.class), extraCaptor.capture());
+        assertEquals(DramaContract.ASSET_TYPE_SCENE,
+                extraCaptor.getValue().get(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE));
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsMismatchedArkImageAndVideoKeys() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        series.setVideoModelId(6L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        AiModel image = seedream50Model();
+        image.setProvider("官方API");
+        when(aiModelMapper.selectById(12L)).thenReturn(image);
+        AiModel video = new AiModel();
+        video.setId(6L);
+        video.setCategory("video");
+        video.setEnabled(true);
+        video.setProvider("官方API");
+        video.setAdapterKey("seedance-2.0");
+        video.setApiKeyEnc("enc-video");
+        when(aiModelMapper.selectById(6L)).thenReturn(video);
+        when(encryptor.decrypt("enc-key")).thenReturn("ark-image-key");
+        when(encryptor.decrypt("enc-video")).thenReturn("ark-video-other");
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertTrue(error.getMessage().contains("同一方舟 API Key"));
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void convertToSeedreamRejectsWhenImageChangedBeforeSubmit() {
+        DramaAsset before = ownedAsset();
+        before.setImageStorageKey("users/7/upload/ref.png");
+        DramaAsset after = ownedAsset();
+        after.setImageStorageKey("users/7/upload/other.png");
+        when(assetMapper.selectById(9L)).thenReturn(before, after);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, "2K"));
+        assertEquals("参考图已变更，请重新转资产图", error.getMessage());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void applyTaskResultUsesRoundtripSourceFromParams() {
+        DramaAsset asset = ownedAsset();
+        asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
+        asset.setGenTaskId(200L);
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        when(assetGenerationMapper.selectOne(any())).thenReturn(null);
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(200L);
+        task.setStatus("SUCCEEDED");
+        task.setOutputStorageKey("users/7/gen/roundtrip.png");
+        task.setOutputKeys(List.of("users/7/gen/roundtrip.png"));
+        task.setParams(Map.of(
+                "assetGenerationSource", DramaAssetService.SOURCE_ROUNDTRIP,
+                "roundtripPrompt", "【identity】警官\n【t2i_prompt】全身"));
+        when(generateService.getMine(200L)).thenReturn(task);
+
+        service.getGenerateTask(9L, 200L);
+
+        ArgumentCaptor<DramaAssetGeneration> captor = ArgumentCaptor.forClass(DramaAssetGeneration.class);
+        verify(assetGenerationMapper).insert(captor.capture());
+        assertEquals(DramaAssetService.SOURCE_ROUNDTRIP, captor.getValue().getSource());
+        assertTrue(captor.getValue().getLabel().startsWith("转资产图"));
+        assertEquals("users/7/gen/roundtrip.png", asset.getImageStorageKey());
+        verify(objectStorage).put(
+                eq(DramaAssetService.roundtripPromptKey("users/7/gen/roundtrip.png")),
+                any(byte[].class),
+                eq("text/plain; charset=utf-8"));
+    }
+
+    @Test
+    void convertToSeedreamRefreshSkipsDescribeWhenPromptPersisted() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(genTaskMapper.selectCount(any())).thenReturn(0L);
+        String promptKey = DramaAssetService.roundtripPromptKey("users/7/upload/ref.png");
+        when(objectStorage.exists(promptKey)).thenReturn(true);
+        when(objectStorage.getBytes(promptKey)).thenReturn("复用提示词内容".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(220L);
+        task.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(task);
+
+        service.convertToSeedream(9L, "2K", "refresh");
+
+        verify(imageDescribeClient, never()).describe(any(), any(), any(), any(), any(), any());
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        verify(generateService).submit(reqCaptor.capture(), any());
+        assertEquals("复用提示词内容", reqCaptor.getValue().getPrompt());
+    }
+
+    @Test
+    void convertToSeedreamRefreshRejectsWhenNoSavedPrompt() {
+        DramaAsset asset = ownedAsset();
+        asset.setImageStorageKey("users/7/upload/ref.png");
+        when(assetMapper.selectById(9L)).thenReturn(asset);
+        DramaSeries series = ownedSeries();
+        series.setImageModelId(12L);
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(12L)).thenReturn(seedream50Model());
+        when(objectStorage.exists(DramaAssetService.roundtripPromptKey("users/7/upload/ref.png"))).thenReturn(false);
+
+        BizException error = assertThrows(BizException.class, () -> service.convertToSeedream(9L, null, "refresh"));
+        assertTrue(error.getMessage().contains("没有可复用的转图提示词"));
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+    }
+
+    @Test
+    void createRejectsPrefixOverlappingName() {
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        DramaAsset peer = new DramaAsset();
+        peer.setId(9L);
+        peer.setSeriesId(21L);
+        peer.setEpisodeId(11L);
+        peer.setName("韩警官");
+        peer.setType(DramaContract.ASSET_TYPE_CHARACTER);
+        peer.setStateTag(DramaContract.STATE_TAG_BASE);
+        when(assetMapper.selectList(any())).thenReturn(List.of(peer));
+        cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq req = new cn.aigc.dit.server.drama.model.req.DramaAssetSaveReq();
+        req.setName("韩警官全身");
+        req.setType("角色");
+
+        BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
+
+        assertTrue(error.getMessage().contains("前缀重叠"));
+        verify(assetMapper, never()).insert(any(DramaAsset.class));
     }
 
     @Test
@@ -850,6 +1114,21 @@ class DramaAssetServiceTest {
         asset.setStatus(DramaContract.STATUS_NOT_STARTED);
         asset.setIdentityVersion(0);
         return asset;
+    }
+
+    private static AiModel seedream50Model() {
+        AiModel model = new AiModel();
+        model.setId(12L);
+        model.setName("Seedream 5.0");
+        model.setCategory("image");
+        model.setEnabled(true);
+        model.setAdapterKey("seedream-5.0");
+        model.setModelKey("doubao-seedream-5-0-pro");
+        model.setProvider("官方API（token plan）");
+        model.setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
+        model.setApiKeyEnc("enc-key");
+        model.setCapabilities(List.of("image", "t2i", "i2i"));
+        return model;
     }
 
     private static ScriptDoc sampleDoc() {

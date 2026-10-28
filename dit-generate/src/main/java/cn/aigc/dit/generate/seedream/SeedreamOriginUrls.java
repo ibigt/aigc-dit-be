@@ -83,35 +83,69 @@ public final class SeedreamOriginUrls {
         storage.put(sidecarKey(storageKey), bytes, "application/json");
     }
 
+    public static final String STATUS_ACTIVE = "active";
+    public static final String STATUS_EXPIRING_SOON = "expiring_soon";
+    public static final String STATUS_EXPIRED = "expired";
+    public static final String STATUS_ABSENT = "absent";
+
+    /** 剩余不足此时长视为即将过期。 */
+    static final Duration EXPIRING_SOON = Duration.ofHours(2);
+
+    /**
+     * Origin 可读状态：供 API 展示；出片仍用 {@link #resolve}。
+     */
+    public record OriginInfo(String status, Instant expiresAt, String url) {
+        public static OriginInfo absent() {
+            return new OriginInfo(STATUS_ABSENT, null, null);
+        }
+    }
+
     /**
      * @return 仍在有效期内的原始 HTTPS 地址；没有记录、已过期或无法读取时返回 null
      */
     public static String resolve(ObjectStorage storage, ObjectMapper mapper, String storageKey, Instant now) {
-        if (storage == null || storageKey == null || storageKey.isBlank() || now == null) {
+        OriginInfo info = inspect(storage, mapper, storageKey, now);
+        if (info == null) {
             return null;
+        }
+        if (STATUS_ACTIVE.equals(info.status()) || STATUS_EXPIRING_SOON.equals(info.status())) {
+            return info.url();
+        }
+        return null;
+    }
+
+    public static OriginInfo inspect(ObjectStorage storage, ObjectMapper mapper, String storageKey, Instant now) {
+        if (storage == null || storageKey == null || storageKey.isBlank() || now == null) {
+            return OriginInfo.absent();
         }
         String sidecar = sidecarKey(storageKey);
         if (!storage.exists(sidecar)) {
-            return null;
+            return OriginInfo.absent();
         }
         try {
             byte[] bytes = storage.getBytes(sidecar);
             if (bytes == null || bytes.length == 0) {
-                return null;
+                return OriginInfo.absent();
             }
             JsonNode node = mapper.readTree(new String(bytes, StandardCharsets.UTF_8));
             String url = node.path("url").asText("").trim();
             if (!isHttps(url)) {
-                return null;
+                return OriginInfo.absent();
             }
             Instant savedAt = parseInstant(node.path("savedAt").asText(""));
             if (savedAt == null) {
-                return null;
+                return OriginInfo.absent();
             }
             Instant deadline = expiryOf(url, savedAt);
-            return now.isBefore(deadline) ? url : null;
+            if (!now.isBefore(deadline)) {
+                return new OriginInfo(STATUS_EXPIRED, deadline, url);
+            }
+            if (!now.plus(EXPIRING_SOON).isBefore(deadline)) {
+                return new OriginInfo(STATUS_EXPIRING_SOON, deadline, url);
+            }
+            return new OriginInfo(STATUS_ACTIVE, deadline, url);
         } catch (RuntimeException | java.io.IOException e) {
-            return null;
+            return OriginInfo.absent();
         }
     }
 

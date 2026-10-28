@@ -6,6 +6,7 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.AudioReferenceCapabilities;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.GenerateProviderRegistry;
 import cn.aigc.dit.generate.GenerateRequest;
 import cn.aigc.dit.generate.ark.ArkKeys;
@@ -52,6 +53,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
     private final AesGcmEncryptor encryptor;
     private final OpenAiCompatChatClient chatClient;
     private final GenerateProviderRegistry providerRegistry;
+    private final GenerateProperties generateProperties;
     private final DramaSeriesMapper seriesMapper;
     private final GenTaskMapper genTaskMapper;
     private final CreationMapper creationMapper;
@@ -206,7 +208,7 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         model.setName(req.getName().trim());
         model.setModelKey(modelKey);
         model.setAdapterKey(spec.key());
-        model.setProvider(AdapterCatalog.officialProviderOf(req.getProvider(), spec.key()));
+        model.setProvider(resolveOfficialProvider(req.getProvider(), spec.key()));
         if (StringUtils.hasText(req.getEndpoint())) {
             model.setEndpoint(trimToNull(req.getEndpoint()));
         } else if (creating || !StringUtils.hasText(model.getEndpoint())) {
@@ -468,6 +470,28 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
             return AdapterCatalog.MINIMAX_COMFY_ENDPOINT;
         }
         return spec.defaultEndpoint();
+    }
+
+    /**
+     * Seedream/Ark 默认仍走 {@link AdapterCatalog#officialProviderOf}（5.0 固定 token plan）。
+     * 仅 {@code dit.ark.allow-payg-provider=true} 时，显式「官方API」可落按量。
+     */
+    private String resolveOfficialProvider(String requested, String adapterKey) {
+        String resolved = AdapterCatalog.officialProviderOf(requested, adapterKey);
+        if (!generateProperties.getArk().isAllowPaygProvider()) {
+            return resolved;
+        }
+        if (!(AdapterCatalog.isArk(adapterKey) || AdapterCatalog.isSeedream(adapterKey))) {
+            return resolved;
+        }
+        if (!StringUtils.hasText(requested)) {
+            return resolved;
+        }
+        if (requested.trim().equalsIgnoreCase(AdapterCatalog.PROVIDER_OFFICIAL)
+                && !AdapterCatalog.isOfficialTokenPlan(requested)) {
+            return AdapterCatalog.PROVIDER_OFFICIAL;
+        }
+        return resolved;
     }
 
     private AdapterCatalog.Spec resolveSpec(AdminModelSaveReq req, AiModel model, String category, String modelKey,
