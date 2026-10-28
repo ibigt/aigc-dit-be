@@ -313,6 +313,15 @@ public class DramaController {
                 id, req == null ? null : req.getResolution()));
     }
 
+    @Operation(summary = "外部图经图生文转 Seedream 5.0 资产图（纯 T2I，写 origin）")
+    @PostMapping("/assets/{id}/convert-to-seedream")
+    public CommonResult<DramaAssetGenerateResp> convertAssetToSeedream(
+            @PathVariable Long id,
+            @RequestBody(required = false) DramaAssetGenerateReq req) {
+        return CommonResult.success(dramaAssetService.convertToSeedream(
+                id, req == null ? null : req.getResolution()));
+    }
+
     @Operation(summary = "查询资产生图任务；成功后写入参考图")
     @GetMapping("/assets/{id}/generate/tasks/{taskId}")
     public CommonResult<DramaAssetGenerateResp> getAssetGenerateTask(

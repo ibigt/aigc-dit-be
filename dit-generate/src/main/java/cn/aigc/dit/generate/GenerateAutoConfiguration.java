@@ -3,6 +3,8 @@ package cn.aigc.dit.generate;
 import cn.aigc.dit.generate.caption.FfmpegVideoCaptionBurner;
 import cn.aigc.dit.generate.caption.AssVideoCaptionBurner;
 import cn.aigc.dit.generate.caption.VideoCaptionBurner;
+import cn.aigc.dit.generate.describe.ArkImageDescribeClient;
+import cn.aigc.dit.generate.describe.ImageDescribeClient;
 import cn.aigc.dit.generate.poster.FfmpegPosterExtractor;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.storage.ObjectStorage;
@@ -31,5 +33,11 @@ public class GenerateAutoConfiguration {
     @ConditionalOnMissingBean(AssVideoCaptionBurner.class)
     public AssVideoCaptionBurner assVideoCaptionBurner(ObjectStorage objectStorage, GenerateProperties properties) {
         return new AssVideoCaptionBurner(objectStorage, properties);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(ImageDescribeClient.class)
+    public ImageDescribeClient imageDescribeClient(GenerateProperties properties) {
+        return new ArkImageDescribeClient(properties.getArk());
     }
 }

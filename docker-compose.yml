@@ -124,6 +124,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dit-dev-jwt-secret-change-me-32b}
       CRYPTO_SECRET: ${CRYPTO_SECRET:-dit-dev-jwt-secret-change-me-32b}
       JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-86400}
+      ARK_ALLOW_PAYG_PROVIDER: ${ARK_ALLOW_PAYG_PROVIDER:-false}
       DIT_ADMIN_USERNAME: ${DIT_ADMIN_USERNAME:-admin}
       DIT_ADMIN_PASSWORD: ${DIT_ADMIN_PASSWORD:-Fnii@123}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}

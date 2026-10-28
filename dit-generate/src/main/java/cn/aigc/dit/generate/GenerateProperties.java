@@ -124,6 +124,13 @@ public class GenerateProperties {
         private String assetRegion = "cn-beijing";
         private String assetService = "ark";
         private String assetApiVersion = "2024-01-01";
+        /** 图生文（Responses）默认视觉模型；可用 ARK_VISION_MODEL 覆盖。 */
+        private String visionModel = "doubao-seed-2-1-pro-260915";
+        /**
+         * 为 true 时，管理端保存 Seedream/Ark 模型可显式选「官方API」（按量 /api/v3）。
+         * 默认 false：Seedream 5.0 仍固定为「官方API（token plan）」。
+         */
+        private boolean allowPaygProvider = false;
     }
 
     /**

@@ -4,6 +4,7 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.SpeechVoice;
@@ -57,10 +58,14 @@ class AdminModelServiceTest {
     private SpeechVoiceMapper speechVoiceMapper;
 
     private AdminModelService service;
+    private GenerateProperties generateProperties;
 
     @BeforeEach
     void setUp() {
-        service = new AdminModelService(encryptor, chatClient, providerRegistry, seriesMapper, genTaskMapper, creationMapper, speechVoiceMapper);
+        generateProperties = new GenerateProperties();
+        service = new AdminModelService(
+                encryptor, chatClient, providerRegistry, generateProperties,
+                seriesMapper, genTaskMapper, creationMapper, speechVoiceMapper);
         ReflectionTestUtils.setField(service, "baseMapper", modelMapper);
     }
 
@@ -95,6 +100,43 @@ class AdminModelServiceTest {
         assertEquals("gpt-image-2", resp.getAdapterKey());
         assertEquals("RunningHub", resp.getProvider());
 
+    }
+
+    @Test
+    void seedreamDefaultsToTokenPlanUnlessPaygAllowed() {
+        when(modelMapper.selectCount(any())).thenReturn(0L);
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(30L);
+            assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN, model.getProvider());
+            assertTrue(model.getEndpoint().contains("/api/plan/v3"));
+            return 1;
+        });
+
+        AdminModelSaveReq req = new AdminModelSaveReq();
+        req.setName("Seedream payg attempt");
+        req.setModelKey("doubao-seedream-5-0-pro");
+        req.setAdapterKey(AdapterCatalog.SEEDREAM_5_0);
+        req.setProvider(AdapterCatalog.PROVIDER_OFFICIAL);
+        req.setEndpoint("https://ark.cn-beijing.volces.com/api/v3");
+        req.setCategory(ModelCategory.IMAGE);
+        req.setCapabilities(List.of("image", "t2i"));
+        req.setPricing(Map.of("unit", "张"));
+
+        var forced = service.create(req);
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN, forced.getProvider());
+
+        generateProperties.getArk().setAllowPaygProvider(true);
+        when(modelMapper.insert(any(AiModel.class))).thenAnswer(invocation -> {
+            AiModel model = invocation.getArgument(0);
+            model.setId(31L);
+            assertEquals(AdapterCatalog.PROVIDER_OFFICIAL, model.getProvider());
+            assertEquals("https://ark.cn-beijing.volces.com/api/v3", model.getEndpoint());
+            return 1;
+        });
+        var payg = service.create(req);
+        assertEquals(AdapterCatalog.PROVIDER_OFFICIAL, payg.getProvider());
+        assertEquals("https://ark.cn-beijing.volces.com/api/v3", payg.getEndpoint());
     }
 
     @Test

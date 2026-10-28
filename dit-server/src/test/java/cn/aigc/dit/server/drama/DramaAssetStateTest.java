@@ -15,10 +15,13 @@ import cn.aigc.dit.server.drama.text.DramaTextService;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
+import cn.aigc.dit.generate.describe.ImageDescribeClient;
+import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
+import cn.aigc.dit.storage.ObjectStorage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,6 +79,12 @@ class DramaAssetStateTest {
     private CreationService creationService;
     @Mock
     private MediaRetentionService mediaRetention;
+    @Mock
+    private ObjectStorage objectStorage;
+    @Mock
+    private AesGcmEncryptor encryptor;
+    @Mock
+    private ImageDescribeClient imageDescribeClient;
 
     private DramaAssetService service;
 
@@ -84,7 +93,7 @@ class DramaAssetStateTest {
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention);
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);
     }

@@ -8,6 +8,13 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.ark.ArkKeys;
+import cn.aigc.dit.generate.ark.ArkUrls;
+import cn.aigc.dit.generate.describe.ImageDescribeClient;
+import cn.aigc.dit.generate.describe.ImageDescribePrompts;
+import cn.aigc.dit.generate.describe.ImageDescribeResult;
+import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
+import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
 import cn.aigc.dit.server.drama.entity.DramaAssetGeneration;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -41,6 +48,7 @@ import cn.aigc.dit.server.service.AssetService;
 import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.service.GenerateService;
 import cn.aigc.dit.server.service.MediaRetentionService;
+import cn.aigc.dit.storage.ObjectStorage;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -55,12 +63,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 @Service
 @Slf4j
 public class DramaAssetService {
+
+    /** generation.source：上传图经图生文→Seedream 5.0 转成的可信资产图。 */
+    public static final String SOURCE_ROUNDTRIP = "roundtrip";
 
     private final DramaAssetMapper assetMapper;
     private final DramaAssetGenerationMapper assetGenerationMapper;
@@ -75,6 +87,9 @@ public class DramaAssetService {
     private final ArkCharacterReview characterReview;
     private final CreationService creationService;
     private final MediaRetentionService mediaRetention;
+    private final ObjectStorage objectStorage;
+    private final AesGcmEncryptor encryptor;
+    private final ImageDescribeClient imageDescribeClient;
 
     public DramaAssetService(DramaAssetMapper assetMapper,
                              DramaAssetGenerationMapper assetGenerationMapper,
@@ -88,7 +103,10 @@ public class DramaAssetService {
                              DramaStoryboardService storyboardService,
                              ArkCharacterReview characterReview,
                              CreationService creationService,
-                             MediaRetentionService mediaRetention) {
+                             MediaRetentionService mediaRetention,
+                             ObjectStorage objectStorage,
+                             AesGcmEncryptor encryptor,
+                             ImageDescribeClient imageDescribeClient) {
         this.assetMapper = assetMapper;
         this.assetGenerationMapper = assetGenerationMapper;
         this.episodeMapper = episodeMapper;
@@ -102,6 +120,9 @@ public class DramaAssetService {
         this.characterReview = characterReview;
         this.creationService = creationService;
         this.mediaRetention = mediaRetention;
+        this.objectStorage = objectStorage;
+        this.encryptor = encryptor;
+        this.imageDescribeClient = imageDescribeClient;
     }
 
     @Transactional
@@ -644,6 +665,59 @@ public class DramaAssetService {
         return resp;
     }
 
+    /**
+     * 外部上传/引用图 → 图生文 → Seedream 5.0 纯 T2I，落 generation source=roundtrip 并获得 origin 资格。
+     */
+    @Transactional
+    public DramaAssetGenerateResp convertToSeedream(Long assetId, String resolution) {
+        DramaAsset asset = requireAsset(assetId);
+        DramaSeries series = requireOwnedSeries(asset.getSeriesId());
+        if (!StringUtils.hasText(asset.getImageStorageKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请先上传或引用参考图");
+        }
+        AiModel model = requireBoundImageModel(series);
+        requireSeedream50ForConvert(model);
+        String apiKey = decryptModelApiKey(model);
+        String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
+        byte[] imageBytes = objectStorage.getBytes(asset.getImageStorageKey());
+        String mime = mimeFromStorageKey(asset.getImageStorageKey());
+        ImageDescribeResult described = imageDescribeClient.describe(
+                imageBytes, mime, ImageDescribePrompts.CHARACTER_FULL, endpoint, apiKey, null);
+        String prompt = described == null ? "" : described.assembledPrompt();
+        if (!StringUtils.hasText(prompt)) {
+            throw new BizException(ErrorCode.INTERNAL, "图生文未得到可用提示词");
+        }
+        assertGenerateCapacity(asset.getEpisodeId());
+        GenerateSubmitReq req = new GenerateSubmitReq();
+        req.setModelId(model.getId());
+        req.setCategory(ModelCategory.IMAGE);
+        req.setPrompt(trimPrompt(prompt));
+        req.setRatio(series.getAspectRatio());
+        req.setResolution(normalizeImageResolution(resolution));
+        req.setCopies(1);
+        // 故意不设 references：I2I 不写 SeedreamOriginUrls
+        Map<String, Object> extra = new LinkedHashMap<>();
+        extra.put("source", GenerateRequests.SOURCE_DRAMA);
+        extra.put("seriesId", series.getId());
+        extra.put("episodeId", asset.getEpisodeId());
+        extra.put("assetId", asset.getId());
+        extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
+        GenerateTaskResp task = generateService.submit(req, extra);
+        asset.setGenTaskId(task.getId());
+        reopenIfConfirmed(asset);
+        assetMapper.updateById(asset);
+        touchSeries(series.getId());
+        log.info("convert-to-seedream assetId={} taskId={} storageKey={}",
+                asset.getId(), task.getId(), asset.getImageStorageKey());
+        DramaAssetGenerateResp resp = new DramaAssetGenerateResp();
+        resp.setAsset(toResp(asset, null));
+        resp.setTask(task);
+        resp.getAsset().setGenerating(true);
+        resp.getAsset().setGenTaskId(task.getId());
+        resp.getAsset().setGenTaskStatus(task.getStatus());
+        return resp;
+    }
+
     @Transactional
     public DramaAssetGenerateResp getGenerateTask(Long assetId, Long taskId) {
         DramaAsset asset = requireAsset(assetId);
@@ -976,7 +1050,7 @@ public class DramaAssetService {
             return;
         }
         String resolution = resolutionFromTask(task);
-        insertAndSelectGeneration(asset, key, task.getId(), "generate", resolution, null);
+        insertAndSelectGeneration(asset, key, task.getId(), generationSourceFromTask(task), resolution, null);
         reopenIfConfirmed(asset);
         if (DramaContract.STATUS_NOT_STARTED.equals(asset.getStatus())) {
             asset.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
@@ -1069,7 +1143,58 @@ public class DramaAssetService {
         if ("library".equals(source)) {
             return "引用 " + next;
         }
+        if (SOURCE_ROUNDTRIP.equals(source)) {
+            return "转资产图 " + next;
+        }
         return "生成方案 " + next;
+    }
+
+    private static String generationSourceFromTask(GenerateTaskResp task) {
+        if (task == null || task.getParams() == null || task.getParams().get("assetGenerationSource") == null) {
+            return "generate";
+        }
+        String source = String.valueOf(task.getParams().get("assetGenerationSource")).trim();
+        if (SOURCE_ROUNDTRIP.equals(source)) {
+            return SOURCE_ROUNDTRIP;
+        }
+        return "generate";
+    }
+
+    private void requireSeedream50ForConvert(AiModel model) {
+        String adapterKey = AdapterCatalog.resolveKey(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        if (!SeedreamOriginUrls.isSeedream50(adapterKey, model.getModelKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "转资产图须绑定 Seedream 5.0 系列图像模型");
+        }
+    }
+
+    private String decryptModelApiKey(AiModel model) {
+        if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+        }
+        String decrypted = encryptor.decrypt(model.getApiKeyEnc());
+        String key = ArkKeys.normalize(decrypted);
+        if (!StringUtils.hasText(key)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+        }
+        return key;
+    }
+
+    static String mimeFromStorageKey(String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return "image/jpeg";
+        }
+        String lower = storageKey.trim().toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) {
+            return "image/png";
+        }
+        if (lower.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (lower.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "image/jpeg";
     }
 
     private DramaAssetGenerationResp toGenerationResp(
