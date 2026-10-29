@@ -28,5 +28,7 @@ public class DramaFilmResp {
     private OffsetDateTime assembledAt;
     @Schema(description = "最近一次成片入片的 shot id 有序列表；无成片或历史成片未记录时为空")
     private List<Long> includedShotIds = new ArrayList<>();
+    @Schema(description = "最近一次成片的衔接方式：顺接或直拼；历史成片视为直拼；尚未成片时为空")
+    private String filmMode;
     private List<DramaFilmShotResp> shots = new ArrayList<>();
 }

@@ -601,15 +601,17 @@ public class DramaController {
     public CommonResult<DramaFilmResp> assembleFilm(
             @PathVariable Long id,
             @RequestBody(required = false) DramaFilmAssembleReq req) {
-        return CommonResult.success(dramaFilmService.assemble(id, req == null ? null : req.getShotIds()));
+        return CommonResult.success(dramaFilmService.assemble(
+                id, req == null ? null : req.getShotIds(), req == null ? null : req.getMode()));
     }
 
-    @Operation(summary = "导出带字幕硬烧成片（不替换软字幕成片）")
+    @Operation(summary = "导出带字幕硬烧成片（不替换软字幕成片）；可传 shotIds，省略时沿用最近一次成片入片清单")
     @PostMapping("/episodes/{id}/film/export-burned")
     public CommonResult<DramaFilmResp> exportBurnedFilm(
             @PathVariable Long id,
             @RequestBody(required = false) DramaFilmAssembleReq req) {
-        return CommonResult.success(dramaFilmService.assembleBurned(id, req == null ? null : req.getShotIds()));
+        return CommonResult.success(dramaFilmService.assembleBurned(
+                id, req == null ? null : req.getShotIds(), req == null ? null : req.getMode()));
     }
 
     @Operation(summary = "本集成片中文字幕（按镜头实际时长累计 WebVTT）")

@@ -19,10 +19,13 @@ import java.util.Map;
 
 /**
  * 成片指纹与响应：按 {@code shot_index} 拼接 {@code shotId:videoKey:durationSec:dialogue} 再 SHA-256。
- * 时长和对白都纳入指纹，避免改镜长或字幕后成片页仍显示未过期。
+ * 时长、对白和衔接方式都纳入指纹，避免改镜长、字幕或从直拼换成顺接后成片页仍显示未过期。
+ * 直拼沿用原来的纯哈希，历史成片不必重拼才算未过期。顺接指纹带 {@code smooth:} 前缀。
  * 新成片指纹只对实际入片镜头计算；历史成片无 {@code film_shot_ids} 时仍按全集分镜比对。
  */
 public final class DramaFilms {
+
+    static final String SMOOTH_MARK = "smooth:";
 
     private DramaFilms() {
     }
@@ -61,6 +64,36 @@ public final class DramaFilms {
     }
 
     public static String fingerprint(List<DramaShot> shots) {
+        return fingerprint(shots, DramaFilmModes.DIRECT);
+    }
+
+    public static String fingerprint(List<DramaShot> shots, String mode) {
+        String payload = fingerprintPayload(shots);
+        if (DramaFilmModes.SMOOTH.equals(DramaFilmModes.normalize(mode))) {
+            return SMOOTH_MARK + sha256Hex(payload + "\nmode:" + DramaFilmModes.SMOOTH);
+        }
+        return sha256Hex(payload);
+    }
+
+    /**
+     * 从已保存指纹还原衔接方式。没有 {@code smooth:} 前缀的历史哈希视为直拼。
+     */
+    public static String modeOfFingerprint(String fingerprint) {
+        if (fingerprint != null && fingerprint.startsWith(SMOOTH_MARK)) {
+            return DramaFilmModes.SMOOTH;
+        }
+        return DramaFilmModes.DIRECT;
+    }
+
+    /** 尚无成片时返回 {@code null}。 */
+    public static String assembledMode(DramaEpisode episode) {
+        if (episode == null || !StringUtils.hasText(episode.getFilmKey())) {
+            return null;
+        }
+        return modeOfFingerprint(episode.getFilmFingerprint());
+    }
+
+    private static String fingerprintPayload(List<DramaShot> shots) {
         StringBuilder payload = new StringBuilder();
         for (DramaShot shot : ordered(shots)) {
             if (payload.length() > 0) {
@@ -74,7 +107,7 @@ public final class DramaFilms {
             payload.append(':');
             payload.append(shot.getDialogue() == null ? "" : shot.getDialogue());
         }
-        return sha256Hex(payload.toString());
+        return payload.toString();
     }
 
     /**
@@ -111,7 +144,8 @@ public final class DramaFilms {
         if (included == null) {
             return true;
         }
-        return !fingerprint(included).equals(episode.getFilmFingerprint());
+        return !fingerprint(included, modeOfFingerprint(episode.getFilmFingerprint()))
+                .equals(episode.getFilmFingerprint());
     }
 
     public static DramaFilmResp describe(DramaEpisode episode, List<DramaShot> shots) {
@@ -132,6 +166,7 @@ public final class DramaFilms {
             resp.setFilmUrl(MediaUrls.of(episode.getFilmKey()));
             resp.setPosterUrl(MediaUrls.of(episode.getFilmPosterKey()));
             resp.setAssembledAt(episode.getFilmAssembledAt());
+            resp.setFilmMode(assembledMode(episode));
             if (episode.getFilmShotIds() != null && !episode.getFilmShotIds().isEmpty()) {
                 resp.setIncludedShotIds(new ArrayList<>(episode.getFilmShotIds()));
             }

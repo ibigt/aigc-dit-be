@@ -15,6 +15,7 @@ public class GenerateProperties {
     private Ark ark = new Ark();
     private Dashscope dashscope = new Dashscope();
     private Minimax minimax = new Minimax();
+    private Sglang sglang = new Sglang();
     private Speech speech = new Speech();
     private OpenAiImage openAiImage = new OpenAiImage();
     private Ffmpeg ffmpeg = new Ffmpeg();
@@ -37,6 +38,13 @@ public class GenerateProperties {
     @Data
     public static class Mock {
         private int delayMs = 2500;
+    }
+
+    @Data
+    public static class Sglang {
+        private int requestTimeoutSeconds = 3600;
+        private int pollTimeoutSeconds = 60;
+        private int downloadTimeoutSeconds = 600;
     }
 
     @Data

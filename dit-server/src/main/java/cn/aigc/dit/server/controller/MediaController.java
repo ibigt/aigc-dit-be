@@ -62,14 +62,23 @@ public class MediaController {
         if (!user.isAdmin() && !key.startsWith("users/" + user.getUserId() + "/")) {
             throw new BizException(ErrorCode.FORBIDDEN, "无权访问该对象");
         }
-        Integer thumbW = ImageThumbnails.normalizeWidth(w);
-        if (thumbW != null && ImageThumbnails.supportsThumbnail(key)) {
-            ResponseEntity<InputStreamResource> thumb = serveThumbnail(key, thumbW);
-            if (thumb != null) {
-                return thumb;
+        try {
+            Integer thumbW = ImageThumbnails.normalizeWidth(w);
+            if (thumbW != null && ImageThumbnails.supportsThumbnail(key)) {
+                ResponseEntity<InputStreamResource> thumb = serveThumbnail(key, thumbW);
+                if (thumb != null) {
+                    return thumb;
+                }
             }
+            return serveOriginal(key, headers, filename);
+        } catch (BizException e) {
+            if (e.getCode() == ErrorCode.UNAVAILABLE) {
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                        .cacheControl(CacheControl.noStore())
+                        .build();
+            }
+            throw e;
         }
-        return serveOriginal(key, headers, filename);
     }
 
     private ResponseEntity<InputStreamResource> serveThumbnail(String key, int width) {

@@ -25,8 +25,8 @@ public class SglangGenerateProvider implements GenerateProvider {
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
 
     @Autowired
-    public SglangGenerateProvider(ObjectStorage storage) {
-        this(storage, new JdkSglangHttp());
+    public SglangGenerateProvider(ObjectStorage storage, GenerateProperties properties) {
+        this(storage, new JdkSglangHttp(properties.getSglang()));
     }
 
     SglangGenerateProvider(ObjectStorage storage, SglangHttp http) {

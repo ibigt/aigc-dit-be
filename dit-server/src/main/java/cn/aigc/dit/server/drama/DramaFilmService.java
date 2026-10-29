@@ -7,8 +7,10 @@ import cn.aigc.dit.generate.ffmpeg.FfmpegSupport;
 import cn.aigc.dit.generate.poster.PosterExtractor;
 import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
+import cn.aigc.dit.server.drama.entity.DramaSeries;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
+import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.server.media.MediaUrls;
@@ -38,6 +40,7 @@ public class DramaFilmService {
 
     private final DramaEpisodeMapper episodeMapper;
     private final DramaShotMapper shotMapper;
+    private final DramaSeriesMapper seriesMapper;
     private final ObjectStorage objectStorage;
     private final PosterExtractor posterExtractor;
     private final DramaFilmConcat filmConcat;
@@ -59,41 +62,42 @@ public class DramaFilmService {
     }
 
     public DramaFilmResp assemble(Long episodeId) {
-        return assemble(episodeId, null);
+        return assemble(episodeId, null, null);
     }
 
     public DramaFilmResp assemble(Long episodeId, List<Long> shotIds) {
+        return assemble(episodeId, shotIds, null);
+    }
+
+    public DramaFilmResp assemble(Long episodeId, List<Long> shotIds, String mode) {
         DramaEpisode episode = requireEpisode(episodeId);
         List<DramaShot> shots = listShots(episode.getId());
         List<DramaShot> clips = resolveAssembleClips(shots, shotIds);
         if (clips.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集还没有已出片镜头，无法拼接成片");
         }
+        String filmMode = DramaFilmModes.normalize(mode);
         String filmKey = "users/" + episode.getUserId() + "/drama/" + episode.getId() + "/film.mp4";
         List<Path> temps = new ArrayList<>();
         Path output = null;
         try {
-            List<Path> inputs = new ArrayList<>();
-            for (DramaShot clip : clips) {
-                Path input = FfmpegSupport.tempFile("dit-film-clip-", suffix(clip.getVideoKey()));
-                temps.add(input);
-                Files.write(input, objectStorage.getBytes(clip.getVideoKey()));
-                inputs.add(input);
-            }
+            List<Path> inputs = materializeClips(clips, temps, "dit-film-clip-");
             output = FfmpegSupport.tempFile("dit-film-out-", ".mp4");
             temps.add(output);
-            filmConcat.concat(inputs, output);
+            List<DramaFilmModes.ClipSpan> spans = concatClips(filmMode, aspectRatio(episode), clips, inputs, output);
             objectStorage.put(filmKey, Files.readAllBytes(output), "video/mp4");
-            captionService.storeEpisodeVtt(filmKey, clips, inputs);
+            captionService.storeJoinedEpisodeVtt(filmKey, clips, spans);
             String posterKey = null;
             try {
                 posterKey = posterExtractor.extract(filmKey);
             } catch (Exception e) {
                 log.warn("film poster extract failed, episode={}", episode.getId(), e);
             }
+            // 软成片固定写 film.mp4，put 覆盖原文件。上一份带字导出对不上这次衔接，删掉，只留当前成片。
+            deleteReplacedFilmOutputs(episode, filmKey, posterKey);
             episode.setFilmKey(filmKey);
             episode.setFilmPosterKey(StringUtils.hasText(posterKey) ? posterKey : null);
-            episode.setFilmFingerprint(DramaFilms.fingerprint(clips));
+            episode.setFilmFingerprint(DramaFilms.fingerprint(clips, filmMode));
             episode.setFilmShotIds(clips.stream().map(DramaShot::getId).toList());
             episode.setFilmAssembledAt(OffsetDateTime.now());
             episodeMapper.updateById(episode);
@@ -120,18 +124,31 @@ public class DramaFilmService {
      * Returns the burned film object key URL via a one-off storage key (does not replace soft film).
      */
     public DramaFilmResp assembleBurned(Long episodeId, List<Long> shotIds) {
+        return assembleBurned(episodeId, shotIds, null);
+    }
+
+    public DramaFilmResp assembleBurned(Long episodeId, List<Long> shotIds, String mode) {
         DramaShotCaptionPostProcessService postProcess = captionPostProcess.getIfAvailable();
         if (postProcess == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "字幕后处理未启用，无法导出带字成片");
         }
         DramaEpisode episode = requireEpisode(episodeId);
         List<DramaShot> shots = listShots(episode.getId());
-        List<DramaShot> clips = resolveAssembleClips(shots, shotIds);
+        // 未显式传 shotIds 时，优先沿用最近一次软成片入片清单，避免把未勾选镜头又拼进带字导出。
+        List<Long> effectiveShotIds = shotIds;
+        if (effectiveShotIds == null
+                && episode.getFilmShotIds() != null
+                && !episode.getFilmShotIds().isEmpty()) {
+            effectiveShotIds = episode.getFilmShotIds();
+        }
+        List<DramaShot> clips = resolveAssembleClips(shots, effectiveShotIds);
         if (clips.isEmpty()) {
             throw new BizException(ErrorCode.BAD_REQUEST, "当前剧集还没有已出片镜头，无法导出带字成片");
         }
-        String filmKey = "users/" + episode.getUserId() + "/drama/" + episode.getId()
-                + "/film-burned-" + DramaShotCaptionPostProcessService.PROCESSOR_VERSION + ".mp4";
+        String filmMode = StringUtils.hasText(mode)
+                ? DramaFilmModes.normalize(mode)
+                : burnedMode(episode);
+        String filmKey = burnedFilmKey(episode.getUserId(), episode.getId());
         List<Path> temps = new ArrayList<>();
         try {
             List<Path> inputs = new ArrayList<>();
@@ -155,7 +172,7 @@ public class DramaFilmService {
             }
             Path output = FfmpegSupport.tempFile("dit-film-burn-out-", ".mp4");
             temps.add(output);
-            filmConcat.concat(inputs, output);
+            concatClips(filmMode, aspectRatio(episode), clips, inputs, output);
             objectStorage.put(filmKey, Files.readAllBytes(output), "video/mp4");
             DramaFilmResp resp = DramaFilms.describe(episode, shots, captionService.readyCaptionFlags(shots));
             resp.setFilmUrl(MediaUrls.of(filmKey));
@@ -194,6 +211,7 @@ public class DramaFilmService {
         creationService.removeDramaFilm(episode.getUserId(), episode.getFilmKey());
         deleteObjectQuietly(episode.getFilmKey());
         deleteObjectQuietly(episode.getFilmPosterKey());
+        deleteObjectQuietly(burnedFilmKey(episode.getUserId(), episode.getId()));
         captionService.deleteEpisodeVtt(episode.getFilmKey());
         episode.setFilmKey(null);
         episode.setFilmPosterKey(null);
@@ -240,6 +258,85 @@ public class DramaFilmService {
             selected.add(shot);
         }
         return DramaFilms.ordered(selected);
+    }
+
+    private List<Path> materializeClips(List<DramaShot> clips, List<Path> temps, String prefix) throws Exception {
+        List<Path> inputs = new ArrayList<>();
+        for (DramaShot clip : clips) {
+            Path input = FfmpegSupport.tempFile(prefix, suffix(clip.getVideoKey()));
+            temps.add(input);
+            Files.write(input, objectStorage.getBytes(clip.getVideoKey()));
+            inputs.add(input);
+        }
+        return inputs;
+    }
+
+    /**
+     * 直拼走流复制；顺接与带字导出共用同一套裁切窗，避免成片和字幕两条时间轴。
+     */
+    private List<DramaFilmModes.ClipSpan> concatClips(String mode, String aspectRatio, List<DramaShot> clips,
+                                                       List<Path> inputs, Path output) {
+        List<Double> durations = new ArrayList<>();
+        List<List<DramaFilmModes.CueWindow>> windows = new ArrayList<>();
+        for (int i = 0; i < clips.size(); i++) {
+            double duration = DramaFilmModes.durationOf(clips.get(i), FfmpegSupport.durationSeconds(inputs.get(i)));
+            durations.add(duration);
+            List<DramaFilmModes.CueWindow> speech = captionService.speechWindows(clips.get(i), duration);
+            windows.add(speech == null ? List.of() : speech);
+        }
+        List<DramaFilmModes.ClipSpan> spans = DramaFilmModes.plan(mode, clips, durations, windows);
+        if (DramaFilmModes.direct(mode)) {
+            filmConcat.concat(inputs, output);
+        } else {
+            filmConcat.concatSmooth(inputs, spans, aspectRatio, output);
+        }
+        return spans;
+    }
+
+    private String aspectRatio(DramaEpisode episode) {
+        if (episode == null || episode.getSeriesId() == null) {
+            return DramaContract.DEFAULT_ASPECT_RATIO;
+        }
+        DramaSeries series = seriesMapper.selectById(episode.getSeriesId());
+        if (series == null || !StringUtils.hasText(series.getAspectRatio())) {
+            return DramaContract.DEFAULT_ASPECT_RATIO;
+        }
+        String ratio = series.getAspectRatio().trim().replace('：', ':');
+        return DramaContract.ASPECT_RATIOS.contains(ratio) ? ratio : DramaContract.DEFAULT_ASPECT_RATIO;
+    }
+
+    /** 带字成片与软成片分开存放。重新拼接后删掉它，避免导出仍拿到上一种衔接方式的视频。 */
+    static String burnedFilmKey(Long userId, Long episodeId) {
+        return "users/" + userId + "/drama/" + episodeId + "/film-burned-"
+                + DramaShotCaptionPostProcessService.PROCESSOR_VERSION + ".mp4";
+    }
+
+    /**
+     * 新成片已经写入后，清掉被换掉的旧文件。同一把 film.mp4 由 put 覆盖，这里不删它。
+     * 键变了的旧成片、旧封面，以及上一份带字导出，都删掉。
+     */
+    private void deleteReplacedFilmOutputs(DramaEpisode episode, String newFilmKey, String newPosterKey) {
+        if (episode == null) {
+            return;
+        }
+        String previousFilm = episode.getFilmKey();
+        if (StringUtils.hasText(previousFilm) && !previousFilm.equals(newFilmKey)) {
+            deleteObjectQuietly(previousFilm);
+            captionService.deleteEpisodeVtt(previousFilm);
+        }
+        String previousPoster = episode.getFilmPosterKey();
+        if (StringUtils.hasText(previousPoster) && !previousPoster.equals(newPosterKey)) {
+            deleteObjectQuietly(previousPoster);
+        }
+        deleteObjectQuietly(burnedFilmKey(episode.getUserId(), episode.getId()));
+    }
+
+    /** 带字导出未指定模式时沿用软字幕成片的衔接，避免两条时间轴。 */
+    private static String burnedMode(DramaEpisode episode) {
+        if (episode != null && StringUtils.hasText(episode.getFilmFingerprint())) {
+            return DramaFilms.modeOfFingerprint(episode.getFilmFingerprint());
+        }
+        return DramaFilmModes.SMOOTH;
     }
 
     private List<DramaShot> listShots(Long episodeId) {
