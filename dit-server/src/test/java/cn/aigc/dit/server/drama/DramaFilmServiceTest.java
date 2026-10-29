@@ -8,6 +8,7 @@ import cn.aigc.dit.server.service.CreationService;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
+import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.drama.model.resp.DramaFilmResp;
 import cn.aigc.dit.storage.LocalObjectStorage;
@@ -45,6 +46,8 @@ class DramaFilmServiceTest {
     @Mock
     private DramaShotMapper shotMapper;
     @Mock
+    private DramaSeriesMapper seriesMapper;
+    @Mock
     private PosterExtractor posterExtractor;
     @Mock
     private DramaFilmConcat filmConcat;
@@ -65,23 +68,20 @@ class DramaFilmServiceTest {
     @BeforeEach
     void setUp() {
         storage = new LocalObjectStorage(tempDir.resolve("obj"));
-        service = new DramaFilmService(episodeMapper, shotMapper, storage, posterExtractor, filmConcat,
+        service = new DramaFilmService(episodeMapper, shotMapper, seriesMapper, storage, posterExtractor, filmConcat,
                 captionService, creationService, captionPostProcess);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         concatPayloads.clear();
         org.mockito.Mockito.lenient().when(captionService.readyCaptionFlags(any())).thenReturn(Map.of());
         org.mockito.Mockito.lenient().when(posterExtractor.extract(any())).thenReturn("users/7/drama/31/film-poster.webp");
         org.mockito.Mockito.lenient().doAnswer(invocation -> {
-            List<Path> inputs = invocation.getArgument(0);
-            Path output = invocation.getArgument(1);
-            List<String> payloads = new ArrayList<>();
-            for (Path input : inputs) {
-                payloads.add(Files.readString(input));
-            }
-            concatPayloads.add(payloads);
-            Files.write(output, "assembled".getBytes());
+            writeAssembled(invocation.getArgument(0), invocation.getArgument(1));
             return null;
         }).when(filmConcat).concat(any(), any());
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+            writeAssembled(invocation.getArgument(0), invocation.getArgument(3));
+            return null;
+        }).when(filmConcat).concatSmooth(any(), any(), any(), any());
     }
 
     @AfterEach
@@ -132,10 +132,13 @@ class DramaFilmServiceTest {
         episode.setFilmAssembledAt(java.time.OffsetDateTime.parse("2026-09-14T04:00:00Z"));
         when(episodeMapper.selectById(31L)).thenReturn(episode);
 
+        storage.put(DramaFilmService.burnedFilmKey(7L, 31L), "old-burned".getBytes(), "video/mp4");
+
         service.discardAssembledFilm(31L);
 
         assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film.mp4"));
         assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/film-poster.webp"));
+        assertThrows(BizException.class, () -> storage.getBytes(DramaFilmService.burnedFilmKey(7L, 31L)));
         assertNull(episode.getFilmKey());
         assertNull(episode.getFilmFingerprint());
         assertNull(episode.getFilmShotIds());
@@ -177,7 +180,10 @@ class DramaFilmServiceTest {
         assertEquals(List.of(11L, 22L), episode.getFilmShotIds());
         assertEquals(DramaFilms.fingerprint(List.of(
                 clip(11L, 1, "users/7/a.mp4"),
-                clip(22L, 2, "users/7/b.mp4"))), episode.getFilmFingerprint());
+                clip(22L, 2, "users/7/b.mp4")), DramaFilmModes.SMOOTH), episode.getFilmFingerprint());
+        assertEquals(DramaFilmModes.SMOOTH, resp.getFilmMode());
+        verify(filmConcat).concatSmooth(any(), any(), any(), any());
+        verify(filmConcat, never()).concat(any(), any());
         assertEquals(List.of(11L, 22L), resp.getIncludedShotIds());
         assertFalse(resp.getComplete());
         assertEquals(List.of(3), resp.getMissingShotIndexes());
@@ -206,7 +212,7 @@ class DramaFilmServiceTest {
         assertEquals(List.of(11L, 33L), episode.getFilmShotIds());
         assertEquals(DramaFilms.fingerprint(List.of(
                 clip(11L, 1, "users/7/a.mp4"),
-                clip(33L, 3, "users/7/c.mp4"))), episode.getFilmFingerprint());
+                clip(33L, 3, "users/7/c.mp4")), DramaFilmModes.SMOOTH), episode.getFilmFingerprint());
         assertEquals(List.of(11L, 33L), resp.getIncludedShotIds());
         assertFalse(resp.getStale());
     }
@@ -232,6 +238,53 @@ class DramaFilmServiceTest {
 
         BizException empty = assertThrows(BizException.class, () -> service.assemble(31L, List.of()));
         assertTrue(empty.getMessage().contains("至少选择"));
+    }
+
+    @Test
+    void assembleDirectKeepsCopyConcat() throws Exception {
+        storage.put("users/7/a.mp4", "first".getBytes(), "video/mp4");
+        DramaEpisode episode = ownedEpisode();
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(shotMapper.selectList(any())).thenReturn(List.of(clip(11L, 1, "users/7/a.mp4")));
+
+        DramaFilmResp resp = service.assemble(31L, List.of(11L), DramaFilmModes.DIRECT);
+
+        verify(filmConcat).concat(any(), any());
+        verify(filmConcat, never()).concatSmooth(any(), any(), any(), any());
+        assertEquals(DramaFilms.fingerprint(List.of(clip(11L, 1, "users/7/a.mp4")), DramaFilmModes.DIRECT),
+                episode.getFilmFingerprint());
+        assertEquals(DramaFilmModes.DIRECT, resp.getFilmMode());
+    }
+
+    @Test
+    void assembleOverwritesFilmAndDeletesPreviousBurnedExport() throws Exception {
+        storage.put("users/7/drama/31/film.mp4", "old-direct".getBytes(), "video/mp4");
+        storage.put(DramaFilmService.burnedFilmKey(7L, 31L), "old-burned".getBytes(), "video/mp4");
+        storage.put("users/7/drama/31/old-poster.webp", "old-poster".getBytes(), "image/webp");
+        storage.put("users/7/a.mp4", "first".getBytes(), "video/mp4");
+        DramaEpisode episode = ownedEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        episode.setFilmPosterKey("users/7/drama/31/old-poster.webp");
+        episode.setFilmFingerprint(DramaFilms.fingerprint(List.of(clip(11L, 1, "users/7/a.mp4")), DramaFilmModes.DIRECT));
+        when(episodeMapper.selectById(31L)).thenReturn(episode);
+        when(shotMapper.selectList(any())).thenReturn(List.of(clip(11L, 1, "users/7/a.mp4")));
+
+        DramaFilmResp resp = service.assemble(31L, List.of(11L), DramaFilmModes.SMOOTH);
+
+        assertEquals("assembled", new String(storage.getBytes("users/7/drama/31/film.mp4")));
+        assertEquals(DramaFilmModes.SMOOTH, resp.getFilmMode());
+        assertThrows(BizException.class, () -> storage.getBytes(DramaFilmService.burnedFilmKey(7L, 31L)));
+        assertThrows(BizException.class, () -> storage.getBytes("users/7/drama/31/old-poster.webp"));
+        verify(filmConcat).concatSmooth(any(), any(), any(), any());
+    }
+
+    private void writeAssembled(List<Path> inputs, Path output) throws Exception {
+        List<String> payloads = new ArrayList<>();
+        for (Path input : inputs) {
+            payloads.add(Files.readString(input));
+        }
+        concatPayloads.add(payloads);
+        Files.write(output, "assembled".getBytes());
     }
 
     private static DramaEpisode ownedEpisode() {

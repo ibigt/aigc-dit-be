@@ -9,6 +9,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -103,8 +104,27 @@ class DramaFilmsTest {
         assertEquals(2, resp.getShotCount());
         assertEquals(1, resp.getReadyShotCount());
         assertFalse(resp.getStale());
+        assertEquals(DramaFilmModes.DIRECT, resp.getFilmMode());
         assertTrue(resp.getHasCaptions());
         assertTrue(resp.getShots().get(0).getHasCaptions());
+    }
+
+    @Test
+    void smoothFingerprintDiffersAndStillMatchesUntilShotsChange() {
+        DramaEpisode episode = new DramaEpisode();
+        episode.setFilmKey("users/7/drama/31/film.mp4");
+        DramaShot shot = clip(11L, 1, "users/7/a.mp4");
+        String direct = DramaFilms.fingerprint(List.of(shot), DramaFilmModes.DIRECT);
+        String smooth = DramaFilms.fingerprint(List.of(shot), DramaFilmModes.SMOOTH);
+        assertNotEquals(direct, smooth);
+        assertTrue(smooth.startsWith("smooth:"));
+
+        episode.setFilmFingerprint(smooth);
+        assertFalse(DramaFilms.stale(episode, List.of(shot)));
+        assertEquals(DramaFilmModes.SMOOTH, DramaFilms.assembledMode(episode));
+
+        shot.setDialogue("洛白：改口了。");
+        assertTrue(DramaFilms.stale(episode, List.of(shot)));
     }
 
     private static DramaShot clip(Long id, int index, String videoKey) {

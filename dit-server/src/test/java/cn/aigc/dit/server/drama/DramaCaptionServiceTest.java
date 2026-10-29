@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.drama;
 
+import cn.aigc.dit.generate.caption.CaptionCue;
 import cn.aigc.dit.server.drama.entity.DramaShot;
 import cn.aigc.dit.server.drama.entity.DramaShotCaption;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
@@ -113,6 +114,51 @@ class DramaCaptionServiceTest {
         String vtt = new String(storage.getBytes(DramaCaptionService.captionKey(episode.getFilmKey())),
                 StandardCharsets.UTF_8);
         assertTrue(vtt.contains("00:00:00.700 --> 00:00:02.200"));
+    }
+
+    @Test
+    void trimmedSpansShiftCuesAndOffsetByKeptDuration() throws Exception {
+        LocalObjectStorage storage = new LocalObjectStorage(tempDir.resolve("obj"));
+        ObjectMapper objectMapper = new ObjectMapper();
+        DramaCaptionService service = new DramaCaptionService(
+                episodeMapper, shotMapper, captionMapper, storage, objectMapper);
+        DramaShot first = shot(11L, "users/7/first.mp4", "旁白：第一句。", 5);
+        DramaShot second = shot(12L, "users/7/second.mp4", "旁白：第二句。", 4);
+        first.setChapterId(9L);
+        second.setChapterId(9L);
+        first.setLocationName("客厅");
+        second.setLocationName("客厅");
+        storage.put("users/7/first-subtitle.json", objectMapper.writeValueAsBytes(document(first,
+                new SubtitleCue(1000, 2000, "第一句。"))), "application/json");
+        storage.put("users/7/second-subtitle.json", objectMapper.writeValueAsBytes(document(second,
+                new SubtitleCue(1000, 2000, "第二句。"))), "application/json");
+        when(captionMapper.selectOne(any())).thenReturn(
+                caption(first, "users/7/first-subtitle.json", "READY"),
+                caption(second, "users/7/second-subtitle.json", "READY"),
+                caption(first, "users/7/first-subtitle.json", "READY"),
+                caption(second, "users/7/second-subtitle.json", "READY"));
+        List<DramaFilmModes.ClipSpan> spans = DramaFilmModes.plan(
+                DramaFilmModes.SMOOTH, List.of(first, second), List.of(5D, 4D),
+                List.of(
+                        List.of(new DramaFilmModes.CueWindow(1D, 2D)),
+                        List.of(new DramaFilmModes.CueWindow(1D, 2D))));
+
+        service.storeJoinedEpisodeVtt("users/7/film.mp4", List.of(first, second), spans);
+
+        String vtt = new String(storage.getBytes(DramaCaptionService.captionKey("users/7/film.mp4")), StandardCharsets.UTF_8);
+        assertTrue(vtt.contains("00:00:01.000 --> 00:00:02.000"));
+        assertTrue(vtt.contains("00:00:05.600 --> 00:00:06.600"));
+        assertFalse(vtt.contains("00:00:06.000 --> 00:00:07.000"));
+    }
+
+    @Test
+    void shiftCuesDropsSpeechInsideTheTrimmedHead() {
+        List<CaptionCue> shifted = DramaCaptionService.shiftCues(List.of(
+                new CaptionCue(0.05, 0.10, "气口"),
+                new CaptionCue(0.70, 2.20, "第一句")), 0.20, 4.80);
+        assertEquals(1, shifted.size());
+        assertEquals(0.50, shifted.get(0).startSec(), 0.0001);
+        assertEquals(2.00, shifted.get(0).endSec(), 0.0001);
     }
 
     private static DramaShot shot(long id, String videoKey, String dialogue, int duration) {

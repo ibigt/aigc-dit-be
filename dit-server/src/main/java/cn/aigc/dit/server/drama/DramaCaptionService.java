@@ -60,26 +60,42 @@ public class DramaCaptionService {
             if (clips == null) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "成片包含的分镜已不存在，请重新拼接成片");
             }
-            String vtt = buildFromStorage(clips);
+            String vtt = buildFromStorage(clips, DramaFilms.modeOfFingerprint(episode.getFilmFingerprint()));
             objectStorage.put(key, vtt.getBytes(StandardCharsets.UTF_8), "text/vtt; charset=UTF-8");
             return vtt;
         }
     }
 
     public void storeEpisodeVtt(String filmKey, List<DramaShot> clips, List<Path> localInputs) {
-        if (!StringUtils.hasText(filmKey)) {
+        if (!StringUtils.hasText(filmKey) || clips == null) {
             return;
         }
-        List<CaptionCue> timeline = new ArrayList<>();
-        double offset = 0D;
+        List<Double> durations = new ArrayList<>();
         for (int i = 0; i < clips.size(); i++) {
-            DramaShot shot = clips.get(i);
             Path input = localInputs != null && i < localInputs.size() ? localInputs.get(i) : null;
-            double duration = duration(input, fallbackDuration(shot));
-            appendAtOffset(timeline, cuesForShot(shot, duration), offset);
-            offset += duration;
+            Double probed = input == null ? null : FfmpegSupport.durationSeconds(input);
+            durations.add(DramaFilmModes.durationOf(clips.get(i), probed));
         }
-        String vtt = DramaCaptionVtt.renderCues(timeline);
+        writeEpisodeVtt(filmKey, clips, DramaFilmModes.plan(
+                DramaFilmModes.DIRECT, clips, durations, emptyWindows(clips.size())));
+    }
+
+    /**
+     * 用与拼接相同的裁切窗写 VTT：偏移按裁后时长累加，cue 起点减去该镜头头裁。
+     */
+    public void storeJoinedEpisodeVtt(String filmKey, List<DramaShot> clips, List<DramaFilmModes.ClipSpan> spans) {
+        if (!StringUtils.hasText(filmKey) || clips == null) {
+            return;
+        }
+        if (spans == null) {
+            storeEpisodeVtt(filmKey, clips, (List<Path>) null);
+            return;
+        }
+        writeEpisodeVtt(filmKey, clips, spans);
+    }
+
+    private void writeEpisodeVtt(String filmKey, List<DramaShot> clips, List<DramaFilmModes.ClipSpan> spans) {
+        String vtt = renderTimeline(clips, spans);
         objectStorage.put(captionKey(filmKey), vtt.getBytes(StandardCharsets.UTF_8), "text/vtt; charset=UTF-8");
     }
 
@@ -121,7 +137,7 @@ public class DramaCaptionService {
         if (episode == null || !StringUtils.hasText(episode.getFilmKey())) return;
         List<DramaShot> clips = DramaFilms.resolveIncludedShots(episode, listShots(episode.getId()));
         if (clips == null || clips.stream().noneMatch(clip -> shotId.equals(clip.getId()))) return;
-        String vtt = buildFromStorage(clips);
+        String vtt = buildFromStorage(clips, DramaFilms.modeOfFingerprint(episode.getFilmFingerprint()));
         objectStorage.put(captionKey(episode.getFilmKey()),
                 vtt.getBytes(StandardCharsets.UTF_8), "text/vtt; charset=UTF-8");
     }
@@ -233,15 +249,70 @@ public class DramaCaptionService {
         return getDocument(shotId);
     }
 
-    private String buildFromStorage(List<DramaShot> clips) {
-        List<CaptionCue> timeline = new ArrayList<>();
-        double offset = 0D;
+    public List<DramaFilmModes.CueWindow> speechWindows(DramaShot shot, double durationSec) {
+        List<DramaFilmModes.CueWindow> windows = new ArrayList<>();
+        for (CaptionCue cue : cuesForShot(shot, durationSec)) {
+            windows.add(new DramaFilmModes.CueWindow(cue.startSec(), cue.endSec()));
+        }
+        return windows;
+    }
+
+    private String buildFromStorage(List<DramaShot> clips, String mode) {
+        List<Double> durations = new ArrayList<>();
+        List<List<DramaFilmModes.CueWindow>> windows = new ArrayList<>();
         for (DramaShot shot : clips) {
             double duration = actualDuration(shot);
-            appendAtOffset(timeline, cuesForShot(shot, duration), offset);
-            offset += duration;
+            durations.add(duration);
+            windows.add(speechWindows(shot, duration));
+        }
+        return renderTimeline(clips, DramaFilmModes.plan(mode, clips, durations, windows));
+    }
+
+    private String renderTimeline(List<DramaShot> clips, List<DramaFilmModes.ClipSpan> spans) {
+        if (spans.size() != clips.size()) {
+            throw new IllegalStateException("timeline spans mismatch");
+        }
+        List<CaptionCue> timeline = new ArrayList<>();
+        double offset = 0D;
+        for (int i = 0; i < clips.size(); i++) {
+            DramaFilmModes.ClipSpan span = spans.get(i);
+            List<CaptionCue> shifted = shiftCues(
+                    cuesForShot(clips.get(i), span.durationSec()), span.headSec(), span.keptSec());
+            appendAtOffset(timeline, shifted, offset);
+            offset += span.keptSec();
         }
         return DramaCaptionVtt.renderCues(timeline);
+    }
+
+    static List<CaptionCue> shiftCues(List<CaptionCue> cues, double headSec, double keptSec) {
+        List<CaptionCue> shifted = new ArrayList<>();
+        if (cues == null || keptSec <= 0D) {
+            return shifted;
+        }
+        for (CaptionCue cue : cues) {
+            if (cue == null) {
+                continue;
+            }
+            double start = cue.startSec() - headSec;
+            double end = cue.endSec() - headSec;
+            if (end <= 0D || start >= keptSec) {
+                continue;
+            }
+            start = Math.max(0D, start);
+            end = Math.min(keptSec, end);
+            if (end > start) {
+                shifted.add(new CaptionCue(start, end, cue.text()));
+            }
+        }
+        return shifted;
+    }
+
+    private static List<List<DramaFilmModes.CueWindow>> emptyWindows(int count) {
+        List<List<DramaFilmModes.CueWindow>> windows = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            windows.add(List.of());
+        }
+        return windows;
     }
 
     private List<CaptionCue> cuesForShot(DramaShot shot, double durationSec) {
@@ -307,30 +378,19 @@ public class DramaCaptionService {
 
     private double actualDuration(DramaShot shot) {
         if (shot == null || !StringUtils.hasText(shot.getVideoKey())) {
-            return fallbackDuration(shot);
+            return DramaFilmModes.durationOf(shot, null);
         }
         Path input = null;
         try {
             input = FfmpegSupport.tempFile("dit-caption-probe-", suffix(shot.getVideoKey()));
             Files.write(input, objectStorage.getBytes(shot.getVideoKey()));
-            return duration(input, fallbackDuration(shot));
+            return DramaFilmModes.durationOf(shot, FfmpegSupport.durationSeconds(input));
         } catch (Exception e) {
             log.warn("probe drama shot duration failed, shot={}", shot.getId(), e);
-            return fallbackDuration(shot);
+            return DramaFilmModes.durationOf(shot, null);
         } finally {
             deleteQuietly(input);
         }
-    }
-
-    private static double duration(Path input, double fallback) {
-        Double actual = input == null ? null : FfmpegSupport.durationSeconds(input);
-        return actual != null && actual >= 1D ? actual : fallback;
-    }
-
-    private static double fallbackDuration(DramaShot shot) {
-        return shot == null || shot.getDurationSec() == null || shot.getDurationSec() < 1
-                ? DramaContract.DEFAULT_DURATION_SEC
-                : shot.getDurationSec();
     }
 
     private List<DramaShot> listShots(Long episodeId) {
