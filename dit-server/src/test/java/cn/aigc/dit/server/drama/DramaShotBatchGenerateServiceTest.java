@@ -178,18 +178,42 @@ class DramaShotBatchGenerateServiceTest {
     }
 
     @Test
-    void sequentialChainOnlyStartsFirst() {
+    void r2vIgnoresChainPrevTailAndStaysConcurrent() {
         storedShots.add(shot(201L, 1, 90L));
         storedShots.add(shot(202L, 2, 90L));
 
         DramaShotBatchGenerateReq req = new DramaShotBatchGenerateReq();
         req.setShotIds(List.of(201L, 202L));
         req.setVideoGenerateMode("r2v");
+        // 旧客户端若仍传 true，也应被忽略，始终并行
         req.setChainPrevTail(true);
 
         DramaShotBatchGenerateResp resp = service.create(31L, req);
 
+        assertTrue(Boolean.TRUE.equals(resp.getConcurrent()));
+        assertFalse(Boolean.TRUE.equals(resp.getChainPrevTail()));
+        verify(storyboardService, times(2)).generateShotForBatch(anyLong());
+        assertEquals(2, storedItems.stream()
+                .filter(i -> DramaShotBatchGenerateService.STATUS_RUNNING.equals(i.getStatus()))
+                .count());
+    }
+
+    @Test
+    void i2vPrevTailIsSequentialAndOnlyStartsFirst() {
+        storedShots.add(shot(201L, 1, 90L));
+        storedShots.add(shot(202L, 2, 90L));
+
+        DramaShotBatchGenerateReq req = new DramaShotBatchGenerateReq();
+        req.setShotIds(List.of(201L, 202L));
+        req.setVideoGenerateMode("i2v");
+        req.setI2vFirstFrameMode("prev-tail");
+        req.setFirstShotAutoStill(true);
+
+        DramaShotBatchGenerateResp resp = service.create(31L, req);
+
         assertFalse(Boolean.TRUE.equals(resp.getConcurrent()));
+        verify(storyboardService, times(1)).attachPrevTailForBatch(201L);
+        verify(storyboardService, never()).attachPrevTailForBatch(202L);
         verify(storyboardService, times(1)).generateShotForBatch(201L);
         verify(storyboardService, never()).generateShotForBatch(202L);
         assertEquals(DramaShotBatchGenerateService.STATUS_RUNNING, storedItems.get(0).getStatus());
@@ -227,8 +251,9 @@ class DramaShotBatchGenerateServiceTest {
 
         DramaShotBatchGenerateReq req = new DramaShotBatchGenerateReq();
         req.setShotIds(List.of(202L));
-        req.setVideoGenerateMode("r2v");
-        req.setChainPrevTail(true);
+        req.setVideoGenerateMode("i2v");
+        req.setI2vFirstFrameMode("prev-tail");
+        req.setFirstShotAutoStill(true);
 
         BizException error = assertThrows(BizException.class, () -> service.create(31L, req));
         assertTrue(error.getMessage().contains("落幅"));
@@ -260,10 +285,10 @@ class DramaShotBatchGenerateServiceTest {
 
     @Test
     void resolveConcurrentMatrix() {
-        assertTrue(DramaShotBatchGenerateService.resolveConcurrent("r2v", false, null));
-        assertFalse(DramaShotBatchGenerateService.resolveConcurrent("r2v", true, null));
-        assertTrue(DramaShotBatchGenerateService.resolveConcurrent("i2v", false, "auto"));
-        assertFalse(DramaShotBatchGenerateService.resolveConcurrent("i2v", false, "prev_tail"));
+        assertTrue(DramaShotBatchGenerateService.resolveConcurrent("r2v", null));
+        assertTrue(DramaShotBatchGenerateService.resolveConcurrent("r2v", "auto"));
+        assertTrue(DramaShotBatchGenerateService.resolveConcurrent("i2v", "auto"));
+        assertFalse(DramaShotBatchGenerateService.resolveConcurrent("i2v", "prev_tail"));
     }
 
     private static String TaskStatusPending() {

@@ -992,10 +992,54 @@ public class DramaStoryboardService {
         return doGenerateShot(shotId, false);
     }
 
-    /** 批次编排内部出片；这轮仍强制参考图，避免和用户尾帧搅在一起。 */
+    /**
+     * 批次编排内部出片：按镜头已写入的 videoGenerateMode 走 i2v/r2v。
+     * i2v 且尚无首帧时自动开场静帧，并在静帧成功后续生成视频。
+     */
     @Transactional
     public DramaShotGenerateResp generateShotForBatch(Long shotId) {
-        return doGenerateShot(shotId, true);
+        DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
+        requireNotRecompiling(shot);
+        DramaSeries series = requireOwnedSeries(shot.getSeriesId());
+        String mode = modeForSingleGenerate(series, shot);
+        if (DramaVideoGenerateModes.isI2v(mode) && !StringUtils.hasText(shot.getFirstFrameKey())) {
+            Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+            String prefix = stylePrefixOf(series);
+            List<DramaAsset> refs = resolveReferences(shot, assets, true, true);
+            return startOpeningStill(shot, series, assets, prefix, refs, true);
+        }
+        return doGenerateShot(shotId, false);
+    }
+
+    /**
+     * 批次内部：把同场上一镜落幅挂到本镜首帧；场首镜无上一镜则跳过（由开场静帧补）。
+     * 不校验批次锁。
+     */
+    @Transactional
+    public boolean attachPrevTailForBatch(Long shotId) {
+        DramaShot shot = requireShot(shotId);
+        requireNotDrafting(shot.getEpisodeId());
+        requireNotRecompiling(shot);
+        DramaShot prev = previousSameChapterShot(shot);
+        if (prev == null) {
+            return false;
+        }
+        if (isShotInFlight(prev)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "请等上一镜出片完成后再接落幅");
+        }
+        if (!StringUtils.hasText(prev.getVideoKey()) && !StringUtils.hasText(prev.getVideoTailKey())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "上一镜还没有成片，无法接落幅");
+        }
+        String tail = ensureVideoTail(prev);
+        if (!StringUtils.hasText(tail)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "上一镜落幅尚未抽出，请稍后再试");
+        }
+        shot.setFirstFrameKey(tail);
+        shot.setFirstFrameOrigin("prev-tail");
+        shotMapper.updateById(shot);
+        touchSeries(shot.getSeriesId());
+        return true;
     }
 
     private DramaShotGenerateResp doGenerateShot(Long shotId, boolean forceR2v) {

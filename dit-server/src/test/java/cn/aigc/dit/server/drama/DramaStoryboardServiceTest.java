@@ -2749,7 +2749,7 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void generateShotForBatchStillForcesR2v() {
+    void generateShotForBatchRespectsI2vWithFirstFrame() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);
         DramaShot shot = asI2v(pendingShot());
@@ -2775,10 +2775,83 @@ class DramaStoryboardServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
         verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
-        assertNull(reqCaptor.getValue().getFrames());
-        assertTrue(reqCaptor.getValue().getReferences() != null && !reqCaptor.getValue().getReferences().isEmpty());
-        assertEquals(DramaVideoGenerateModes.R2V, extraCaptor.getValue().get("videoGenerateMode"));
-        assertEquals(DramaVideoGenerateModes.R2V, shot.getVideoGenerateMode());
+        assertEquals("users/7/drama/21/frames/open.webp", reqCaptor.getValue().getFrames().getFirstFrameKey());
+        assertNull(reqCaptor.getValue().getReferences());
+        assertEquals(DramaVideoGenerateModes.I2V, extraCaptor.getValue().get("videoGenerateMode"));
+        assertEquals(DramaVideoGenerateModes.I2V, shot.getVideoGenerateMode());
+    }
+
+    @Test
+    void generateShotForBatchStartsOpeningStillWhenI2vMissingFirstFrame() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = asI2v(pendingShot());
+        shot.setChapterId(chapter.getId());
+        shot.setFirstFrameKey(null);
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of(
+                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
+                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
+        DramaSeries series = ownedSeries();
+        series.setVideoModelId(88L);
+        series.setImageModelId(77L);
+        series.setAspectRatio("16:9");
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+        when(aiModelMapper.selectById(77L)).thenReturn(imageModel());
+        GenerateTaskResp still = new GenerateTaskResp();
+        still.setId(602L);
+        still.setStatus("PENDING");
+        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(still);
+
+        service.generateShotForBatch(201L);
+
+        ArgumentCaptor<GenerateSubmitReq> reqCaptor = ArgumentCaptor.forClass(GenerateSubmitReq.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(generateService).submit(reqCaptor.capture(), extraCaptor.capture());
+        assertEquals("image", reqCaptor.getValue().getCategory());
+        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("openingStill"));
+        assertEquals(Boolean.TRUE, extraCaptor.getValue().get("stillForI2v"));
+        assertEquals(602L, shot.getGenTaskId());
+    }
+
+    @Test
+    void attachPrevTailForBatchCopiesSameChapterTail() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot first = pendingShot();
+        first.setId(200L);
+        first.setShotIndex(1);
+        first.setChapterId(chapter.getId());
+        first.setVideoKey("users/7/gen/shot1.mp4");
+        first.setVideoTailKey("users/7/gen/shot1-tail.webp");
+        storedShots.add(first);
+        DramaShot second = asI2v(pendingShot());
+        second.setId(201L);
+        second.setShotIndex(2);
+        second.setChapterId(chapter.getId());
+        second.setFirstFrameKey(null);
+        storedShots.add(second);
+        DramaSeries series = ownedSeries();
+        when(seriesMapper.selectById(21L)).thenReturn(series);
+
+        assertTrue(service.attachPrevTailForBatch(201L));
+        assertEquals("users/7/gen/shot1-tail.webp", second.getFirstFrameKey());
+        assertEquals("prev-tail", second.getFirstFrameOrigin());
+    }
+
+    @Test
+    void attachPrevTailForBatchSkipsFirstShotInChapter() {
+        DramaChapter chapter = pendingChapter();
+        storedChapters.add(chapter);
+        DramaShot shot = asI2v(pendingShot());
+        shot.setChapterId(chapter.getId());
+        shot.setShotIndex(1);
+        shot.setFirstFrameKey(null);
+        storedShots.add(shot);
+
+        assertFalse(service.attachPrevTailForBatch(201L));
+        assertNull(shot.getFirstFrameKey());
     }
 
     @Test

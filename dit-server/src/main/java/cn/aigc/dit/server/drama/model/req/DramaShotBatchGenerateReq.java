@@ -19,7 +19,7 @@ public class DramaShotBatchGenerateReq {
     @Schema(description = "出片方式：r2v / i2v")
     private String videoGenerateMode;
 
-    @Schema(description = "r2v 时是否衔接上一镜落幅；默认 false")
+    @Schema(description = "已废弃：参考图批量不再支持链式尾帧，服务端始终忽略并按并行处理")
     private Boolean chainPrevTail;
 
     @Schema(description = "i2v 首帧：auto | prev-tail / prev_tail")

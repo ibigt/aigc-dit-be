@@ -86,18 +86,19 @@ public class DramaShotBatchGenerateService {
         assertNoRunningJob(episodeId);
 
         String mode = DramaVideoGenerateModes.canonical(req.getVideoGenerateMode());
-        boolean chainPrevTail = Boolean.TRUE.equals(req.getChainPrevTail());
+        // 参考图批量不再支持「应用上一镜尾帧」，始终并行；串行仅用于 i2v 引用上一镜尾帧
+        boolean chainPrevTail = false;
         String i2vFrame = normalizeI2vFrameMode(mode, req.getI2vFirstFrameMode());
         boolean firstShotAutoStill = req.getFirstShotAutoStill() == null || Boolean.TRUE.equals(req.getFirstShotAutoStill());
-        boolean concurrent = resolveConcurrent(mode, chainPrevTail, i2vFrame);
+        boolean concurrent = resolveConcurrent(mode, i2vFrame);
 
         List<DramaShot> selected = resolveSelectedShots(episodeId, req.getShotIds());
         assertChaptersPresent(selected);
         if (!concurrent) {
-            assertSequentialDeps(selected, chainPrevTail || I2V_FRAME_PREV_TAIL.equals(i2vFrame));
+            assertSequentialDeps(selected, I2V_FRAME_PREV_TAIL.equals(i2vFrame));
         }
 
-        applyBatchSettings(selected, mode, chainPrevTail, i2vFrame, firstShotAutoStill);
+        applyBatchSettings(selected, mode, i2vFrame, firstShotAutoStill);
 
         DramaShotBatchJob job = new DramaShotBatchJob();
         job.setEpisodeId(episodeId);
@@ -391,6 +392,13 @@ public class DramaShotBatchGenerateService {
         if (shot == null) {
             throw new BizException(ErrorCode.BAD_REQUEST, "分镜已不存在");
         }
+        DramaShotBatchJob job = item.getJobId() == null ? null : jobMapper.selectById(item.getJobId());
+        if (job != null
+                && DramaVideoGenerateModes.isI2v(job.getVideoGenerateMode())
+                && I2V_FRAME_PREV_TAIL.equals(job.getI2vFirstFrameMode())) {
+            // 场首镜无同场上一镜时跳过，由 generateShotForBatch 走开场静帧
+            storyboardService.attachPrevTailForBatch(shot.getId());
+        }
         DramaShotGenerateResp resp = storyboardService.generateShotForBatch(shot.getId());
         Long taskId = resp != null && resp.getTask() != null
                 ? resp.getTask().getId()
@@ -449,7 +457,6 @@ public class DramaShotBatchGenerateService {
     private void applyBatchSettings(
             List<DramaShot> shots,
             String mode,
-            boolean chainPrevTail,
             String i2vFrame,
             boolean firstShotAutoStill) {
         Set<Long> chapterIds = shots.stream().map(DramaShot::getChapterId).collect(Collectors.toSet());
@@ -468,8 +475,8 @@ public class DramaShotBatchGenerateService {
         for (DramaShot shot : shots) {
             boolean firstInChapter = Objects.equals(shot.getShotIndex(), chapterMinIndex.get(shot.getChapterId()));
             shot.setVideoGenerateMode(mode);
+            shot.setVideoChainPrevTail(false);
             if (DramaVideoGenerateModes.isI2v(mode)) {
-                shot.setVideoChainPrevTail(false);
                 shot.setFirstFrameKey(null);
                 shot.setFirstFrameOrigin(null);
                 // prev-tail 不预挂载；场首 + auto / firstShotAutoStill 走静帧链路，保持无首帧即可
@@ -479,8 +486,6 @@ public class DramaShotBatchGenerateService {
                     throw new BizException(ErrorCode.BAD_REQUEST,
                             "场内第一镜引用上一镜落幅时，请开启「场内第一镜自动生成首帧」");
                 }
-            } else {
-                shot.setVideoChainPrevTail(chainPrevTail && !firstInChapter);
             }
             shotMapper.updateById(shot);
         }
@@ -576,9 +581,10 @@ public class DramaShotBatchGenerateService {
         }
     }
 
-    static boolean resolveConcurrent(String mode, boolean chainPrevTail, String i2vFrame) {
+    /** 参考图始终并行；首尾帧仅在「自动生成」时并行，「引用上一镜尾帧」时串行。 */
+    static boolean resolveConcurrent(String mode, String i2vFrame) {
         if (DramaVideoGenerateModes.isR2v(mode)) {
-            return !chainPrevTail;
+            return true;
         }
         return I2V_FRAME_AUTO.equals(i2vFrame);
     }
