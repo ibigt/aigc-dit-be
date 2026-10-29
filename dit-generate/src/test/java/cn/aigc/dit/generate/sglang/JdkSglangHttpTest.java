@@ -28,6 +28,9 @@ class JdkSglangHttpTest {
         ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
         verify(client, times(3)).send(captor.capture(), org.mockito.ArgumentMatchers.<HttpResponse.BodyHandler<byte[]>>any());
         var requests = captor.getAllValues();
+        assertEquals(java.time.Duration.ofHours(1), requests.get(0).timeout().orElseThrow());
+        assertEquals(java.time.Duration.ofSeconds(600), requests.get(1).timeout().orElseThrow());
+        assertEquals(java.time.Duration.ofSeconds(60), requests.get(2).timeout().orElseThrow());
         for (HttpRequest request : requests) {
             assertEquals(HttpClient.Version.HTTP_1_1, request.version().orElseThrow());
         }

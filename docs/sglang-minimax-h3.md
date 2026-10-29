@@ -40,3 +40,29 @@
 参考素材会转换为有效期 24 小时的对象存储预签名下载地址，SGLang 服务器必须能访问这些地址。后端在 Docker 中运行时，服务地址不能填写容器自身的 `127.0.0.1`；应使用可达的宿主机或模型服务器地址。
 
 测试连接只读调用 `GET /v1/models`，不会提交生成任务。
+
+本地慢速推理的 HTTP 等待可在后端配置（以下为默认值）：
+
+```yaml
+dit:
+  generate:
+    sglang:
+      request-timeout-seconds: 3600
+      poll-timeout-seconds: 60
+      download-timeout-seconds: 600
+```
+
+提交等待上限为 1 小时，查询单次等待为 60 秒；查询遇到临时 HTTP 5xx 或网络超时会继续轮询。服务端主动返回 HTTP 500 不会因增大客户端超时而消失。提交失败且未收到任务 ID 时，不自动重复提交，因为远端可能已受理并开始生成。需核查 SGLang 服务端异常堆栈及任务状态。
+
+本地慢速推理的 HTTP 等待可在后端配置（以下为默认值）：
+
+```yaml
+dit:
+  generate:
+    sglang:
+      request-timeout-seconds: 3600
+      poll-timeout-seconds: 60
+      download-timeout-seconds: 600
+```
+
+提交等待上限为 1 小时，查询单次等待为 60 秒；查询遇到临时 HTTP 5xx 或网络超时会继续轮询。服务端主动返回 HTTP 500 不会因增大客户端超时而消失。提交失败且未收到任务 ID 时，不自动重复提交，因为远端可能已受理并开始生成。需核查 SGLang 服务端异常堆栈及任务状态。
