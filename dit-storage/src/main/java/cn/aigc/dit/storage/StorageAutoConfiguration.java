@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
+import software.amazon.awssdk.http.apache.ApacheHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
@@ -19,6 +20,11 @@ import java.time.Duration;
 @EnableConfigurationProperties(StorageProperties.class)
 public class StorageAutoConfiguration {
 
+    /** 空闲超过该时间的连接不再复用，避免池里留下对端已失效的 TCP。 */
+    private static final Duration CONNECTION_MAX_IDLE = Duration.ofSeconds(20);
+    /** 连接最长存活时间；到期后下次请求换新连接。 */
+    private static final Duration CONNECTION_TTL = Duration.ofSeconds(60);
+
     @Bean(destroyMethod = "close")
     @Conditional(S3ConfiguredCondition.class)
     public S3Client s3Client(StorageProperties properties) {
@@ -29,6 +35,10 @@ public class StorageAutoConfiguration {
                 .serviceConfiguration(S3Configuration.builder()
                         .pathStyleAccessEnabled(properties.isPathStyle())
                         .build())
+                .httpClientBuilder(ApacheHttpClient.builder()
+                        .tcpKeepAlive(true)
+                        .connectionMaxIdleTime(CONNECTION_MAX_IDLE)
+                        .connectionTimeToLive(CONNECTION_TTL))
                 .overrideConfiguration(clientTimeouts())
                 .build();
     }

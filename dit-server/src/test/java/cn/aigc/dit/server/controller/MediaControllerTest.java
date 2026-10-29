@@ -1,9 +1,12 @@
 package cn.aigc.dit.server.controller;
 
+import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.media.ImageThumbnails;
 import cn.aigc.dit.storage.LocalObjectStorage;
+import cn.aigc.dit.storage.ObjectStorage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,7 +18,9 @@ import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -125,6 +130,61 @@ class MediaControllerTest {
     void missingImageThumbnailReturnsNotFoundWithoutReading() {
         var response = controller.get("users/7/outputs/287/1.png", 480, null, new HttpHeaders());
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    }
+
+    @Test
+    void storageTimeoutIsUnavailableAndNotCached() {
+        MediaController blocked = new MediaController(unavailableStorage());
+        var thumbnail = blocked.get("users/7/outputs/1.png", 480, null, new HttpHeaders());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, thumbnail.getStatusCode());
+        assertEquals("no-store", thumbnail.getHeaders().getCacheControl());
+
+        var original = blocked.get("users/7/outputs/1.png", null, null, new HttpHeaders());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, original.getStatusCode());
+        assertEquals("no-store", original.getHeaders().getCacheControl());
+    }
+
+    private static ObjectStorage unavailableStorage() {
+        return new ObjectStorage() {
+            @Override
+            public void put(String storageKey, InputStream content, long contentLength, String contentType) {
+                throw unavailable();
+            }
+
+            @Override
+            public InputStream get(String storageKey) {
+                throw unavailable();
+            }
+
+            @Override
+            public boolean exists(String storageKey) {
+                throw unavailable();
+            }
+
+            @Override
+            public long size(String storageKey) {
+                throw unavailable();
+            }
+
+            @Override
+            public void delete(String storageKey) {
+                throw unavailable();
+            }
+
+            @Override
+            public String presignGet(String storageKey, Duration expiry) {
+                throw unavailable();
+            }
+
+            @Override
+            public String presignPut(String storageKey, Duration expiry, String contentType) {
+                throw unavailable();
+            }
+
+            private BizException unavailable() {
+                return new BizException(ErrorCode.UNAVAILABLE, "对象存储暂不可用");
+            }
+        };
     }
 
     private boolean objectExists(String key) {
