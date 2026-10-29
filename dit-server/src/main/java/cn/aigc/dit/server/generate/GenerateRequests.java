@@ -52,6 +52,8 @@ public final class GenerateRequests {
                 .setEmotion(blankToNull(req.getEmotion()))
                 .setLyrics(blankToNull(req.getLyrics()))
                 .setInstrumental(req.getInstrumental())
+                .setMusicStyle(blankToNull(req.getMusicStyle()))
+                .setMusicDuration(req.getMusicDuration())
                 .setSpeed(req.getSpeed())
                 .setAudioFormat(blankToNull(req.getAudioFormat()))
                 .setCopies(req.getCopies() == null ? 1 : req.getCopies())
@@ -140,6 +142,8 @@ public final class GenerateRequests {
         params.put("emotion", request.getEmotion());
         params.put("lyrics", request.getLyrics());
         params.put("instrumental", request.getInstrumental());
+        params.put("musicStyle", request.getMusicStyle());
+        params.put("musicDuration", request.getMusicDuration());
         params.put("speed", request.getSpeed());
         params.put("audioFormat", request.getAudioFormat());
         params.put("copies", request.resolvedCopies());
@@ -207,6 +211,8 @@ public final class GenerateRequests {
                 .setEmotion(stringVal(params.get("emotion"), null))
                 .setLyrics(stringVal(params.get("lyrics"), null))
                 .setInstrumental(params.get("instrumental") instanceof Boolean flag ? flag : null)
+                .setMusicStyle(stringVal(params.get("musicStyle"), null))
+                .setMusicDuration(doubleVal(params.get("musicDuration")))
                 .setSpeed(doubleVal(params.get("speed")))
                 .setAudioFormat(stringVal(params.get("audioFormat"), null))
                 .setCopies(task.getCopies() == null ? intVal(params.get("copies")) : task.getCopies())

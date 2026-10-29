@@ -53,6 +53,13 @@ public class GenerateSubmitReq {
     @Size(max = 4096)
     private String lyrics;
     private Boolean instrumental;
+    @Size(max = 64)
+    @Schema(description = "AI 音乐风格，仅 audio/music 使用")
+    private String musicStyle;
+    @DecimalMin("5.0")
+    @DecimalMax("300.0")
+    @Schema(description = "AI 音乐目标时长（秒），仅 audio/music 使用")
+    private Double musicDuration;
 
     @DecimalMin("0.25")
     @DecimalMax("4.0")

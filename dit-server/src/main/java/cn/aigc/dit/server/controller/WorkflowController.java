@@ -41,6 +41,22 @@ public class WorkflowController {
         return CommonResult.success(workflowService.listMine(type, q));
     }
 
+    @Operation(summary = "模板库列表，支持分类、标签、来源与关键字筛选")
+    @GetMapping("/templates")
+    public CommonResult<List<WorkflowResp>> templates(
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String tag,
+            @RequestParam(required = false) String source) {
+        return CommonResult.success(workflowService.listTemplates(category, q, tag, source));
+    }
+
+    @Operation(summary = "模板标签聚合")
+    @GetMapping("/templates/tags")
+    public CommonResult<List<String>> templateTags() {
+        return CommonResult.success(workflowService.listTemplateTags());
+    }
+
     @Operation(summary = "工作流详情，含画布")
     @GetMapping("/{id}")
     public CommonResult<WorkflowResp> get(@PathVariable Long id) {

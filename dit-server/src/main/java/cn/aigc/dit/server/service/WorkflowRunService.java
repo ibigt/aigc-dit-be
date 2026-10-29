@@ -417,6 +417,8 @@ public class WorkflowRunService {
         req.setEmotion(text(step.get("emotion")));
         req.setLyrics(text(step.get("lyrics")));
         req.setInstrumental(step.get("instrumental") instanceof Boolean flag ? flag : null);
+        req.setMusicStyle(text(step.get("musicStyle")));
+        req.setMusicDuration(step.get("musicDuration") instanceof Number number ? number.doubleValue() : null);
         String category = text(step.get("category"));
         if (!ModelCategory.AUDIO.equals(category)) {
             List<GenerateSubmitReq.ReferenceInput> refs = collectRefs(step, steps, category);

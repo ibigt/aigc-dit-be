@@ -1,0 +1,178 @@
+package cn.aigc.dit.server.service;
+
+import cn.aigc.dit.common.security.LoginUser;
+import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.entity.Workflow;
+import cn.aigc.dit.server.mapper.AiModelMapper;
+import cn.aigc.dit.server.mapper.WorkflowMapper;
+import cn.aigc.dit.server.model.resp.WorkflowResp;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class WorkflowTemplateServiceTest {
+
+    @Mock
+    private WorkflowMapper workflowMapper;
+    @Mock
+    private AiModelMapper aiModelMapper;
+
+    private WorkflowService service;
+
+    @BeforeAll
+    static void initLambdaCache() {
+        // Wrapper 的 lambda 条件需要实体元数据，脱离 Spring 上下文时手动初始化。
+        MybatisConfiguration configuration = new MybatisConfiguration();
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(configuration, ""), Workflow.class);
+    }
+
+    @BeforeEach
+    void setUp() {
+        service = new WorkflowService(workflowMapper, aiModelMapper);
+        UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
+    }
+
+    @AfterEach
+    void tearDown() {
+        UserContext.clear();
+    }
+
+    private Workflow template(String title, String code, String category, boolean builtin, String demoKey) {
+        Workflow item = new Workflow();
+        item.setId((long) Math.abs(title.hashCode()));
+        item.setTitle(title);
+        item.setDescription(title + "描述");
+        item.setType("video");
+        item.setBuiltin(builtin);
+        item.setDemoKey(demoKey);
+        item.setTemplateCode(code);
+        item.setCategory(category);
+        item.setTags(List.of("图生视频", "多参考"));
+        item.setCoverPath("/media/cover.webp");
+        item.setVersion("1.0");
+        item.setModelAdapter("minimax-h3");
+        item.setTopology(Map.of("nodes", List.of(Map.of("x", 1)), "edges", List.of()));
+        item.setDefaultParams(Map.of("ratio", "16:9"));
+        return item;
+    }
+
+    @Test
+    void listTemplatesReturnsMetadataForOfficialAndCustomTemplates() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of(
+                template("Minimax-H3 图生视频", "minimax-h3-i2v", "video", true, "image-to-video"),
+                template("我的分镜模板", null, "image", false, null)));
+
+        List<WorkflowResp> resp = service.listTemplates(null, null, null, null);
+
+        assertEquals(2, resp.size());
+        WorkflowResp official = resp.get(0);
+        assertEquals("minimax-h3-i2v", official.getTemplateCode());
+        assertEquals("video", official.getCategory());
+        assertEquals(List.of("图生视频", "多参考"), official.getTags());
+        assertEquals("/media/cover.webp", official.getCoverPath());
+        assertEquals("1.0", official.getVersion());
+        assertEquals("minimax-h3", official.getModelAdapter());
+        assertNotNull(official.getTopology());
+        assertEquals("16:9", official.getDefaultParams().get("ratio"));
+        assertTrue(official.getBuiltin());
+        assertEquals("我的分镜模板", resp.get(1).getTitle());
+    }
+
+    @Test
+    void listTemplatesAppliesCategoryFilter() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of());
+
+        service.listTemplates("image", null, null, null);
+
+        LambdaQueryWrapper<Workflow> wrapper = capturedWrapper();
+        String sql = wrapper.getTargetSql();
+        assertTrue(sql.contains("category"), "分类筛选必须落到 category 条件：" + sql);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("image"), "分类值必须写入查询参数");
+    }
+
+    @Test
+    void listTemplatesAppliesTagFilterWithJsonbContainment() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of());
+
+        service.listTemplates(null, null, "多参考", null);
+
+        LambdaQueryWrapper<Workflow> wrapper = capturedWrapper();
+        String sql = wrapper.getTargetSql();
+        assertTrue(sql.contains("@>"), "标签筛选必须使用 jsonb 包含判断：" + sql);
+        assertTrue(sql.contains("AS jsonb"), "jsonb 参数需要显式转换：" + sql);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("[\"多参考\"]"), "标签值必须写入查询参数");
+    }
+
+    @Test
+    void listTemplatesSearchesKeywordInsideJsonbTags() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of());
+
+        service.listTemplates(null, "参考", null, null);
+
+        LambdaQueryWrapper<Workflow> wrapper = capturedWrapper();
+        assertTrue(wrapper.getTargetSql().contains("tags::text"), "关键字检索需要覆盖 jsonb 标签：" + wrapper.getTargetSql());
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("%参考%"), "关键字必须写入查询参数");
+    }
+
+    @Test
+    void listTemplatesAppliesSourceFilter() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of());
+
+        service.listTemplates(null, null, null, "official");
+
+        LambdaQueryWrapper<Workflow> wrapper = capturedWrapper();
+        assertTrue(wrapper.getTargetSql().contains("builtin"), "官方来源筛选必须落到 builtin 条件：" + wrapper.getTargetSql());
+    }
+
+    @SuppressWarnings("unchecked")
+    private LambdaQueryWrapper<Workflow> capturedWrapper() {
+        ArgumentCaptor<LambdaQueryWrapper<Workflow>> captor = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(workflowMapper).selectList(captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    void listTemplateTagsAggregatesDistinctTags() {
+        when(workflowMapper.selectList(any())).thenReturn(List.of(
+                template("A", "a", "video", true, null),
+                template("B", "b", "image", true, null)));
+
+        List<String> tags = service.listTemplateTags();
+
+        assertEquals(List.of("图生视频", "多参考"), tags);
+    }
+
+    @Test
+    void getMineIncludesGraphForTemplateDetail() {
+        Workflow item = template("Minimax-H3 图生视频", "minimax-h3-i2v", "video", true, "image-to-video");
+        item.setGraph(Map.of("nodes", List.of(), "edges", List.of()));
+        when(workflowMapper.selectById(any())).thenReturn(item);
+
+        WorkflowResp resp = service.getMine(item.getId());
+
+        assertNotNull(resp.getGraph());
+        assertEquals("minimax-h3-i2v", resp.getTemplateCode());
+    }
+}

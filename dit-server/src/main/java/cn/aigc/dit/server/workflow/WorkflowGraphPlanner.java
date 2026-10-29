@@ -189,6 +189,9 @@ public final class WorkflowGraphPlanner {
             audio.put("emotion", text(media.get("emotion")));
             audio.put("lyrics", text(media.get("lyrics")));
             audio.put("instrumental", !Boolean.FALSE.equals(media.get("instrumental")));
+            // AI 音乐风格与时长（需求 4.2.4.4）：仅透传给模型适配层，未接模型的字段会被忽略
+            audio.put("musicStyle", text(media.get("musicStyle")));
+            audio.put("musicDuration", media.get("musicDuration") == null ? null : doubleValue(media.get("musicDuration"), null));
         }
         List<Output> outputs = "TEXT".equals(stepType) ? textOutputs(data) : List.of();
         return new Step(
@@ -388,9 +391,15 @@ public final class WorkflowGraphPlanner {
         }
         List<Clip> clips = new ArrayList<>();
         Set<ClipKey> used = new LinkedHashSet<>();
+        Set<String> disabled = new LinkedHashSet<>();
         for (Map<String, Object> raw : mapList(map(data.get("editing")).get("clips"))) {
             String sourceId = text(raw.get("sourceNodeId"));
             if (sourceId == null || !videos.contains(sourceId)) {
+                continue;
+            }
+            // 片段启用开关（需求 4.2.5.3）：禁用片段不参与成片合成
+            if (Boolean.FALSE.equals(raw.get("enabled"))) {
+                disabled.add(sourceId);
                 continue;
             }
             Integer outputIndex = intValue(raw.get("outputIndex"), selected.get(sourceId).outputIndex(),
@@ -410,10 +419,17 @@ public final class WorkflowGraphPlanner {
         }
         clips.sort(Comparator.comparingInt(Clip::order));
         for (String sourceId : videos) {
+            // 显式禁用的片段不再被自动补回，保证"禁用"在成片中真正生效
+            if (disabled.contains(sourceId)) {
+                continue;
+            }
             Integer outputIndex = selected.get(sourceId).outputIndex();
             if (used.stream().noneMatch(key -> key.sourceNodeId().equals(sourceId))) {
                 clips.add(new Clip(sourceId, outputIndex, clips.size(), 0, null, false, 1));
             }
+        }
+        if (clips.isEmpty()) {
+            throw new BizException("剪辑节点「" + step.title() + "」的所有片段均已禁用，请至少启用一个片段");
         }
         return List.copyOf(clips);
     }

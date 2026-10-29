@@ -227,6 +227,41 @@ class WorkflowGraphPlannerTest {
     }
 
     @Test
+    void disabledClipsAreExcludedAndNotAutoReaddedToFilmQueue() {
+        var steps = WorkflowGraphPlanner.plan(graph(List.of(
+                generator("a", "VideoGenerator", "a"),
+                generator("b", "VideoGenerator", "b"),
+                editing("edit", List.of(
+                        Map.of("sourceNodeId", "a", "outputIndex", 0, "order", 0, "enabled", false),
+                        Map.of("sourceNodeId", "b", "outputIndex", 0, "order", 1)))),
+                List.of(edge("a", "edit"), edge("b", "edit"))));
+
+        var clips = steps.get(2).clips();
+        assertEquals(List.of("b"), clips.stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
+    }
+
+    @Test
+    void allClipsDisabledRejectsWithUnderstandableError() {
+        BizException error = assertThrows(BizException.class, () -> WorkflowGraphPlanner.plan(graph(
+                List.of(generator("video", "VideoGenerator", "film"), editing("edit", List.of(
+                        Map.of("sourceNodeId", "video", "outputIndex", 0, "order", 0, "enabled", false)))),
+                List.of(edge("video", "edit")))));
+        assertTrue(error.getMessage().contains("禁用"));
+    }
+
+    @Test
+    void musicStyleAndDurationFlowIntoAudioStep() {
+        var steps = WorkflowGraphPlanner.plan(graph(List.of(
+                generator("music", "AudioGenerator", "jazz", Map.of(
+                        "tab", "music", "musicStyle", "爵士", "musicDuration", 45.0))),
+                List.of()));
+        // audio 参数存放在 step 的 audio 映射中（请求构造阶段读取）
+        var audio = steps.get(0).audio();
+        assertEquals("爵士", audio.get("musicStyle"));
+        assertEquals(45.0, audio.get("musicDuration"));
+    }
+
+    @Test
     void rejectsGeneratorSelfEdgeAsCycle() {
         Map<String, Object> graph = graph(
                 List.of(generator("video", "VideoGenerator", "视频")),

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,12 +39,66 @@ public class WorkflowService {
             String keyword = q.trim();
             wrapper.and(nested -> nested.like(Workflow::getTitle, keyword).or().like(Workflow::getModelLabel, keyword));
         }
-        wrapper.orderByDesc(Workflow::getBuiltin).orderByDesc(Workflow::getUpdatedAt);
+        wrapper.orderByAsc(Workflow::getBuiltin)
+                .orderByDesc(Workflow::getUpdatedAt)
+                .orderByDesc(Workflow::getId);
         return workflowMapper.selectList(wrapper).stream().map(item -> toResp(item, false)).toList();
     }
 
     public WorkflowResp getMine(Long id) {
         return toResp(requireReadable(id), true);
+    }
+
+    /**
+     * 模板库列表（需求 4.3.1.3）：官方模板 + 用户自定义模板，支持分类、标签、来源与关键字筛选。
+     * tags 为 jsonb 数组，Postgres 不支持 LIKE，需用 ::text 匹配或 jsonb 包含判断。
+     */
+    public List<WorkflowResp> listTemplates(String category, String q, String tag, String source) {
+        Long userId = UserContext.requireUserId();
+        boolean officialOnly = "official".equalsIgnoreCase(StringUtils.trimWhitespace(source));
+        boolean customOnly = "custom".equalsIgnoreCase(StringUtils.trimWhitespace(source));
+        LambdaQueryWrapper<Workflow> wrapper = new LambdaQueryWrapper<>();
+        if (customOnly) {
+            wrapper.eq(Workflow::getUserId, userId).eq(Workflow::getType, "template");
+        } else if (officialOnly) {
+            wrapper.eq(Workflow::getBuiltin, true);
+        } else {
+            wrapper.and(nested -> nested.eq(Workflow::getBuiltin, true)
+                    .or(nested2 -> nested2.eq(Workflow::getUserId, userId).eq(Workflow::getType, "template")));
+        }
+        if (StringUtils.hasText(category)) {
+            wrapper.eq(Workflow::getCategory, category.trim().toLowerCase());
+        }
+        if (StringUtils.hasText(tag)) {
+            wrapper.apply("tags @> CAST({0} AS jsonb)", jsonArray(tag.trim()));
+        }
+        if (StringUtils.hasText(q)) {
+            String keyword = q.trim();
+            wrapper.and(nested -> nested.like(Workflow::getTitle, keyword)
+                    .or().like(Workflow::getDescription, keyword)
+                    .or().like(Workflow::getModelLabel, keyword)
+                    .or().apply("tags::text LIKE {0}", "%" + keyword + "%"));
+        }
+        wrapper.orderByDesc(Workflow::getBuiltin).orderByDesc(Workflow::getUpdatedAt);
+        return workflowMapper.selectList(wrapper).stream().map(item -> toResp(item, false)).toList();
+    }
+
+    private static String jsonArray(String value) {
+        return "[\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"]";
+    }
+
+    /** 模板标签聚合，供前端渲染标签筛选条。 */
+    public List<String> listTemplateTags() {
+        List<Workflow> templates = workflowMapper.selectList(new LambdaQueryWrapper<Workflow>()
+                .and(nested -> nested.eq(Workflow::getBuiltin, true)
+                        .or(nested2 -> nested2.eq(Workflow::getUserId, UserContext.requireUserId()).eq(Workflow::getType, "template"))));
+        Set<String> tags = new LinkedHashSet<>();
+        templates.forEach(item -> {
+            if (item.getTags() != null) {
+                tags.addAll(item.getTags());
+            }
+        });
+        return List.copyOf(tags);
     }
 
     public WorkflowResp create(WorkflowSaveReq req) {
@@ -138,6 +193,14 @@ public class WorkflowService {
         resp.setNodeCount(workflow.getNodeCount());
         resp.setCreatedAt(workflow.getCreatedAt());
         resp.setUpdatedAt(workflow.getUpdatedAt());
+        resp.setTemplateCode(workflow.getTemplateCode());
+        resp.setCategory(workflow.getCategory());
+        resp.setTags(workflow.getTags());
+        resp.setCoverPath(workflow.getCoverPath());
+        resp.setVersion(workflow.getVersion());
+        resp.setModelAdapter(workflow.getModelAdapter());
+        resp.setTopology(workflow.getTopology());
+        resp.setDefaultParams(workflow.getDefaultParams());
         if (includeGraph) {
             resp.setGraph(workflow.getGraph());
         }

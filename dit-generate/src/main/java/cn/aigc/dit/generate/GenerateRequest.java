@@ -32,6 +32,10 @@ public class GenerateRequest {
     private String emotion;
     private String lyrics;
     private Boolean instrumental;
+    /** AI 音乐风格（需求 4.2.4.4）；未接模型的适配器会忽略该字段。 */
+    private String musicStyle;
+    /** AI 音乐目标时长（秒）。 */
+    private Double musicDuration;
     private Double speed;
     private String audioFormat;
     private Integer copies = 1;
@@ -177,6 +181,10 @@ public class GenerateRequest {
     public GenerateRequest setLyrics(String value) { lyrics = value; return this; }
     public Boolean getInstrumental() { return instrumental; }
     public GenerateRequest setInstrumental(Boolean value) { instrumental = value; return this; }
+    public String getMusicStyle() { return musicStyle; }
+    public GenerateRequest setMusicStyle(String value) { musicStyle = value; return this; }
+    public Double getMusicDuration() { return musicDuration; }
+    public GenerateRequest setMusicDuration(Double value) { musicDuration = value; return this; }
 
     public GenerateRequest setVoiceId(String voiceId) {
         this.voiceId = voiceId;
