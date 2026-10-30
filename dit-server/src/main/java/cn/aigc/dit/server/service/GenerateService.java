@@ -101,7 +101,10 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 billingQuantity(model, request),
                 request.resolvedCopies(),
                 referenceVideoSeconds(request));
-        boolean bindSession = GenerateRequests.bindsQuickCreate(extraParams);
+        // 工作台生成的产物只进「我的创作」，不绑快速创作会话：bindsQuickCreate 的判定是
+        // 「不是短剧就算快速创作」，高级工作台出现后该前提不再成立，须显式排除
+        boolean workflowRun = extraParams != null && extraParams.containsKey("workflowRunId");
+        boolean bindSession = !workflowRun && GenerateRequests.bindsQuickCreate(extraParams);
         CreationSession session = bindSession
                 ? creationService.ensureSession(req.getSessionId(), userId, request.getCategory(), request.getPrompt())
                 : null;
@@ -264,6 +267,53 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         }
         return task;
     }
+
+    /** 用户取消自己的生成任务：仅等待中/运行中可取消。 */
+    public void cancelOwned(Long taskId) {
+        GenTask task = requireOwned(taskId);
+        if (!TaskStatus.PENDING.equals(task.getStatus()) && !TaskStatus.RUNNING.equals(task.getStatus())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "仅等待中或运行中的任务可取消");
+        }
+        cancelTaskIfActive(taskId, "用户取消退还积分");
+    }
+
+    /**
+     * 幂等取消：任务已终结（成功/失败/已取消）则原样跳过。
+     * 持 worker 任务锁执行，避免与生成收尾竞态；worker 全链路对 CANCELLED 有守卫，不会再接手。
+     * 未提交到供应商（无 providerJobId）的任务退还预扣积分，已提交的可能产生真实成本不退。
+     */
+    public boolean cancelTaskIfActive(Long taskId, String refundRemark) {
+        GenerateWorker worker = generateWorker.getIfAvailable();
+        boolean[] cancelled = {false};
+        Runnable action = () -> {
+            GenTask task = getById(taskId);
+            if (task == null
+                    || (!TaskStatus.PENDING.equals(task.getStatus()) && !TaskStatus.RUNNING.equals(task.getStatus()))) {
+                return;
+            }
+            if (worker != null) {
+                worker.cancelProviderJob(task);
+            }
+            baseMapper.markCancelled(taskId);
+            if (!org.springframework.util.StringUtils.hasText(task.getProviderJobId())
+                    && task.getCreditCost() != null && task.getCreditCost() > 0) {
+                try {
+                    creditService.change(task.getUserId(), task.getCreditCost(), CreditReason.REFUND,
+                            String.valueOf(taskId), refundRemark);
+                } catch (Exception ignored) {
+                    // 退款失败不阻断取消
+                }
+            }
+            cancelled[0] = true;
+        };
+        if (worker != null) {
+            worker.withTaskLock(taskId, action);
+        } else {
+            action.run();
+        }
+        return cancelled[0];
+    }
+
 
     private static void applyAgnesGuardrails(String adapterKey, GenerateRequest request) {
         if (!AdapterCatalog.isAgnes(adapterKey)) {

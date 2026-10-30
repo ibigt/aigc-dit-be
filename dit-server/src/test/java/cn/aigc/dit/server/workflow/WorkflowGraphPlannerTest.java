@@ -205,6 +205,35 @@ class WorkflowGraphPlannerTest {
     }
 
     @Test
+    void directReferenceAssetsJoinRefsAfterEdgeStatics() {
+        // 旧画布的素材节点连线引用在前，media.referenceAssets 直接附件在后，无效 key（无斜杠）丢弃
+        var assetNode = Map.<String, Object>of("id", "ref", "data", Map.of(
+                "kind", "ReferenceAsset", "assetType", "IMAGE", "assetKey", "users/1/inputs/a.png"));
+        var target = generator("shot", "VideoGenerator", "视频", Map.of("referenceAssets", List.of(
+                Map.of("storageKey", "users/1/assets/b.mp4", "type", "VIDEO"),
+                Map.of("storageKey", "racer-first", "type", "IMAGE"),
+                Map.of("storageKey", "users/1/assets/c.png", "type", "IMAGE"))));
+        // 素材节点不是可执行步骤，计划里只有目标生成节点
+        var steps = WorkflowGraphPlanner.plan(graph(List.of(assetNode, target), List.of(edge("ref", "shot"))));
+        assertEquals(List.of("shot"), steps.stream().map(WorkflowGraphPlanner.Step::nodeId).toList());
+        var refs = steps.get(0).refs();
+        assertEquals(List.of("users/1/inputs/a.png", "users/1/assets/b.mp4", "users/1/assets/c.png"),
+                refs.stream().map(WorkflowGraphPlanner.Ref::storageKey).toList());
+        assertEquals(List.of("image", "video", "image"),
+                refs.stream().map(WorkflowGraphPlanner.Ref::type).toList());
+    }
+
+    @Test
+    void imageNodeFiltersDirectReferenceAssetsByAcceptedType() {
+        var target = generator("shot", "ImageGenerator", "图像", Map.of("referenceAssets", List.of(
+                Map.of("storageKey", "users/1/assets/v.mp4", "type", "video"),
+                Map.of("storageKey", "users/1/assets/c.png", "type", "IMAGE"))));
+        var steps = WorkflowGraphPlanner.plan(graph(List.of(target), List.of()));
+        assertEquals(List.of("users/1/assets/c.png"),
+                steps.get(0).refs().stream().map(WorkflowGraphPlanner.Ref::storageKey).toList());
+    }
+
+    @Test
     void rejectsReversedTrimInsteadOfSilentlyResettingIt() {
         BizException error = assertThrows(BizException.class, () -> WorkflowGraphPlanner.plan(graph(
                 List.of(generator("video", "VideoGenerator", "film"), editing("edit", List.of(

@@ -41,6 +41,8 @@ import java.util.Map;
 public class WorkflowRunService {
 
     private static final int MAX_REUSE_RUNS = 50;
+    /** 上游产物落盘等待上限：超过即判定素材缺失，避免把「文件还没写完」当成生成失败白扣积分。 */
+    private static final long REF_WAIT_MILLIS = 90_000L;
 
     private final WorkflowRunMapper workflowRunMapper;
     private final GenTaskMapper genTaskMapper;
@@ -50,6 +52,10 @@ public class WorkflowRunService {
     private final WorkflowRunLock workflowRunLock;
     private final WorkflowFilmComposer filmComposer;
     private final CreationService creationService;
+    private final cn.aigc.dit.storage.ObjectStorage objectStorage;
+    /** 视频→视频串联时抽上游视频尾帧作下游首帧；非 final + 可选注入，不改动现有构造器。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private cn.aigc.dit.generate.poster.PosterExtractor posterExtractor;
 
     public WorkflowRunResp start(WorkflowRunReq req) {
         if (req.getWorkflowId() != null) {
@@ -101,6 +107,70 @@ public class WorkflowRunService {
         workflowService.requireReadable(workflowId);
         WorkflowRun run = latestOwned(workflowId);
         return run == null ? null : getMine(run.getId());
+    }
+
+    /**
+     * 用户取消运行：nodeId 为空取消整个运行（终态 CANCELLED）；
+     * 带 nodeId 只取消该节点步骤，其余步骤照常推进（终态由后续推进收敛）。
+     */
+    public WorkflowRunResp cancelMine(Long id, String nodeId) {
+        WorkflowRun run = requireOwned(id);
+        if (!TaskStatus.RUNNING.equals(run.getStatus())) {
+            if (nodeId != null) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "运行已结束");
+            }
+            return toResp(run);
+        }
+        boolean wholeRun = nodeId == null;
+        try (WorkflowRunLock.Handle lock = workflowRunLock.tryAcquire(id)) {
+            if (lock != null) {
+                run = workflowRunMapper.selectById(id);
+                if (TaskStatus.RUNNING.equals(run.getStatus())) {
+                    List<Map<String, Object>> steps = copySteps(run.getSteps());
+                    boolean changed = false;
+                    for (Map<String, Object> step : steps) {
+                        if (isTerminalStep(step)) {
+                            continue;
+                        }
+                        if (!wholeRun && !java.util.Objects.equals(nodeId, text(step.get("nodeId")))) {
+                            continue;
+                        }
+                        Long taskId = longValue(step.get("taskId"));
+                        if (taskId != null) {
+                            generateService.cancelTaskIfActive(taskId, "取消工作流退还积分");
+                        }
+                        step.put("status", TaskStatus.FAILED);
+                        step.put("error", "已取消");
+                        changed = true;
+                    }
+                    if (changed) {
+                        if (wholeRun || allTerminal(steps)) {
+                            finish(run, steps, TaskStatus.CANCELLED, "已取消");
+                        } else {
+                            run.setSteps(steps);
+                            run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+                            workflowRunMapper.updateById(run);
+                        }
+                    }
+                }
+            } else {
+                // 锁被定时推进占用：先幂等取消任务（worker/推进均尊重 CANCELLED），状态由 tick 收敛
+                for (Map<String, Object> step : copySteps(run.getSteps())) {
+                    Long taskId = longValue(step.get("taskId"));
+                    if (!isTerminalStep(step) && taskId != null
+                            && (wholeRun || java.util.Objects.equals(nodeId, text(step.get("nodeId"))))) {
+                        generateService.cancelTaskIfActive(taskId, "取消工作流退还积分");
+                    }
+                }
+                advance(id);
+            }
+        }
+        return toResp(requireOwned(id));
+    }
+
+    private static boolean isTerminalStep(Map<String, Object> step) {
+        String status = text(step.get("status"));
+        return TaskStatus.SUCCEEDED.equals(status) || TaskStatus.FAILED.equals(status) || "BLOCKED".equals(status);
     }
 
     public WorkflowSnapshotResp snapshotMine(Long workflowId) {
@@ -209,6 +279,8 @@ public class WorkflowRunService {
         List<Map<String, Object>> steps = copySteps(run.getSteps());
         boolean changed = refreshTasks(steps);
         changed |= markBlockedDependents(steps);
+        log.debug("workflow run {} pass={}", runId,
+                steps.stream().map(item -> item.get("nodeId") + ":" + item.get("status") + ":" + item.get("taskId")).toList());
         for (Map<String, Object> step : steps) {
             String status = text(step.get("status"));
             if (!"PENDING".equals(status) && !"SUBMITTING".equals(status) && !"EDITING".equals(status)) {
@@ -220,6 +292,23 @@ public class WorkflowRunService {
             if (step.get("inputFingerprint") == null) {
                 step.put("inputFingerprint", WorkflowStepFingerprint.of(step, steps));
             }
+            // 上游产物落盘检查：上游任务已成功但对象还没写完时先等一会，避免下游拿空引用提交后白扣积分
+            String missingRef = missingReferenceKey(step, steps);
+            if (missingRef != null) {
+                long since = longValue(step.get("refWaitAt")) == null ? 0L : longValue(step.get("refWaitAt"));
+                long now = System.currentTimeMillis();
+                if (since == 0L) {
+                    step.put("refWaitAt", now);
+                    step.put("error", "等待上游素材落盘");
+                    changed = true;
+                } else if (now - since > REF_WAIT_MILLIS) {
+                    step.put("status", TaskStatus.FAILED);
+                    step.put("error", "上游素材缺失：" + missingRef);
+                    changed = true;
+                }
+                continue;
+            }
+            step.remove("refWaitAt");
             if (longValue(step.get("taskId")) != null) {
                 step.put("status", TaskStatus.RUNNING);
                 changed = true;
@@ -332,7 +421,8 @@ public class WorkflowRunService {
     private boolean refreshTasks(List<Map<String, Object>> steps) {
         boolean changed = false;
         for (Map<String, Object> step : steps) {
-            if (!TaskStatus.RUNNING.equals(text(step.get("status")))) {
+            String stepStatus = text(step.get("status"));
+            if (!TaskStatus.RUNNING.equals(stepStatus) && !"QUEUED".equals(stepStatus)) {
                 continue;
             }
             Long taskId = longValue(step.get("taskId"));
@@ -353,7 +443,25 @@ public class WorkflowRunService {
                 step.put("creditCost", task.getCreditCost());
                 changed = true;
             }
+            if (TaskStatus.PENDING.equals(task.getStatus())) {
+                if (!"QUEUED".equals(stepStatus)
+                        || !java.util.Objects.equals(step.get("error"), task.getErrorMessage())
+                        || (task.getProgress() != null && !task.getProgress().equals(step.get("progress")))) {
+                    step.put("status", "QUEUED");
+                    step.put("error", task.getErrorMessage());
+                    step.put("progress", task.getProgress());
+                    changed = true;
+                }
+                continue;
+            }
+            if (TaskStatus.RUNNING.equals(task.getStatus()) && !"RUNNING".equals(stepStatus)) {
+                step.put("status", TaskStatus.RUNNING);
+                step.put("error", null);
+                changed = true;
+            }
             if (TaskStatus.SUCCEEDED.equals(task.getStatus())) {
+                log.info("workflow node {} task {} succeeded keys={}",
+                        step.get("nodeId"), taskId, task.getOutputKeys());
                 step.put("status", TaskStatus.SUCCEEDED);
                 step.put("outputStorageKey", task.getOutputStorageKey());
                 List<String> keys = task.getOutputKeys() == null || task.getOutputKeys().isEmpty()
@@ -422,14 +530,31 @@ public class WorkflowRunService {
         String category = text(step.get("category"));
         if (!ModelCategory.AUDIO.equals(category)) {
             List<GenerateSubmitReq.ReferenceInput> refs = collectRefs(step, steps, category);
+            log.info("workflow submit node={} refs={}", step.get("nodeId"),
+                    refs.stream().map(GenerateSubmitReq.ReferenceInput::getStorageKey).toList());
             if (Boolean.TRUE.equals(step.get("frameMode"))) {
-                List<GenerateSubmitReq.ReferenceInput> images = refs.stream()
+                // 参考帧（B2）：优先显式图框（media.frames），缺省回落到连线引用顺序
+                // （上游视频尾帧排最前作首帧，第 2 张图作尾帧），尾帧可省略；
+                // 帧素材转 FrameInput 后从 references 剔除（官方首尾帧与参考素材互斥）
+                String firstFrameKey = text(step.get("firstFrameKey"));
+                String lastFrameKey = text(step.get("lastFrameKey"));
+                List<GenerateSubmitReq.ReferenceInput> images = firstFrameKey != null ? List.of()
+                        : refs.stream()
                         .filter(ref -> ModelCategory.IMAGE.equals(ref.getType()))
                         .toList();
-                if (images.size() >= 2) {
+                if (firstFrameKey != null || !images.isEmpty()) {
                     GenerateSubmitReq.FrameInput frames = new GenerateSubmitReq.FrameInput();
-                    frames.setFirstFrameKey(images.get(0).getStorageKey());
-                    frames.setLastFrameKey(images.get(1).getStorageKey());
+                    if (firstFrameKey != null) {
+                        frames.setFirstFrameKey(firstFrameKey);
+                        frames.setLastFrameKey(lastFrameKey);
+                    } else {
+                        frames.setFirstFrameKey(images.get(0).getStorageKey());
+                        if (lastFrameKey != null) {
+                            frames.setLastFrameKey(lastFrameKey);
+                        } else if (images.size() >= 2) {
+                            frames.setLastFrameKey(images.get(1).getStorageKey());
+                        }
+                    }
                     req.setFrames(frames);
                     refs = refs.stream().filter(ref -> !ModelCategory.IMAGE.equals(ref.getType())).toList();
                 }
@@ -437,12 +562,78 @@ public class WorkflowRunService {
             if (!refs.isEmpty()) {
                 req.setReferences(refs);
             }
+            // 参考视频按秒计费（按模型最高档价）：上报上游视频秒数。
+            // 工作流产物不在素材表，服务端实测不到时长，故用上游步骤产物里的时长兜底。
+            int referenceVideoSeconds = referenceVideoSeconds(step, steps);
+            if (referenceVideoSeconds > 0) {
+                // D2 后端兜底：参考视频总时长不得超 30s（对齐 Seedance 2.5 上限），超限直接拦截运行。
+                if (referenceVideoSeconds > REFERENCE_VIDEO_MAX_SECONDS) {
+                    throw new BizException("参考视频档「" + step.get("title") + "」参考视频总时长 "
+                            + referenceVideoSeconds + " 秒超过上限 " + REFERENCE_VIDEO_MAX_SECONDS
+                            + " 秒，请减少视频参考数量或缩短片段");
+                }
+                req.setReferenceVideoSeconds(referenceVideoSeconds);
+            }
         }
         return req;
     }
 
+    /**
+     * 「参考视频」模式的上游视频合计秒数：取各上游视频产物的 metadata 时长（秒），
+     * 与后端 CreditCalculator 的「参考视频按最高档价计费」口径对齐。
+     */
+    private int referenceVideoSeconds(Map<String, Object> step, List<Map<String, Object>> steps) {
+        if (!Boolean.TRUE.equals(step.get("videoRefMode"))) {
+            return 0;
+        }
+        int total = 0;
+        for (String depId : strings(step.get("dependsOn"))) {
+            Map<String, Object> dep = steps.stream()
+                    .filter(item -> depId.equals(text(item.get("nodeId")))).findFirst().orElse(null);
+            if (dep == null) {
+                continue;
+            }
+            Map<?, ?> output = selectedOutput(dep);
+            String type = output == null ? text(dep.get("category")) : text(output.get("type"));
+            if (type == null || !ModelCategory.VIDEO.equalsIgnoreCase(type)) {
+                continue;
+            }
+            if (!(output != null && output.get("metadata") instanceof Map<?, ?> metadata)) {
+                continue;
+            }
+            Double seconds = doubleValue(metadata.get("durationSec"));
+            if (seconds == null) {
+                Double durationMs = doubleValue(metadata.get("durationMs"));
+                seconds = durationMs == null ? null : durationMs / 1000;
+            }
+            if (seconds != null && seconds > 0) {
+                total += (int) Math.max(1, Math.round(seconds));
+            }
+        }
+        return total;
+    }
+
+    /** 上游引用是否都已落盘；返回第一个缺失的 key，全部就绪返回 null。 */
+    private String missingReferenceKey(Map<String, Object> step, List<Map<String, Object>> steps) {
+        String category = text(step.get("category"));
+        if (ModelCategory.AUDIO.equals(category)) {
+            return null;
+        }
+        for (GenerateSubmitReq.ReferenceInput ref : collectRefs(step, steps, category)) {
+            if (ref.getStorageKey() != null && !objectStorage.exists(ref.getStorageKey())) {
+                return ref.getStorageKey();
+            }
+        }
+        return null;
+    }
+
     private List<GenerateSubmitReq.ReferenceInput> collectRefs(Map<String, Object> step, List<Map<String, Object>> steps, String category) {
         List<GenerateSubmitReq.ReferenceInput> refs = new ArrayList<>();
+        boolean frameMode = Boolean.TRUE.equals(step.get("frameMode"));
+        boolean videoRefMode = Boolean.TRUE.equals(step.get("videoRefMode"));
+        // 显式首尾帧图框（B2）：参考帧档不从参考素材取帧素材（与参考素材互斥），直接置空引用列表
+        boolean explicitFrames = frameMode
+                && (text(step.get("firstFrameKey")) != null || text(step.get("lastFrameKey")) != null);
         if (step.get("staticRefs") instanceof List<?> raw) {
             for (Object item : raw) {
                 if (item instanceof Map<?, ?> map) {
@@ -450,16 +641,66 @@ public class WorkflowRunService {
                 }
             }
         }
+        List<GenerateSubmitReq.ReferenceInput> tailFrames = new ArrayList<>();
         for (String depId : strings(step.get("dependsOn"))) {
             Map<String, Object> dep = steps.stream().filter(item -> depId.equals(text(item.get("nodeId")))).findFirst().orElse(null);
             if (dep == null) {
                 continue;
             }
             Map<?, ?> output = selectedOutput(dep);
-            addRef(refs, output == null ? text(dep.get("category")) : text(output.get("type")),
-                    output == null ? text(dep.get("outputStorageKey")) : text(output.get("storageKey")), category);
+            String type = output == null ? text(dep.get("category")) : text(output.get("type"));
+            String key = output == null ? text(dep.get("outputStorageKey")) : text(output.get("storageKey"));
+            // 视频→视频连线：「参考视频」档（默认）整段透传给模型（保留动作/运镜）；
+            // 「参考帧」档走首尾帧，上游视频抽尾帧作首帧素材（写入 tailFrames，转 FrameInput）
+            if (ModelCategory.VIDEO.equals(category) && type != null
+                    && ModelCategory.VIDEO.equalsIgnoreCase(type) && WorkflowGraphPlanner.storageKey(key)) {
+                if (videoRefMode) {
+                    addRef(refs, ModelCategory.VIDEO, key, category);
+                } else {
+                    addRef(tailFrames, ModelCategory.IMAGE, tailFrameKey(key), category);
+                }
+                continue;
+            }
+            addRef(refs, type, key, category);
         }
-        return refs.size() > 15 ? refs.subList(0, 15) : refs;
+        refs.addAll(0, tailFrames);
+        // 参考帧档只接受图片：视频/音频类参考素材在这里剔除（首尾帧是硬约束，与参考素材互斥）。
+        if (frameMode) {
+            refs = refs.stream().filter(ref -> ModelCategory.IMAGE.equals(ref.getType())).toList();
+        }
+        if (explicitFrames) {
+            return List.of();
+        }
+        // 上限与 Seedance 2.5 对齐（30 图 / 10 视频 + 10 音频，合计 ≤50）；超出直接截断
+        return refs.size() > MAX_WORKFLOW_REFS ? refs.subList(0, MAX_WORKFLOW_REFS) : refs;
+    }
+
+    /** 工作流节点参考素材上限：对齐 Seedance 2.5 的合计 50 份口径（前端已按类型分别提示） */
+    private static final int MAX_WORKFLOW_REFS = 50;
+
+    /** 参考视频总时长上限（秒）：对齐 Seedance 2.5 的「视频 ≤10 段（总 30s）」约束（D2 后端兜底） */
+    private static final int REFERENCE_VIDEO_MAX_SECONDS = 30;
+
+    /**
+     * 上游视频的尾帧 key：已抽过（如分镜/之前运行）直接复用，否则现抽一次。
+     * 抽帧失败时仍返回约定 key，让 {@link #missingReferenceKey} 按「素材未落盘」等待，而不是悄悄丢掉首帧。
+     */
+    private String tailFrameKey(String videoKey) {
+        String expected = cn.aigc.dit.generate.poster.FfmpegPosterExtractor.toTailKey(videoKey);
+        try {
+            if (objectStorage.exists(expected)) {
+                return expected;
+            }
+            if (posterExtractor != null && objectStorage.exists(videoKey)) {
+                String tail = posterExtractor.extractTail(videoKey);
+                if (WorkflowGraphPlanner.storageKey(tail)) {
+                    return tail;
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("workflow tail frame extract failed key={}", videoKey, e);
+        }
+        return expected;
     }
 
     private static Map<?, ?> selectedOutput(Map<String, Object> step) {
@@ -590,6 +831,9 @@ public class WorkflowRunService {
         map.putAll(step.audio());
         map.put("modelId", modelId);
         map.put("frameMode", step.frameMode());
+        map.put("videoRefMode", step.videoRefMode());
+        map.put("firstFrameKey", step.firstFrameKey());
+        map.put("lastFrameKey", step.lastFrameKey());
         map.put("outputIndex", step.outputIndex());
         map.put("dependsOn", step.dependsOn());
         map.put("clips", step.clips().stream().map(clip -> {

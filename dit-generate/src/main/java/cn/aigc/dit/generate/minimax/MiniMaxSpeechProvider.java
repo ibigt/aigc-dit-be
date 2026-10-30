@@ -38,6 +38,23 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     static final String DEFAULT_VOICE = "male-qn-qingse";
     static final String DEFAULT_FORMAT = "mp3";
     private static final Set<String> FORMATS = Set.of("mp3", "wav", "flac", "pcm");
+    /** MiniMax speech-2.x voice_setting.emotion 的合法枚举。 */
+    private static final Set<String> EMOTION_ENUMS =
+            Set.of("happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral");
+    private static final Map<String, String> EMOTION_ALIASES = Map.ofEntries(
+            Map.entry("", ""),
+            Map.entry("默认", ""),
+            Map.entry("平静", "neutral"),
+            Map.entry("开心", "happy"),
+            Map.entry("高兴", "happy"),
+            Map.entry("悲伤", "sad"),
+            Map.entry("难过", "sad"),
+            Map.entry("愤怒", "angry"),
+            Map.entry("生气", "angry"),
+            Map.entry("恐惧", "fearful"),
+            Map.entry("害怕", "fearful"),
+            Map.entry("惊讶", "surprised"),
+            Map.entry("厌恶", "disgusted"));
 
     private final ObjectStorage objectStorage;
     private final GenerateProperties.Minimax properties;
@@ -163,11 +180,25 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
         }
     }
 
+    /** MiniMax 只认英文情感枚举，历史数据里的中文档位按映射兜底，未知值直接不下发。 */
+    private static String normalizeEmotion(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String value = raw.trim().toLowerCase();
+        String mapped = EMOTION_ALIASES.get(value);
+        if (mapped != null) {
+            return mapped.isEmpty() ? null : mapped;
+        }
+        return EMOTION_ENUMS.contains(value) ? value : null;
+    }
+
     private String toJson(GenerateRequest request, String format) {
         Map<String, Object> voice = new LinkedHashMap<>();
         voice.put("voice_id", firstNonBlank(request.getVoiceId(), configString(request, "defaultVoice"), DEFAULT_VOICE));
         voice.put("speed", request.getSpeed() == null ? 1D : request.getSpeed());
-        if (StringUtils.hasText(request.getEmotion())) voice.put("emotion", request.getEmotion());
+        String emotion = normalizeEmotion(request.getEmotion());
+        if (emotion != null) voice.put("emotion", emotion);
         voice.put("vol", configDouble(request, "volume", 1D));
         voice.put("pitch", configInt(request, "pitch", 0));
 

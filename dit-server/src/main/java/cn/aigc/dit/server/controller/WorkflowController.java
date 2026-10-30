@@ -94,6 +94,14 @@ public class WorkflowController {
         return CommonResult.success(workflowRunService.getMine(id));
     }
 
+    @Operation(summary = "取消运行中的任务；不传 nodeId 取消整个运行，传 nodeId 只取消该节点")
+    @PostMapping("/runs/{id}/cancel")
+    public CommonResult<WorkflowRunResp> cancelRun(
+            @PathVariable Long id,
+            @RequestParam(required = false) String nodeId) {
+        return CommonResult.success(workflowRunService.cancelMine(id, nodeId));
+    }
+
     @Operation(summary = "当前用户在该工作流的最近一次运行")
     @GetMapping("/{id}/runs/latest")
     public CommonResult<WorkflowRunResp> latestRun(@PathVariable Long id) {

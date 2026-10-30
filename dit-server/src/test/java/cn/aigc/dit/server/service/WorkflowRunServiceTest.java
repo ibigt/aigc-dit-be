@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
@@ -60,14 +61,16 @@ class WorkflowRunServiceTest {
     @Mock private WorkflowService workflowService;
     @Mock private WorkflowFilmComposer filmComposer;
     @Mock private CreationService creationService;
+    @Mock private cn.aigc.dit.storage.ObjectStorage objectStorage;
     private final WorkflowRunLock workflowRunLock = runId -> () -> { };
 
     private WorkflowRunService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(objectStorage.exists(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
         service = new WorkflowRunService(workflowRunMapper, genTaskMapper, aiModelMapper,
-                generateService, workflowService, workflowRunLock, filmComposer, creationService);
+                generateService, workflowService, workflowRunLock, filmComposer, creationService, objectStorage);
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "Creator", LoginUser.ROLE_CREATOR));
     }
 
@@ -358,7 +361,7 @@ class WorkflowRunServiceTest {
 
         WorkflowRunService secondInstance = new WorkflowRunService(
                 workflowRunMapper, genTaskMapper, aiModelMapper, generateService, workflowService,
-                workflowRunLock, filmComposer, creationService);
+                workflowRunLock, filmComposer, creationService, objectStorage);
         secondInstance.advance(1L);
 
         assertEquals(TaskStatus.RUNNING, durable.get().getSteps().get(0).get("status"));
@@ -494,13 +497,13 @@ class WorkflowRunServiceTest {
         RememberingFilmComposer composer = new RememberingFilmComposer(
                 new LocalObjectStorage(directory.resolve("objects")), Files.readAllBytes(fixture));
         WorkflowRunService first = new WorkflowRunService(workflowRunMapper, genTaskMapper, aiModelMapper,
-                generateService, workflowService, workflowRunLock, composer, creationService);
+                generateService, workflowService, workflowRunLock, composer, creationService, objectStorage);
 
         assertThrows(IllegalStateException.class, () -> first.advance(1L));
         assertEquals("EDITING", durable.get().getSteps().get(1).get("status"));
 
         WorkflowRunService second = new WorkflowRunService(workflowRunMapper, genTaskMapper, aiModelMapper,
-                generateService, workflowService, workflowRunLock, composer, creationService);
+                generateService, workflowService, workflowRunLock, composer, creationService, objectStorage);
         second.advance(1L);
 
         assertEquals(TaskStatus.SUCCEEDED, durable.get().getStatus());

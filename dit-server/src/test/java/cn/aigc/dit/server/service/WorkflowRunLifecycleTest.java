@@ -405,6 +405,13 @@ class WorkflowRunLifecycleTest {
         return keys;
     }
 
+    /** 运行推进的「上游素材已落盘」预检用：单测里所有引用都视为已就绪。 */
+    private static cn.aigc.dit.storage.ObjectStorage alwaysPresentStorage() {
+        cn.aigc.dit.storage.ObjectStorage storage = mock(cn.aigc.dit.storage.ObjectStorage.class);
+        lenient().when(storage.exists(anyString())).thenReturn(true);
+        return storage;
+    }
+
     private static final class Harness {
         final Map<Long, WorkflowRun> stored = new LinkedHashMap<>();
         final Map<Long, GenTask> tasks = new LinkedHashMap<>();
@@ -465,7 +472,7 @@ class WorkflowRunLifecycleTest {
             WorkflowMapper workflows = mock(WorkflowMapper.class);
             saved.setId(99L); saved.setUserId(7L); saved.setModelId(2L); saved.setBuiltin(false);
             when(workflows.selectById(99L)).thenReturn(saved);
-            runs = new WorkflowRunService(runMapper, taskMapper, models, generate, new WorkflowService(workflows, models), id -> () -> {}, composer, creations);
+            runs = new WorkflowRunService(runMapper, taskMapper, models, generate, new WorkflowService(workflows, models), id -> () -> {}, composer, creations, alwaysPresentStorage());
         }
         WorkflowRunReq request(String target, String sourcePrompt, int selected) {
             WorkflowRunReq request = new WorkflowRunReq(); request.setWorkflowId(99L); request.setModelId(2L); request.setNodeId(target);

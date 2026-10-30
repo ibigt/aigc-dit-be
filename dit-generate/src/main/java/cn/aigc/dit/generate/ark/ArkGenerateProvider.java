@@ -23,6 +23,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -40,6 +41,12 @@ public class ArkGenerateProvider implements GenerateProvider {
 
     public static final String KEY = "ark";
     static final long SAFE_AUDIO_TOTAL_DURATION_MILLIS = 14_800L;
+
+    /**
+     * 参考视频 / 参考音频交给方舟拉取的预签名地址有效期。
+     * 方舟在任务排队后才会下载，留出足够余量；私有桶即可，不必公开读。
+     */
+    private static final Duration REFERENCE_URL_TTL = Duration.ofHours(2);
 
     private final ObjectStorage objectStorage;
     private final GenerateProperties.Ark properties;
@@ -437,6 +444,19 @@ public class ArkGenerateProvider implements GenerateProvider {
                 log.info("Seedance uses Seedream 5.0 origin url, key={}", storageKey);
                 return origin;
             }
+            byte[] bytes = objectStorage.getBytes(storageKey);
+            if (bytes == null || bytes.length == 0) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空");
+            }
+            String mime = contentTypeOf(storageKey, kind);
+            return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+        }
+        // 视频 / 音频：方舟要求 reference_video / reference_audio 必须是可公网访问的 web url，
+        // Base64 数据不会被接受（"reference_video must be provided as a web url"）。
+        // 优先用对象存储的预签名下载地址；签不出公网地址时退回 Base64（仅内网/本地存储会走到，线上会被方舟拒绝）。
+        String webUrl = presignWebUrl(storageKey);
+        if (webUrl != null) {
+            return webUrl;
         }
         byte[] bytes = objectStorage.getBytes(storageKey);
         if (bytes == null || bytes.length == 0) {
@@ -449,7 +469,23 @@ public class ArkGenerateProvider implements GenerateProvider {
             bytes = processed.bytes();
             mime = processed.contentType();
         }
+        log.warn("Seedance reference {} falls back to base64 because storage has no public url, key={}", kind, storageKey);
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    /**
+     * 签出可被方舟拉取的公网下载地址；非 http(s)（如本地存储直接返回 storageKey）或签失败则返回 null。
+     */
+    private String presignWebUrl(String storageKey) {
+        try {
+            String url = objectStorage.presignGet(storageKey, REFERENCE_URL_TTL);
+            if (url != null && (url.startsWith("https://") || url.startsWith("http://"))) {
+                return url;
+            }
+        } catch (RuntimeException e) {
+            log.warn("Seedance presign reference url failed, key={}: {}", storageKey, e.getMessage());
+        }
+        return null;
     }
 
     private List<String> ingestUrl(GenerateRequest request, String url) {

@@ -12,6 +12,7 @@ import cn.aigc.dit.generate.SubmitResult;
 import cn.aigc.dit.generate.audio.AudioReferenceProcessor;
 import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.storage.LocalObjectStorage;
+import cn.aigc.dit.storage.ObjectStorage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.ArrayList;
@@ -191,8 +193,33 @@ class ArkGenerateProviderTest {
     }
 
     @Test
-    void submitSeedance25ReadsAudioFromStorageAndSendsBase64() throws Exception {
-        http.postBody = "{\"id\":\"cgt-audio\",\"status\":\"queued\"}";
+    void submitR2vSendsReferenceVideoAsPresignedWebUrl() throws Exception {
+        http.postBody = """
+                {"id":"cgt-vid-url","status":"queued"}
+                """;
+        storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
+        storage.put("users/8/assets/b.mp4", new byte[]{1, 2, 3, 4}, "video/mp4");
+
+        ObjectStorage webStorage = new LocalObjectStorage(tempDir) {
+            @Override
+            public String presignGet(String storageKey, Duration expiry) {
+                return "https://public.example/" + storageKey + "?sig=abc";
+            }
+        };
+        ArkGenerateProvider webProvider = new ArkGenerateProvider(webStorage, properties, http, mapper, audioReferenceProcessor);
+
+        webProvider.submit(video("r2v").setReferences(List.of(
+                new ReferenceAsset("image", "users/8/assets/a.png"),
+                new ReferenceAsset("video", "users/8/assets/b.mp4"))));
+        JsonNode body = mapper.readTree(http.lastJson);
+        assertEquals("video_url", body.get("content").get(2).get("type").asText());
+        assertEquals("reference_video", body.get("content").get(2).get("role").asText());
+        assertEquals("https://public.example/users/8/assets/b.mp4?sig=abc",
+                body.get("content").get(2).get("video_url").get("url").asText());
+    }
+
+    @Test
+    void submitSeedance25ReadsAudioFromStorageAndSendsBase64() throws Exception {        http.postBody = "{\"id\":\"cgt-audio\",\"status\":\"queued\"}";
         storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
 
         provider.submit(video("r2v")

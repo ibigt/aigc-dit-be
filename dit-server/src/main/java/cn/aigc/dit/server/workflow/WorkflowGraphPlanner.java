@@ -55,6 +55,9 @@ public final class WorkflowGraphPlanner {
             Double speed,
             String modelName,
             boolean frameMode,
+            boolean videoRefMode,
+            String firstFrameKey,
+            String lastFrameKey,
             List<String> dependsOn,
             List<Ref> refs,
             String stepType,
@@ -171,6 +174,22 @@ public final class WorkflowGraphPlanner {
         Set<String> dependsOn = new LinkedHashSet<>();
         List<Ref> refs = new ArrayList<>();
         collectInputs(nodeId, category, edges, byId, dependsOn, refs, new LinkedHashSet<>());
+        // 直接附加在节点上的参考素材（前端参考素材弹框「素材库/本地上传」，存于 media.referenceAssets，
+        // 不落画布节点/连线）：与连线的静态引用同口径，排在连线引用之后
+        for (Map<String, Object> raw : mapList(media.get("referenceAssets"))) {
+            String key = firstNonBlank(text(raw.get("storageKey")), text(raw.get("assetKey")));
+            if (!storageKey(key)) {
+                continue;
+            }
+            String type = text(raw.get("type"));
+            if (type == null) {
+                type = "image";
+            }
+            type = type.toLowerCase();
+            if (category == null || acceptRef(category, type)) {
+                refs.add(new Ref(type, key));
+            }
+        }
         boolean video = "video".equals(category);
         String mode = text(media.get("mode"));
         String kind = text(data.get("kind"));
@@ -208,7 +227,11 @@ public final class WorkflowGraphPlanner {
                 speed(media.get("speed")),
                 "music".equals(audio.get("audioMode"))
                         ? firstNonBlank(text(media.get("musicModel")), text(media.get("model"))) : text(media.get("model")),
-                video && mode != null && mode.contains("首尾"),
+                video && isFrameMode(mode),
+                video && isVideoRefMode(mode),
+                // 参考帧（B2）：显式首/尾帧图框直传（media.frames.firstKey / lastKey，均为图片）
+                frameKey(media, "firstKey"),
+                frameKey(media, "lastKey"),
                 List.copyOf(dependsOn),
                 List.copyOf(refs),
                 stepType,
@@ -261,22 +284,21 @@ public final class WorkflowGraphPlanner {
                     }
                     resolved.put(step.nodeId(), withResolved(step, null, List.copyOf(outputs), List.of()));
                 } else if ("GENERATE".equals(step.stepType())) {
+                    // 提示词来源（需求：文本节点可连接任意生成节点作为提示词补充）：
+                    // 1) 节点自填提示词为主；2) 上游文本节点的内容作为补充追加；
+                    // 3) 自身为空时，先取上游文本节点，再退回上游生成节点已解析的提示词（图片→视频/音频复用画面描述）。
                     String prompt = step.prompt();
+                    List<String> supplements = textSupplements(step, resolved);
+                    if (!supplements.isEmpty()) {
+                        prompt = prompt == null ? supplements.get(0) : prompt + "\n" + String.join("\n", supplements);
+                    }
                     if (prompt == null) {
-                        for (String depId : step.dependsOn()) {
-                            Step parent = resolved.get(depId);
-                            if (parent != null && "TEXT".equals(parent.stepType()) && !parent.outputs().isEmpty()) {
-                                prompt = text(parent.outputs().get(0).value());
-                                if (prompt != null) {
-                                    break;
-                                }
-                            }
-                        }
+                        prompt = inheritedPrompt(step, resolved);
                     }
                     if (prompt == null) {
                         throw new BizException("节点「" + step.title() + "」缺少提示词");
                     }
-                    String value = WorkflowVariables.resolve(prompt, scopes(step, nodes, resolved, edges)).value();
+                    String value = WorkflowVariables.resolve(clip(prompt, 4096), scopes(step, nodes, resolved, edges)).value();
                     resolved.put(step.nodeId(), withResolved(step, value, List.of(), List.of()));
                 } else if ("ASSET".equals(step.stepType())) {
                     resolved.put(step.nodeId(), step);
@@ -453,10 +475,42 @@ public final class WorkflowGraphPlanner {
         }
     }
 
+    /** 上游文本节点输出的正文（按连线顺序），作为当前节点的提示词补充。 */
+    private static List<String> textSupplements(Step step, Map<String, Step> resolved) {
+        List<String> values = new ArrayList<>();
+        for (String depId : step.dependsOn()) {
+            Step parent = resolved.get(depId);
+            if (parent == null || !"TEXT".equals(parent.stepType()) || parent.outputs().isEmpty()) {
+                continue;
+            }
+            String value = text(parent.outputs().get(0).value());
+            if (value != null && !values.contains(value)) {
+                values.add(value);
+            }
+        }
+        return values;
+    }
+
+    /** 自身没有提示词时，复用直接上游生成节点的提示词（图片→视频、图片→音频的画面描述）。 */
+    private static String inheritedPrompt(Step step, Map<String, Step> resolved) {
+        for (String depId : step.dependsOn()) {
+            Step parent = resolved.get(depId);
+            if (parent == null || !"GENERATE".equals(parent.stepType())) {
+                continue;
+            }
+            String value = text(parent.resolvedPrompt());
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private static Step withResolved(Step step, String resolvedPrompt, List<Output> outputs, List<Clip> clips) {
         return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
-                step.speed(), step.modelName(), step.frameMode(), step.dependsOn(), step.refs(),
+                step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
+                step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
                 step.stepType(), resolvedPrompt, outputs, clips, step.outputIndex(), step.audio());
     }
 
@@ -542,8 +596,37 @@ public final class WorkflowGraphPlanner {
     private static Step copy(Step step, List<String> dependsOn) {
         return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
-                step.speed(), step.modelName(), step.frameMode(), List.copyOf(dependsOn), step.refs(),
+                step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
+                step.firstFrameKey(), step.lastFrameKey(), List.copyOf(dependsOn), step.refs(),
                 step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(), step.audio());
+    }
+
+    /** 参考帧图框取值（media.frames.firstKey / lastKey）：仅认合法存储 key，其余当未设置。 */
+    private static String frameKey(Map<String, Object> media, String field) {
+        return storageKey(text(map(media.get("frames")).get(field))) ? text(map(media.get("frames")).get(field)) : null;
+    }
+
+    /**
+     * 首尾帧档位判定（i2v）。显式白名单而非 {@code contains("首尾")}：
+     * 前端档位名改成「参考帧」后仍要认旧的「首尾帧」，两种写法都放行。
+     */
+    static boolean isFrameMode(String mode) {
+        if (mode == null) {
+            return false;
+        }
+        String value = mode.trim();
+        return "首尾帧".equals(value) || "参考帧".equals(value);
+    }
+
+    /**
+     * 参考视频档位判定（r2v + 视频素材整段透传）。与首尾帧互斥：
+     * 参考帧只吃图片，首尾帧的起止画面是硬约束，参考视频则保留上游视频的运动信息。
+     */
+    static boolean isVideoRefMode(String mode) {
+        if (mode == null) {
+            return false;
+        }
+        return "参考视频".equals(mode.trim());
     }
 
     private static Ref staticRef(Map<String, Object> data) {
@@ -560,7 +643,9 @@ public final class WorkflowGraphPlanner {
 
     private static boolean acceptRef(String category, String refType) {
         if ("audio".equals(category)) {
-            return false;
+            // 音频节点可连线图片/视频作为「画面参考」（对应 visual 端口）；音频适配器按需忽略视觉素材，
+            // 但依赖关系与提示词兜底（复用画面描述）依赖这条引用成立
+            return "image".equals(refType) || "video".equals(refType);
         }
         if ("image".equals(category)) {
             return "image".equals(refType);
