@@ -228,7 +228,9 @@ public final class WorkflowGraphPlanner {
                 "music".equals(audio.get("audioMode"))
                         ? firstNonBlank(text(media.get("musicModel")), text(media.get("model"))) : text(media.get("model")),
                 video && isFrameMode(mode),
-                video && isVideoRefMode(mode),
+                // 视频节点默认参考视频（r2v）；只有显式参考帧/首尾帧关闭该分支。
+                // 旧画布没有 mode 或写的是旧档位名时，也保持视频上游整段透传。
+                video && !isFrameMode(mode),
                 // 参考帧（B2）：显式首/尾帧图框直传（media.frames.firstKey / lastKey，均为图片）
                 frameKey(media, "firstKey"),
                 frameKey(media, "lastKey"),
@@ -287,8 +289,9 @@ public final class WorkflowGraphPlanner {
                     // 提示词来源（需求：文本节点可连接任意生成节点作为提示词补充）：
                     // 1) 节点自填提示词为主；2) 上游文本节点的内容作为补充追加；
                     // 3) 自身为空时，先取上游文本节点，再退回上游生成节点已解析的提示词（图片→视频/音频复用画面描述）。
-                    String prompt = step.prompt();
-                    List<String> supplements = textSupplements(step, resolved);
+                    final String sourcePrompt = step.prompt();
+                    String prompt = sourcePrompt;
+                    List<String> supplements = sourcePrompt != null && sourcePrompt.contains("{{") ? List.of() : textSupplements(step, resolved).stream().filter(value -> sourcePrompt == null || !sourcePrompt.contains(value)).toList();
                     if (!supplements.isEmpty()) {
                         prompt = prompt == null ? supplements.get(0) : prompt + "\n" + String.join("\n", supplements);
                     }
