@@ -325,6 +325,7 @@ public class GenerateWorker {
 
     /**
      * convert-to-seedream 异步路径：HTTP 仅建 task，此处完成图生文并写回 prompt。
+     * Key/endpoint 走 convert 凭证（视频 Seedance 或 ARK_API_KEY），不再依赖壳模型上的 Key。
      */
     void resolvePendingRoundtripDescribe(GenTask task, AiModel model) {
         if (task == null || task.getParams() == null) {
@@ -337,9 +338,6 @@ public class GenerateWorker {
         if (imageDescribeClient == null || objectStorage == null) {
             throw new IllegalStateException("图生文客户端未配置");
         }
-        if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
-            throw new IllegalStateException("图像模型缺少 API Key");
-        }
         Object keyObj = params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY);
         String storageKey = keyObj == null ? null : String.valueOf(keyObj).trim();
         if (!StringUtils.hasText(storageKey)) {
@@ -347,8 +345,7 @@ public class GenerateWorker {
         }
         Object typeObj = params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE);
         String assetType = typeObj == null ? null : String.valueOf(typeObj);
-        String apiKey = encryptor.decrypt(model.getApiKeyEnc());
-        String endpoint = ArkUrls.v3Base(model.getEndpoint(), AdapterCatalog.ARK_DEFAULT_ENDPOINT, model.getProvider());
+        RoundtripConvertCredential credential = resolveRoundtripConvertCredential(params, model);
         byte[] imageBytes = objectStorage.getBytes(storageKey);
         if (imageBytes == null || imageBytes.length == 0) {
             throw new IllegalStateException("参考图不存在或为空");
@@ -357,7 +354,7 @@ public class GenerateWorker {
         String describePrompt = cn.aigc.dit.generate.describe.ImageDescribePrompts.forAssetType(assetType);
         log.info("roundtrip describe start taskId={} storageKey={} type={}", task.getId(), storageKey, assetType);
         cn.aigc.dit.generate.describe.ImageDescribeResult described = imageDescribeClient.describe(
-                imageBytes, mime, describePrompt, endpoint, apiKey, null);
+                imageBytes, mime, describePrompt, credential.endpoint(), credential.apiKey(), null);
         String prompt = described == null ? "" : described.assembledPrompt();
         if (!StringUtils.hasText(prompt)) {
             throw new IllegalStateException("图生文未得到可用提示词");
@@ -1138,8 +1135,29 @@ public class GenerateWorker {
     }
 
     private GenerateProvider bindAndResolve(GenTask task, AiModel model, GenerateRequest request) {
+        boolean roundtrip = isRoundtripConvertTask(task);
+        RoundtripConvertCredential roundtripCredential = null;
         String modelKey = model == null ? request.getModelKey() : model.getModelKey();
         String requestedAdapter = firstNonBlank(request.getAdapterKey(), model == null ? null : model.getAdapterKey());
+        if (roundtrip) {
+            Map<String, Object> params = task.getParams();
+            String forcedModelKey = textParam(params,
+                    cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_CONVERT_MODEL_KEY);
+            if (!StringUtils.hasText(forcedModelKey)) {
+                forcedModelKey = generateProperties.getArk().getSeedreamConvertModel();
+            }
+            if (!StringUtils.hasText(forcedModelKey)) {
+                forcedModelKey = AdapterCatalog.SEEDREAM_5_0_MODEL;
+            }
+            modelKey = forcedModelKey.trim();
+            request.setModelKey(modelKey);
+            String forcedAdapter = textParam(params,
+                    cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_CONVERT_ADAPTER_KEY);
+            requestedAdapter = StringUtils.hasText(forcedAdapter)
+                    ? forcedAdapter.trim()
+                    : AdapterCatalog.SEEDREAM_5_0;
+            roundtripCredential = resolveRoundtripConvertCredential(params, model);
+        }
         String adapterKey = AdapterCatalog.resolveKeyForGenerate(
                 requestedAdapter,
                 model == null ? null : model.getProvider(),
@@ -1151,7 +1169,13 @@ public class GenerateWorker {
                     task.getId(), requestedAdapter, adapterKey, modelKey);
         }
         request.setAdapterKey(adapterKey);
-        if (model != null) {
+        if (roundtrip && roundtripCredential != null) {
+            request.setEndpoint(roundtripCredential.endpoint());
+            request.setApiKey(roundtripCredential.apiKey());
+            if (model != null) {
+                request.setAdapterConfig(model.getAdapterConfig());
+            }
+        } else if (model != null) {
             if (AdapterCatalog.isArk(adapterKey) || AdapterCatalog.isSeedream(adapterKey)) {
                 request.setEndpoint(ArkUrls.v3Base(
                         model.getEndpoint(), generateProperties.getArk().getBaseUrl(), model.getProvider()));
@@ -1174,6 +1198,100 @@ public class GenerateWorker {
                 request.getModelKey(),
                 model == null ? null : model.getProvider());
         return provider;
+    }
+
+    private static boolean isRoundtripConvertTask(GenTask task) {
+        if (task == null || task.getParams() == null) {
+            return false;
+        }
+        Object source = task.getParams().get("assetGenerationSource");
+        return source != null
+                && cn.aigc.dit.server.drama.DramaAssetService.SOURCE_ROUNDTRIP.equalsIgnoreCase(
+                        String.valueOf(source).trim());
+    }
+
+    private RoundtripConvertCredential resolveRoundtripConvertCredential(
+            Map<String, Object> params, AiModel shellModel) {
+        String endpointOverride = textParam(params,
+                cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_CONVERT_ENDPOINT);
+        Long videoModelId = longParam(params,
+                cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_CREDENTIAL_VIDEO_MODEL_ID);
+        if (videoModelId != null) {
+            AiModel video = aiModelMapper.selectById(videoModelId);
+            if (video != null && StringUtils.hasText(video.getApiKeyEnc())) {
+                String key = ArkKeys.normalize(encryptor.decrypt(video.getApiKeyEnc()));
+                if (StringUtils.hasText(key)) {
+                    String endpoint = StringUtils.hasText(endpointOverride)
+                            ? endpointOverride.trim()
+                            : ArkUrls.v3Base(
+                                    video.getEndpoint(),
+                                    generateProperties.getArk().getBaseUrl(),
+                                    video.getProvider());
+                    return new RoundtripConvertCredential(key, endpoint);
+                }
+            }
+        }
+        if (truthy(params == null ? null
+                : params.get(cn.aigc.dit.server.drama.DramaAssetService.PARAM_ROUNDTRIP_USE_ARK_API_KEY))
+                || videoModelId == null) {
+            String arkKey = generateProperties.getArk().getApiKey();
+            if (StringUtils.hasText(arkKey)) {
+                String endpoint = StringUtils.hasText(endpointOverride)
+                        ? endpointOverride.trim()
+                        : ArkUrls.v3Base(
+                                null,
+                                generateProperties.getArk().getBaseUrl(),
+                                AdapterCatalog.PROVIDER_OFFICIAL);
+                return new RoundtripConvertCredential(arkKey.trim(), endpoint);
+            }
+        }
+        // 兼容旧任务：仍从壳模型取 Key
+        if (shellModel != null && StringUtils.hasText(shellModel.getApiKeyEnc())) {
+            String key = ArkKeys.normalize(encryptor.decrypt(shellModel.getApiKeyEnc()));
+            if (StringUtils.hasText(key)) {
+                String endpoint = StringUtils.hasText(endpointOverride)
+                        ? endpointOverride.trim()
+                        : ArkUrls.v3Base(
+                                shellModel.getEndpoint(),
+                                generateProperties.getArk().getBaseUrl(),
+                                shellModel.getProvider());
+                return new RoundtripConvertCredential(key, endpoint);
+            }
+        }
+        throw new IllegalStateException("转资产图缺少方舟 API Key");
+    }
+
+    private static String textParam(Map<String, Object> params, String key) {
+        if (params == null || key == null) {
+            return null;
+        }
+        Object value = params.get(key);
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        return text.isEmpty() ? null : text;
+    }
+
+    private static Long longParam(Map<String, Object> params, String key) {
+        if (params == null || key == null) {
+            return null;
+        }
+        Object value = params.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private record RoundtripConvertCredential(String apiKey, String endpoint) {
     }
 
     private String resolveApiKey(AiModel model, String adapterKey) {

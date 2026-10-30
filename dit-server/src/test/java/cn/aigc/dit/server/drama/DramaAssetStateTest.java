@@ -99,7 +99,8 @@ class DramaAssetStateTest {
         service = new DramaAssetService(
                 assetMapper, assetGenerationMapper, episodeMapper, seriesMapper, aiModelMapper, genTaskMapper,
                 textService, generateService, libraryAssetService, storyboardService, characterReview,
-                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient, transactionManager,
+                creationService, mediaRetention, objectStorage, encryptor, imageDescribeClient,
+                new cn.aigc.dit.generate.GenerateProperties(), transactionManager,
                 new com.fasterxml.jackson.databind.ObjectMapper());
         UserContext.set(new LoginUser(7L, "creator", "c@example.com", "创作者", LoginUser.ROLE_CREATOR));
         org.mockito.Mockito.lenient().when(textService.getIfAvailable()).thenReturn(null);

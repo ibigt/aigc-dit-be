@@ -135,6 +135,11 @@ public class GenerateProperties {
         /** 图生文（Responses）默认视觉模型；可用 ARK_VISION_MODEL 覆盖。 */
         private String visionModel = "doubao-seed-2-1-pro-260915";
         /**
+         * 转资产图（convert-to-seedream）使用的 Seedream 5.0 模型标识；可用 ARK_SEEDREAM_CONVERT_MODEL 覆盖。
+         * 不取剧集绑定的图像模型；运行时与 Vision 共用方舟 Key（视频模型优先，否则本处 api-key）。
+         */
+        private String seedreamConvertModel = "doubao-seedream-5-0-pro";
+        /**
          * 为 true 时，管理端保存 Seedream/Ark 模型可显式选「官方API」（按量 /api/v3）。
          * 默认 false：Seedream 5.0 仍固定为「官方API（token plan）」。
          */
