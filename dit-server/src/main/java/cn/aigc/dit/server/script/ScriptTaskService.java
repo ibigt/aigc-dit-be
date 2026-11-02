@@ -3,9 +3,11 @@ package cn.aigc.dit.server.script;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaService;
-import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
+import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.model.req.DramaScriptSaveReq;
+import cn.aigc.dit.server.drama.model.req.DramaSeriesCreateReq;
 import cn.aigc.dit.server.drama.model.resp.DramaSeriesResp;
 import cn.aigc.dit.server.drama.text.TextChatRequest;
 import cn.aigc.dit.server.drama.text.TextChatResult;
@@ -19,6 +21,7 @@ import cn.aigc.dit.server.script.mapper.ScriptTaskMapper;
 import cn.aigc.dit.server.script.mapper.ScriptTaskVersionMapper;
 import cn.aigc.dit.server.script.model.req.ScriptChatReq;
 import cn.aigc.dit.server.script.model.req.ScriptDocumentSaveReq;
+import cn.aigc.dit.server.script.model.req.ScriptEpisodeScriptReq;
 import cn.aigc.dit.server.script.model.req.ScriptModelUpdateReq;
 import cn.aigc.dit.server.script.model.req.ScriptTaskCreateReq;
 import cn.aigc.dit.server.script.model.req.ScriptTitleUpdateReq;
@@ -37,10 +40,13 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -76,7 +82,12 @@ public class ScriptTaskService {
                         .like(ScriptTask::getTitle, query)
                         .or().like(ScriptTask::getGenre, query))
                 .orderByDesc(ScriptTask::getUpdatedAt));
-        return tasks.stream().map(task -> toResp(task, false)).toList();
+        Set<Long> seriesIds = new HashSet<>();
+        for (ScriptTask task : tasks) {
+            if (task.getDramaSeriesId() != null) seriesIds.add(task.getDramaSeriesId());
+        }
+        Map<Long, Set<Integer>> settled = dramaService.settledEpisodeNumbers(seriesIds);
+        return tasks.stream().map(task -> toResp(task, false, settled)).toList();
     }
 
     public ScriptTaskResp get(Long id) {
@@ -106,13 +117,15 @@ public class ScriptTaskService {
     @Transactional
     public ScriptTaskResp saveDocument(Long id, ScriptDocumentSaveReq req) {
         ScriptTask task = requireTask(id);
-        String next = req.getDocument() == null ? "" : req.getDocument();
-        if (Objects.equals(task.getDocument(), next)) {
+        List<EpisodeScript> parts = scriptsForSave(task, req);
+        String next = joinEpisodeScripts(parts);
+        if (Objects.equals(task.getDocument(), next) && sameScripts(readEpisodeScripts(task), parts)) {
             return toResp(task, true);
         }
         saveDocumentVersion(task, next);
         task.setDocument(next);
         task.setStatus("DRAFT");
+        writeEpisodeScripts(task, parts);
         taskMapper.updateById(task);
         return toResp(task, true);
     }
@@ -173,6 +186,7 @@ public class ScriptTaskService {
         repaired.put("script_markdown", repairedDocument);
         task.setResultJson(repaired);
         task.setDocument(repairedDocument);
+        storeEpisodeScripts(task, repairedDocument);
         taskMapper.updateById(task);
         return toResp(task, true);
     }
@@ -242,6 +256,7 @@ public class ScriptTaskService {
         task.setResultJson(normalizeResult(task, merged));
         applyGeneratedTitle(task, task.getResultJson());
         task.setDocument(String.valueOf(task.getResultJson().get("script_markdown")));
+        storeEpisodeScripts(task, task.getDocument());
         task.setStatus("SUCCEEDED");
         saveDocumentVersion(task, task.getDocument());
         taskMapper.updateById(task);
@@ -279,8 +294,10 @@ public class ScriptTaskService {
         try {
             saveMessage(task, "user", initialSubmissionMessage(task), null);
             String source = task.getInputText();
+            List<Map<String, Object>> sourceChunks = List.of();
             if ("adapt".equals(task.getMode()) && source.length() > NOVEL_CHUNK_SIZE) {
-                source = summarizeNovelChunks(task, source);
+                sourceChunks = summarizeNovelChunks(task, source);
+                source = formatChunkSummaries(sourceChunks);
             }
             TextChatResult response = llmGateway.chat(task.getModelId(),
                     new TextChatRequest(systemPrompt(task), generationPrompt(task, source), true,
@@ -295,9 +312,13 @@ public class ScriptTaskService {
                     log.warn("script structure repair skipped, taskId={}", task.getId(), repairError);
                 }
             }
+            if (!sourceChunks.isEmpty()) {
+                result.put("source_chunks", sourceChunks);
+            }
             applyGeneratedTitle(task, result);
             task.setResultJson(result);
             task.setDocument(document);
+            storeEpisodeScripts(task, document);
             task.setStatus("SUCCEEDED");
             saveDocumentVersion(task, task.getDocument());
             taskMapper.updateById(task);
@@ -356,14 +377,13 @@ public class ScriptTaskService {
     public DramaSeriesResp createDrama(Long id) {
         ScriptTask task = requireTask(id);
         ensureCreativeTask(task);
-        if (task.getDramaSeriesId() != null) {
-            return dramaService.getSeries(task.getDramaSeriesId());
-        }
-        if (!StringUtils.hasText(task.getDocument())) {
+        List<EpisodeScript> parts = readEpisodeScripts(task);
+        if (parts.stream().noneMatch(part -> StringUtils.hasText(part.script()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先生成或填写剧本正文后再创建短剧");
         }
-        if (!"SUCCEEDED".equals(task.getStatus())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "剧本已保存为草稿，请先点击“完成剧本”后再创建短剧");
+        if (task.getDramaSeriesId() != null) {
+            importEpisodeScripts(task.getDramaSeriesId(), parts);
+            return dramaService.getSeries(task.getDramaSeriesId());
         }
         DramaSeriesCreateReq req = new DramaSeriesCreateReq();
         req.setName(StringUtils.hasText(task.getTitle()) ? task.getTitle() : "未命名短剧");
@@ -378,9 +398,7 @@ public class ScriptTaskService {
                 || series.getEpisodes().get(0).getId() == null) {
             throw new BizException(ErrorCode.INTERNAL, "短剧首集创建失败，无法导入剧本");
         }
-        DramaScriptSaveReq scriptReq = new DramaScriptSaveReq();
-        scriptReq.setSourceText(task.getDocument());
-        dramaService.saveScript(series.getEpisodes().get(0).getId(), scriptReq);
+        importEpisodeScripts(series.getId(), parts);
         task.setDramaSeriesId(series.getId());
         taskMapper.updateById(task);
         return dramaService.getSeries(series.getId());
@@ -407,15 +425,28 @@ public class ScriptTaskService {
                 user, false, ASSISTANT_MAX_TOKENS));
     }
 
-    private String summarizeNovelChunks(ScriptTask task, String source) {
-        StringBuilder summaries = new StringBuilder();
+    private List<Map<String, Object>> summarizeNovelChunks(ScriptTask task, String source) {
+        List<Map<String, Object>> chunks = new ArrayList<>();
         for (int from = 0, index = 1; from < source.length(); from += NOVEL_CHUNK_SIZE, index++) {
             String chunk = source.substring(from, Math.min(from + NOVEL_CHUNK_SIZE, source.length()));
             TextChatResult result = llmGateway.chat(task.getModelId(), new TextChatRequest(
                     "你是小说改编前置分析器。只提炼事实，不续写，不评价。",
-                    "请提炼第 " + index + " 个文本片段的章节冲突、人物关系、关键对白、旁白信息和场景转换：\n" + chunk,
+                    "请提炼第 " + index + " 个文本片段，分项写出核心冲突、关键对白、旁白信息和场景转换。"
+                            + "关键对白尽量保留原句。\n" + chunk,
                     false, SUMMARY_MAX_TOKENS));
-            summaries.append("片段 ").append(index).append("：\n").append(result.getContent()).append("\n\n");
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("index", index);
+            item.put("summary", result.getContent() == null ? "" : result.getContent());
+            chunks.add(item);
+        }
+        return chunks;
+    }
+
+    private static String formatChunkSummaries(List<Map<String, Object>> chunks) {
+        StringBuilder summaries = new StringBuilder();
+        for (Map<String, Object> chunk : chunks) {
+            summaries.append("片段 ").append(chunk.get("index")).append("：\n")
+                    .append(chunk.get("summary")).append("\n\n");
         }
         return summaries.toString();
     }
@@ -482,7 +513,7 @@ public class ScriptTaskService {
         return "请评估下面这份已有剧本。"
                 + "原稿没有提供目标集数时，不要自行假定集数；可以根据正文识别已完成的集数并写入 summary。"
                 + "四个维度各按 100 分制评分，overall_score 为四项平均分。"
-                + "每项必须说明判断依据，并给出具体修改建议；不要输出 script_markdown、opening_scene、characters 或 outline。"
+                + "每项必须说明判断依据，并给出具体修改建议；不要输出 script_markdown、opening_scene、scenes、characters、outline 或 source_breakdown。"
                 + "输出 JSON Schema：" + schema
                 + "\n剧本：\n" + source;
     }
@@ -497,8 +528,11 @@ public class ScriptTaskService {
         result.put("evaluation", evaluation);
         result.remove("script_markdown");
         result.remove("opening_scene");
+        result.remove("scenes");
         result.remove("characters");
         result.remove("outline");
+        result.remove("source_breakdown");
+        result.remove("source_chunks");
         return result;
     }
 
@@ -538,11 +572,52 @@ public class ScriptTaskService {
 
     private String generationPrompt(ScriptTask task, String source) {
         int episodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
-        String schema = "{\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],\"outline\":[{\"episode\":1,\"title\":\"\",\"hook\":\"\",\"summary\":\"\"}],\"opening_scene\":\"标准分场格式：场次/时间/地点/动作/对白/旁白\",\"script_markdown\":\"只写第1集可直接拍摄的剧本正文\",\"evaluation\":{\"character_arc\":0,\"hook\":0,\"emotion\":0,\"commercial\":0,\"strategy\":\"\"}}";
-        return "题材：" + (task.getGenre() == null ? "未指定" : task.getGenre())
-                + "；目标集数：" + episodes
-                + "。请严格遵守：outline 必须恰好输出 " + episodes + " 项；script_markdown 只输出第1集正文，绝对不要继续写第2集或其他集；characters 至少输出主要人物。请保留可拍摄细节，避免空泛建议。\n输出 JSON Schema：" + schema
-                + "\n用户输入：\n" + truncate(source, GENERATION_SOURCE_MAX_CHARS);
+        boolean adapt = "adapt".equals(task.getMode());
+        String schema = "{\"title\":\"\",\"logline\":\"\",\"characters\":[{\"name\":\"\",\"role\":\"\",\"arc\":\"\"}],"
+                + "\"outline\":[{\"episode\":1,\"title\":\"\",\"hook\":\"\",\"summary\":\"\"}],"
+                + "\"scenes\":[{\"scene\":1,\"time\":\"\",\"location\":\"\",\"action\":\"\","
+                + "\"lines\":[{\"type\":\"dialogue\",\"speaker\":\"\",\"text\":\"\"}]}],"
+                + "\"script_markdown\":\"只写第1集，使用第N场/时间/地点/动作/对白/旁白\""
+                + (adapt
+                ? ",\"source_breakdown\":{\"conflicts\":[],\"dialogues\":[],\"narrations\":[],\"scene_changes\":[]}"
+                : "")
+                + ",\"evaluation\":{\"character_arc\":0,\"hook\":0,\"emotion\":0,\"commercial\":0,\"strategy\":\"\"}}";
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("题材：").append(task.getGenre() == null ? "未指定" : task.getGenre())
+                .append("；目标集数：").append(episodes)
+                .append("。请严格遵守：outline 必须恰好输出 ").append(episodes).append(" 项；")
+                .append("script_markdown 只输出第1集正文，绝对不要继续写第2集或其他集，并按「第N场 / 时间 / 地点 / 动作 / 对白 / 旁白」书写；")
+                .append("scenes 只结构化第1集，每场包含 scene、time、location、action 和 lines，")
+                .append("lines 的 type 只能是 dialogue 或 narration，dialogue 必须含 speaker 与 text，narration 只含 text；")
+                .append("characters 至少输出主要人物。请保留可拍摄细节，避免空泛建议。");
+        boolean keepCharacters = "idea".equals(task.getMode()) && source != null && source.contains("【角色设定】");
+        if (keepCharacters) {
+            prompt.append("用户在【角色设定】中给出的人物必须全部进入 characters，姓名必须与用户原文完全一致，")
+                    .append("不得改写、合并、替换或省略；身份写入 role，一句话设定写入 arc。")
+                    .append("可以补充用户未给出的次要人物，但不得改动已给出的姓名。");
+        }
+        if (adapt) {
+            prompt.append("source_breakdown 必须输出 conflicts（章节或段落核心冲突）、")
+                    .append("dialogues（关键对白，尽量保留原句）、narrations（被保留的旁白信息）和 scene_changes（场景转换）。")
+                    .append("生成短剧正文时，关键对白尽量沿用原句。");
+        }
+        prompt.append("\n输出 JSON Schema：").append(schema)
+                .append("\n用户输入：\n").append(keepCharacters ? promptSource(source) : truncate(source, GENERATION_SOURCE_MAX_CHARS));
+        return prompt.toString();
+    }
+
+    /** 截断用户输入时保留【角色设定】，避免姓名约束被长文本裁掉。 */
+    private static String promptSource(String source) {
+        if (!StringUtils.hasText(source)) return "";
+        int marker = source.indexOf("【角色设定】");
+        if (marker < 0) return truncate(source, GENERATION_SOURCE_MAX_CHARS);
+        String block = source.substring(marker).trim();
+        String body = source.substring(0, marker).trim();
+        int bodyBudget = GENERATION_SOURCE_MAX_CHARS - block.length() - 2;
+        if (!StringUtils.hasText(body) || bodyBudget < 200) {
+            return truncate(block, GENERATION_SOURCE_MAX_CHARS);
+        }
+        return truncate(body, bodyBudget) + "\n\n" + block;
     }
 
     private Map<String, Object> repairStructure(ScriptTask task, String document) {
@@ -576,7 +651,16 @@ public class ScriptTaskService {
         copyAlias(result, "characters", "character_settings", "characterSettings", "characterProfiles", "character");
         copyAlias(result, "outline", "episode_outline", "episodeOutline", "story_outline", "episodes");
         copyAlias(result, "script_markdown", "scriptMarkdown", "screenplay", "script");
+        copyAlias(result, "scenes", "opening_scenes", "scene_list", "first_episode_scenes");
+        copyAlias(result, "source_breakdown", "sourceBreakdown", "breakdown");
+        Object sceneValue = result.get("scenes");
+        if (!(sceneValue instanceof List<?> sceneList) || sceneList.isEmpty()) {
+            Object opening = result.get("opening_scene");
+            if (opening instanceof List<?>) result.put("scenes", opening);
+        }
         result.put("characters", normalizeList(result.get("characters"), Integer.MAX_VALUE));
+        result.put("scenes", normalizeScenes(result.get("scenes")));
+        normalizeBreakdown(result);
         int targetEpisodes = task.getTargetEpisodes() == null ? 1 : task.getTargetEpisodes();
         result.put("outline", normalizeList(result.get("outline"), targetEpisodes));
         Object script = result.get("script_markdown");
@@ -627,6 +711,186 @@ public class ScriptTaskService {
             }
         }
         return normalized;
+    }
+
+    private static List<Map<String, Object>> normalizeScenes(Object value) {
+        if (!(value instanceof List<?> list)) return new ArrayList<>();
+        List<Map<String, Object>> scenes = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) continue;
+            Map<String, Object> scene = new LinkedHashMap<>();
+            map.forEach((key, val) -> scene.put(String.valueOf(key), val));
+            putIfBlank(scene, "time", scene.get("时间"));
+            putIfBlank(scene, "location", scene.get("place"));
+            putIfBlank(scene, "location", scene.get("地点"));
+            putIfBlank(scene, "action", scene.get("动作"));
+            Object sceneNo = firstTextValue(scene, "scene", "index", "number", "场次");
+            if (sceneNo != null) scene.put("scene", sceneNo);
+            scene.put("lines", normalizeSceneLines(scene));
+            scene.remove("dialogues");
+            scene.remove("narrations");
+            scene.remove("对白");
+            scene.remove("旁白");
+            scenes.add(scene);
+        }
+        return scenes;
+    }
+
+    private static List<Map<String, Object>> normalizeSceneLines(Map<String, Object> scene) {
+        List<Map<String, Object>> lines = new ArrayList<>();
+        Object raw = scene.get("lines");
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                Map<String, Object> line = normalizeSceneLine(item, null);
+                if (line != null) lines.add(line);
+            }
+        }
+        if (!lines.isEmpty()) return lines;
+        appendMaybeLines(lines, firstContent(scene, "dialogues", "对白"), "dialogue");
+        appendMaybeLines(lines, firstContent(scene, "narrations", "旁白"), "narration");
+        return lines;
+    }
+
+    private static Object firstContent(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof List<?> list && !list.isEmpty()) return value;
+            if (StringUtils.hasText(textValue(value)) && !(value instanceof Map<?, ?>)) return value;
+        }
+        return null;
+    }
+
+    private static void appendMaybeLines(List<Map<String, Object>> lines, Object value, String type) {
+        if (value instanceof List<?> list) {
+            appendTypedLines(lines, list, type);
+            return;
+        }
+        Map<String, Object> line = normalizeSceneLine(value, type);
+        if (line != null) lines.add(line);
+    }
+
+    private static void appendTypedLines(List<Map<String, Object>> lines, Object value, String type) {
+        if (!(value instanceof List<?> list)) return;
+        for (Object item : list) {
+            Map<String, Object> line = normalizeSceneLine(item, type);
+            if (line != null) lines.add(line);
+        }
+    }
+
+    private static Map<String, Object> normalizeSceneLine(Object item, String forcedType) {
+        if (item instanceof String text) {
+            if (!StringUtils.hasText(text)) return null;
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("type", forcedType == null ? "narration" : forcedType);
+            line.put("text", text.trim());
+            return line;
+        }
+        if (!(item instanceof Map<?, ?> map)) return null;
+        String type = forcedType != null ? forcedType : textValue(map.get("type"));
+        if (!StringUtils.hasText(type)) type = textValue(map.get("kind"));
+        if ("对白".equals(type) || "dialogue".equalsIgnoreCase(type)) type = "dialogue";
+        else if ("旁白".equals(type) || "narration".equalsIgnoreCase(type) || "voiceover".equalsIgnoreCase(type)) type = "narration";
+        else if (StringUtils.hasText(firstText(map, "speaker", "name", "character"))) type = "dialogue";
+        else type = "narration";
+        String text = firstText(map, "text", "content", "line");
+        if (!StringUtils.hasText(text)) return null;
+        Map<String, Object> line = new LinkedHashMap<>();
+        line.put("type", type);
+        if ("dialogue".equals(type)) line.put("speaker", firstText(map, "speaker", "name", "character"));
+        line.put("text", text.trim());
+        return line;
+    }
+
+    private static void normalizeBreakdown(Map<String, Object> result) {
+        Object raw = result.get("source_breakdown");
+        Map<String, Object> breakdown = raw instanceof Map<?, ?> ? mapOf(raw) : null;
+        if (breakdown == null) {
+            result.remove("source_breakdown");
+            return;
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        normalized.put("conflicts", textList(firstPresent(breakdown, "conflicts", "conflict", "核心冲突")));
+        normalized.put("dialogues", textList(firstPresent(breakdown, "dialogues", "dialogue", "关键对白", "对白")));
+        normalized.put("narrations", textList(firstPresent(breakdown, "narrations", "narration", "旁白")));
+        normalized.put("scene_changes", textList(firstPresent(breakdown, "scene_changes", "sceneChanges", "scene_change", "场景转换")));
+        result.put("source_breakdown", normalized);
+    }
+
+    private static Map<String, Object> mapOf(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> source) {
+            source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        }
+        return result;
+    }
+
+    private static void putIfBlank(Map<String, Object> target, String key, Object value) {
+        if (!StringUtils.hasText(textValue(target.get(key))) && StringUtils.hasText(textValue(value))) {
+            target.put(key, value);
+        }
+    }
+
+    private static Object firstTextValue(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (StringUtils.hasText(textValue(value))) return value;
+        }
+        return null;
+    }
+
+    private static Object firstPresent(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof List<?> list) {
+                if (!list.isEmpty()) return value;
+                continue;
+            }
+            if (value instanceof String text) {
+                if (StringUtils.hasText(text)) return value;
+                continue;
+            }
+            if (value != null) return value;
+        }
+        return null;
+    }
+
+    private static List<String> textList(Object value) {
+        List<String> items = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                String text = textItem(item);
+                if (StringUtils.hasText(text)) items.add(text);
+            }
+            return items;
+        }
+        String text = textItem(value);
+        if (StringUtils.hasText(text)) items.add(text);
+        return items;
+    }
+
+    private static String textItem(Object item) {
+        if (item == null) return "";
+        if (item instanceof String text) return text.trim();
+        if (item instanceof Map<?, ?> map) {
+            String speaker = firstText(map, "speaker", "name", "character");
+            String text = firstText(map, "text", "content", "line", "summary", "conflict");
+            if (StringUtils.hasText(speaker) && StringUtils.hasText(text)) return speaker + "：" + text;
+            if (StringUtils.hasText(text)) return text;
+        }
+        String text = String.valueOf(item).trim();
+        return StringUtils.hasText(text) && !"null".equals(text) ? text : "";
+    }
+
+    private static String firstText(Map<?, ?> map, String... keys) {
+        for (String key : keys) {
+            String text = textValue(map.get(key));
+            if (StringUtils.hasText(text)) return text.trim();
+        }
+        return "";
+    }
+
+    private static String textValue(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     private static void replaceNonEmptyStructure(Map<String, Object> target, Map<String, Object> source,
@@ -721,6 +985,147 @@ public class ScriptTaskService {
                 && result.get("characters") instanceof List<?> characters && !characters.isEmpty()
                 && result.get("outline") instanceof List<?> outline && !outline.isEmpty();
     }
+
+    private void importEpisodeScripts(Long seriesId, List<EpisodeScript> parts) {
+        for (EpisodeScript part : parts) {
+            if (!StringUtils.hasText(part.script())) continue;
+            DramaEpisode episode = dramaService.ensureEpisode(seriesId, part.episode());
+            if (DramaContract.STATUS_LOCKED.equals(episode.getStatus()) || StringUtils.hasText(episode.getSourceText())) {
+                continue;
+            }
+            DramaScriptSaveReq scriptReq = new DramaScriptSaveReq();
+            scriptReq.setSourceText(part.script());
+            dramaService.saveScript(episode.getId(), scriptReq);
+        }
+    }
+
+    private List<EpisodeScript> scriptsForSave(ScriptTask task, ScriptDocumentSaveReq req) {
+        if (req.getEpisodeScripts() != null && !req.getEpisodeScripts().isEmpty()) {
+            List<EpisodeScript> parts = new ArrayList<>();
+            for (ScriptEpisodeScriptReq item : req.getEpisodeScripts()) {
+                if (item == null || item.getEpisode() == null || item.getEpisode() < 1) continue;
+                parts.add(new EpisodeScript(item.getEpisode(), item.getScript() == null ? "" : item.getScript()));
+            }
+            parts = dedupeScripts(parts);
+            if (!parts.isEmpty()) return parts;
+        }
+        List<EpisodeScript> split = splitEpisodeScripts(req.getDocument());
+        return split.isEmpty() ? readEpisodeScripts(task) : split;
+    }
+
+    private static List<EpisodeScript> readEpisodeScripts(ScriptTask task) {
+        List<EpisodeScript> stored = episodeScriptsFrom(task.getResultJson());
+        if (!stored.isEmpty()) return stored;
+        return splitEpisodeScripts(task.getDocument());
+    }
+
+    private static List<EpisodeScript> episodeScriptsFrom(Map<String, Object> result) {
+        if (result == null || !(result.get("episode_scripts") instanceof List<?> list)) return List.of();
+        List<EpisodeScript> parts = new ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) continue;
+            int episode = episodeValue(map.get("episode"));
+            if (episode < 1) continue;
+            Object script = map.get("script");
+            parts.add(new EpisodeScript(episode, script == null ? "" : String.valueOf(script)));
+        }
+        return dedupeScripts(parts);
+    }
+
+    private static List<EpisodeScript> splitEpisodeScripts(String document) {
+        String text = document == null ? "" : document.replace("\r\n", "\n").trim();
+        text = text.replaceAll("(?s)\\n*【已按目标集数截取正文】\\s*$", "").trim();
+        if (!StringUtils.hasText(text)) return List.of();
+        Matcher matcher = EPISODE_MARKER.matcher(text);
+        List<int[]> hits = new ArrayList<>();
+        while (matcher.find()) {
+            int episode = episodeNumber(matcher.group(1), matcher.group(2), matcher.group(3));
+            if (episode < 1 || episode == Integer.MAX_VALUE) continue;
+            hits.add(new int[]{matcher.start(), episode});
+        }
+        if (hits.isEmpty()) return List.of(new EpisodeScript(1, text));
+        List<EpisodeScript> parts = new ArrayList<>();
+        if (hits.get(0)[0] > 0) {
+            String preamble = text.substring(0, hits.get(0)[0]).trim();
+            if (StringUtils.hasText(preamble)) {
+                if (hits.get(0)[1] == 1) hits.get(0)[0] = 0;
+                else parts.add(new EpisodeScript(1, preamble));
+            }
+        }
+        for (int i = 0; i < hits.size(); i++) {
+            int start = hits.get(i)[0];
+            int end = i + 1 < hits.size() ? hits.get(i + 1)[0] : text.length();
+            String block = text.substring(start, end).trim();
+            if (StringUtils.hasText(block)) parts.add(new EpisodeScript(hits.get(i)[1], block));
+        }
+        return dedupeScripts(parts);
+    }
+
+    private static List<EpisodeScript> dedupeScripts(List<EpisodeScript> parts) {
+        Map<Integer, String> ordered = new LinkedHashMap<>();
+        for (EpisodeScript part : parts) {
+            String script = part.script() == null ? "" : part.script();
+            String existing = ordered.get(part.episode());
+            if (!StringUtils.hasText(existing)) ordered.put(part.episode(), script);
+            else if (StringUtils.hasText(script)) ordered.put(part.episode(), existing.trim() + "\n\n" + script.trim());
+        }
+        List<EpisodeScript> result = new ArrayList<>();
+        ordered.forEach((episode, script) -> result.add(new EpisodeScript(episode, script)));
+        result.sort(Comparator.comparingInt(EpisodeScript::episode));
+        return result;
+    }
+
+    private static String joinEpisodeScripts(List<EpisodeScript> parts) {
+        StringBuilder builder = new StringBuilder();
+        for (EpisodeScript part : parts) {
+            if (!StringUtils.hasText(part.script())) continue;
+            if (!builder.isEmpty()) builder.append("\n\n");
+            builder.append(part.script().trim());
+        }
+        return builder.toString();
+    }
+
+    private static boolean sameScripts(List<EpisodeScript> left, List<EpisodeScript> right) {
+        if (left.size() != right.size()) return false;
+        for (int i = 0; i < left.size(); i++) {
+            if (left.get(i).episode() != right.get(i).episode()) return false;
+            if (!Objects.equals(left.get(i).script() == null ? "" : left.get(i).script().trim(),
+                    right.get(i).script() == null ? "" : right.get(i).script().trim())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void storeEpisodeScripts(ScriptTask task, String document) {
+        writeEpisodeScripts(task, splitEpisodeScripts(document));
+    }
+
+    private void writeEpisodeScripts(ScriptTask task, List<EpisodeScript> parts) {
+        Map<String, Object> result = task.getResultJson() == null
+                ? new LinkedHashMap<>() : new LinkedHashMap<>(task.getResultJson());
+        List<Map<String, Object>> stored = new ArrayList<>();
+        for (EpisodeScript part : parts) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("episode", part.episode());
+            item.put("script", part.script() == null ? "" : part.script());
+            stored.add(item);
+        }
+        result.put("episode_scripts", stored);
+        task.setResultJson(result);
+    }
+
+    private static int unimportedEpisodeCount(ScriptTask task, Map<Long, Set<Integer>> settled) {
+        if (task.getDramaSeriesId() == null) return 0;
+        Set<Integer> done = settled == null ? Set.of() : settled.getOrDefault(task.getDramaSeriesId(), Set.of());
+        int count = 0;
+        for (EpisodeScript part : readEpisodeScripts(task)) {
+            if (StringUtils.hasText(part.script()) && !done.contains(part.episode())) count++;
+        }
+        return count;
+    }
+
+    private record EpisodeScript(int episode, String script) {}
 
     private static String limitEpisodes(String document, int targetEpisodes) {
         if (!StringUtils.hasText(document) || targetEpisodes < 1) return document;
@@ -819,6 +1224,13 @@ public class ScriptTaskService {
     }
 
     private ScriptTaskResp toResp(ScriptTask task, boolean detail) {
+        Map<Long, Set<Integer>> settled = task.getDramaSeriesId() == null
+                ? Map.of()
+                : dramaService.settledEpisodeNumbers(Set.of(task.getDramaSeriesId()));
+        return toResp(task, detail, settled);
+    }
+
+    private ScriptTaskResp toResp(ScriptTask task, boolean detail, Map<Long, Set<Integer>> settled) {
         ScriptTaskResp resp = new ScriptTaskResp();
         resp.setId(task.getId());
         resp.setTitle(task.getTitle());
@@ -833,6 +1245,7 @@ public class ScriptTaskService {
         resp.setResult(task.getResultJson());
         resp.setAttachments(task.getAttachments());
         resp.setDramaSeriesId(task.getDramaSeriesId());
+        resp.setUnimportedEpisodeCount(unimportedEpisodeCount(task, settled));
         resp.setVersion(versionMapper.selectCount(new LambdaQueryWrapper<ScriptTaskVersion>()
                 .eq(ScriptTaskVersion::getTaskId, task.getId())).intValue());
         resp.setCreatedAt(task.getCreatedAt());

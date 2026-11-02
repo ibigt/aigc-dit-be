@@ -197,6 +197,55 @@ public class DramaService {
     }
 
     /**
+     * 按集数补齐章节。已有该集时直接返回，不改原文。
+     */
+    @Transactional
+    public DramaEpisode ensureEpisode(Long seriesId, int episodeNumber) {
+        DramaSeries series = requireSeries(seriesId);
+        DramaEpisode existing = episodeMapper.selectOne(new LambdaQueryWrapper<DramaEpisode>()
+                .eq(DramaEpisode::getSeriesId, series.getId())
+                .eq(DramaEpisode::getEpisodeNumber, episodeNumber)
+                .last("LIMIT 1"));
+        if (existing != null) {
+            return existing;
+        }
+        DramaEpisode episode = new DramaEpisode();
+        episode.setSeriesId(series.getId());
+        episode.setUserId(series.getUserId());
+        episode.setEpisodeNumber(episodeNumber);
+        episode.setName("第 " + episodeNumber + " 集");
+        episode.setStatus(DramaContract.STATUS_NOT_STARTED);
+        episode.setEngine(DramaContract.ENGINE_PENDING);
+        episodeMapper.insert(episode);
+        if (series.getPlannedEpisodeCount() == null || series.getPlannedEpisodeCount() < episodeNumber) {
+            series.setPlannedEpisodeCount(episodeNumber);
+            seriesMapper.updateById(series);
+        }
+        return episode;
+    }
+
+    /** 已有原文或已锁定的集数。这些集导入时保持不动。 */
+    public Map<Long, Set<Integer>> settledEpisodeNumbers(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
+            return Map.of();
+        }
+        List<DramaEpisode> episodes = episodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
+                .in(DramaEpisode::getSeriesId, seriesIds));
+        Map<Long, Set<Integer>> settled = new HashMap<>();
+        for (DramaEpisode episode : episodes) {
+            if (episode.getSeriesId() == null || episode.getEpisodeNumber() == null || !isSettledEpisode(episode)) {
+                continue;
+            }
+            settled.computeIfAbsent(episode.getSeriesId(), key -> new HashSet<>()).add(episode.getEpisodeNumber());
+        }
+        return settled;
+    }
+
+    private static boolean isSettledEpisode(DramaEpisode episode) {
+        return DramaContract.STATUS_LOCKED.equals(episode.getStatus()) || StringUtils.hasText(episode.getSourceText());
+    }
+
+    /**
      * 章节列表「删除」：删除本集，资产/章节/分镜/成片随 DB 级联清除；至少保留一集。返回更新后的项目详情。
      */
     @Transactional
