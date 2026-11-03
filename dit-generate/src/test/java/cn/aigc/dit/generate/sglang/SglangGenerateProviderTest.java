@@ -82,6 +82,7 @@ class SglangGenerateProviderTest {
     @Test void rejectsInvalidModesDurationsAndMultipleOutputs() {
         SglangGenerateProvider provider = new SglangGenerateProvider(mock(ObjectStorage.class), mock(SglangHttp.class));
         assertThrows(BizException.class, () -> provider.createBody(request().setMode("t2i")));
+        assertThrows(BizException.class, () -> provider.createBody(request().setDurationSec(4)));
         assertThrows(BizException.class, () -> provider.createBody(request().setDurationSec(16)));
         assertThrows(BizException.class, () -> provider.createBody(request().setCopies(2)));
         assertThrows(BizException.class, () -> provider.createBody(request().setMode("i2v")));

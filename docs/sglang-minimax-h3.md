@@ -21,7 +21,7 @@
 
 原生模型的 `--model-variant fl2va` 部署提供文生视频和首尾帧；`--model-variant ref2va` 提供参考生成。通常需配置两条模型记录及不同服务地址，并分别选择对应能力。详见 [SGLang 官方说明](https://github.com/sgl-project/sglang/blob/main/docs/cookbook/diffusion/MiniMax/MiniMax-H3.mdx)。
 
-时长支持 4–15 秒，默认 5 秒。每次任务只支持一个视频，多份输出请分别提交。取消任务仅停止后端跟踪，不会终止远端 GPU 推理。
+时长支持 5–15 秒，默认 5 秒（服务端约束 `target.duration_seconds ∈ [5, 15]`，4 秒会被 HTTP 400 拒绝）。每次任务只支持一个视频，多份输出请分别提交。取消任务仅停止后端跟踪，不会终止远端 GPU 推理。
 
 `adapterConfig` 可配置：
 

@@ -98,7 +98,8 @@ public class SglangGenerateProvider implements GenerateProvider {
         String prompt = request.getPrompt();
         if ((prompt == null || prompt.isBlank()) && !hasFrames) throw bad("提示词不能为空");
         int seconds = request.getDurationSec() == null ? 5 : request.getDurationSec();
-        if (seconds < 4 || seconds > 15) throw bad("SGLang MiniMax-H3 时长必须为 4–15 秒");
+        // 服务端约束 target.duration_seconds ∈ [5, 15]：4 秒会被 SGLang 以 HTTP 400 拒绝
+        if (seconds < 5 || seconds > 15) throw bad("SGLang MiniMax-H3 时长必须为 5–15 秒");
         String ratio = request.getRatio() == null || request.getRatio().isBlank() ? "16:9" : request.getRatio();
         ratio = ratio.replace('：', ':');
         if ("adaptive".equalsIgnoreCase(ratio)) ratio = "auto";
