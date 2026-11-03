@@ -139,7 +139,7 @@ public class WorkflowRunService {
                         if (taskId != null) {
                             generateService.cancelTaskIfActive(taskId, "取消工作流退还积分");
                         }
-                        step.put("status", TaskStatus.FAILED);
+                        step.put("status", TaskStatus.CANCELLED);
                         step.put("error", "已取消");
                         changed = true;
                     }
@@ -170,7 +170,8 @@ public class WorkflowRunService {
 
     private static boolean isTerminalStep(Map<String, Object> step) {
         String status = text(step.get("status"));
-        return TaskStatus.SUCCEEDED.equals(status) || TaskStatus.FAILED.equals(status) || "BLOCKED".equals(status);
+        return TaskStatus.SUCCEEDED.equals(status) || TaskStatus.FAILED.equals(status)
+                || TaskStatus.CANCELLED.equals(status) || "BLOCKED".equals(status);
     }
 
     public WorkflowSnapshotResp snapshotMine(Long workflowId) {
@@ -394,10 +395,13 @@ public class WorkflowRunService {
         }
         changed |= markBlockedDependents(steps);
         if (allTerminal(steps)) {
+            boolean cancelled = steps.stream().anyMatch(step -> TaskStatus.CANCELLED.equals(text(step.get("status"))));
             boolean partial = steps.stream().anyMatch(step -> TaskStatus.FAILED.equals(text(step.get("status")))
                     || "BLOCKED".equals(text(step.get("status"))));
-            finish(run, steps, partial ? "PARTIAL_FAILED" : TaskStatus.SUCCEEDED,
-                    partial ? aggregateErrors(steps) : null);
+            // 用户主动停止：既不是成功也不是失败，终态 CANCELLED（与 cancelMine 一致）
+            String status = cancelled ? TaskStatus.CANCELLED : partial ? "PARTIAL_FAILED" : TaskStatus.SUCCEEDED;
+            String error = cancelled ? "已取消" : partial ? aggregateErrors(steps) : null;
+            finish(run, steps, status, error);
             return true;
         }
         if (changed) {
@@ -495,7 +499,13 @@ public class WorkflowRunService {
                 step.put("progress", task.getProgress());
                 step.put("error", null);
                 changed = true;
-            } else if (TaskStatus.FAILED.equals(task.getStatus()) || "CANCELLED".equals(task.getStatus())) {
+            } else if ("CANCELLED".equals(task.getStatus())) {
+                // 用户主动停止：保留 CANCELLED 语义，前端据此显示「已取消」而非「生成失败」
+                step.put("status", TaskStatus.CANCELLED);
+                step.put("error", "已取消");
+                step.put("progress", task.getProgress());
+                changed = true;
+            } else if (TaskStatus.FAILED.equals(task.getStatus())) {
                 step.put("status", TaskStatus.FAILED);
                 step.put("error", clip(task.getErrorMessage() == null ? "生成失败" : task.getErrorMessage()));
                 step.put("progress", task.getProgress());
@@ -1058,6 +1068,7 @@ public class WorkflowRunService {
     private static boolean allTerminal(List<Map<String, Object>> steps) {
         return steps.stream().allMatch(step -> TaskStatus.SUCCEEDED.equals(text(step.get("status")))
                 || TaskStatus.FAILED.equals(text(step.get("status")))
+                || TaskStatus.CANCELLED.equals(text(step.get("status")))
                 || "BLOCKED".equals(text(step.get("status"))));
     }
 

@@ -187,6 +187,35 @@ class WorkflowRunServiceTest {
     }
 
     @Test
+    void cancelMarksStepCancelledInsteadOfFailed() {
+        WorkflowRun run = run(step("video-a", TaskStatus.RUNNING, 11L, List.of()));
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+
+        WorkflowRunResp response = service.cancelMine(1L, null);
+
+        // 用户主动停止不是生成失败：step 与运行终态都记 CANCELLED，前端才能显示「已取消」而非「生成失败」
+        assertEquals(TaskStatus.CANCELLED, response.getStatus());
+        assertEquals(TaskStatus.CANCELLED, response.getSteps().get(0).getStatus());
+        assertEquals("已取消", response.getSteps().get(0).getErrorMessage());
+        verify(generateService).cancelTaskIfActive(11L, "取消工作流退还积分");
+    }
+
+    @Test
+    void cancelledTaskKeepsCancelledStatusWhenRunConverges() {
+        WorkflowRun run = run(step("video-a", TaskStatus.RUNNING, 11L, List.of()));
+        GenTask cancelled = new GenTask();
+        cancelled.setStatus(TaskStatus.CANCELLED);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(genTaskMapper.selectById(11L)).thenReturn(cancelled);
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        // tick 收敛时不能把已取消的 task 改写成 FAILED，否则又变回「生成失败」
+        assertEquals(TaskStatus.CANCELLED, response.getSteps().get(0).getStatus());
+        assertEquals(TaskStatus.CANCELLED, response.getStatus());
+    }
+
+    @Test
     void textOnlyRunSucceedsWithoutModelOrGenerationTask() {
         WorkflowRunReq request = new WorkflowRunReq();
         request.setGraph(Map.of(
