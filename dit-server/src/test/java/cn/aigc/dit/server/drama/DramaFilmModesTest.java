@@ -10,6 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class DramaFilmModesTest {
 
     @Test
+    void totalKeptSecRoundsTrimmedSpans() {
+        assertEquals(10, DramaFilmModes.totalKeptSec(List.of(
+                new DramaFilmModes.ClipSpan(0, 0.2, 5),
+                new DramaFilmModes.ClipSpan(0.2, 0, 5))));
+        assertEquals(0, DramaFilmModes.totalKeptSec(List.of()));
+    }
+
+    @Test
     void sameSceneTrimsJoinButNotFirstHeadOrLastTail() {
         List<DramaFilmModes.ClipSpan> spans = plan(List.of(shot(1, 9, "客厅", 5), shot(2, 9, "客厅", 5)), null);
 

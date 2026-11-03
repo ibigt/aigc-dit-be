@@ -102,7 +102,8 @@ public class DramaFilmService {
             episode.setFilmAssembledAt(OffsetDateTime.now());
             episodeMapper.updateById(episode);
             try {
-                creationService.recordDramaFilm(episode);
+                int keptSec = DramaFilmModes.totalKeptSec(spans);
+                creationService.recordDramaFilm(episode, keptSec > 0 ? keptSec : null);
             } catch (Exception recorded) {
                 log.warn("record drama film into creations failed, episode={}", episode.getId(), recorded);
             }

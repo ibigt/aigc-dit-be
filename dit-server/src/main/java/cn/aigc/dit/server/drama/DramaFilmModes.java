@@ -65,6 +65,20 @@ public final class DramaFilmModes {
         }
     }
 
+    /** 成片可见时长：各镜裁完后保留的秒数，四舍五入到秒。 */
+    public static int totalKeptSec(List<ClipSpan> spans) {
+        if (spans == null || spans.isEmpty()) {
+            return 0;
+        }
+        double total = 0D;
+        for (ClipSpan span : spans) {
+            if (span != null) {
+                total += Math.max(0D, span.keptSec());
+            }
+        }
+        return (int) Math.round(total);
+    }
+
     public static double durationOf(DramaShot shot, Double probed) {
         if (probed != null && Double.isFinite(probed) && probed >= 1D) {
             return probed;

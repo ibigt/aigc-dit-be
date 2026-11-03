@@ -34,6 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -189,6 +191,7 @@ class DramaFilmServiceTest {
         assertEquals(List.of(3), resp.getMissingShotIndexes());
         assertEquals("/api/media?key=users%2F7%2Fdrama%2F31%2Ffilm.mp4", resp.getFilmUrl());
         verify(episodeMapper).updateById(episode);
+        verify(creationService).recordDramaFilm(eq(episode), argThat(duration -> duration != null && duration > 0));
         ArgumentCaptor<DramaEpisode> captor = ArgumentCaptor.forClass(DramaEpisode.class);
         verify(episodeMapper).updateById(captor.capture());
         assertEquals("users/7/drama/31/film-poster.webp", captor.getValue().getFilmPosterKey());
