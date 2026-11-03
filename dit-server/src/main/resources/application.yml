@@ -143,6 +143,8 @@ dit:
       download-timeout-seconds: ${ARK_DOWNLOAD_TIMEOUT_SECONDS:600}
       download-retries: ${ARK_DOWNLOAD_RETRIES:3}
       vision-model: ${ARK_VISION_MODEL:doubao-seed-2-1-pro-260915}
+      # 转资产图固定 Seedream 5.0；不依赖剧集图像模型绑定
+      seedream-convert-model: ${ARK_SEEDREAM_CONVERT_MODEL:doubao-seedream-5-0-pro}
       # 默认关闭：Seedream/Ark 管理端固定 token plan；实验按量 Key 时再开
       allow-payg-provider: ${ARK_ALLOW_PAYG_PROVIDER:false}
     minimax:

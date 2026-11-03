@@ -69,12 +69,15 @@ class GenerateWorkerRoundtripDescribeTest {
     private ObjectStorage objectStorage;
 
     private GenerateWorker worker;
+    private GenerateProperties generateProperties;
 
     @BeforeEach
     void setUp() {
+        generateProperties = new GenerateProperties();
+        generateProperties.getArk().setApiKey("ark-fallback-key");
         worker = new GenerateWorker(
                 stringRedisTemplate,
-                new GenerateProperties(),
+                generateProperties,
                 genTaskMapper,
                 aiModelMapper,
                 creationMapper,
@@ -91,17 +94,20 @@ class GenerateWorkerRoundtripDescribeTest {
     @Test
     void resolvePendingRoundtripDescribeFillsPromptAndClearsPending() {
         GenTask task = pendingDescribeTask();
-        AiModel model = seedreamModel();
-        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_CREDENTIAL_VIDEO_MODEL_ID, 6L);
+        AiModel shell = seedreamShellWithoutKey();
+        AiModel video = videoModel();
+        when(aiModelMapper.selectById(6L)).thenReturn(video);
+        when(encryptor.decrypt("enc-video")).thenReturn("ark-video-key");
         when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1, 2, 3});
         when(imageDescribeClient.describe(any(), eq("image/png"),
-                eq(ImageDescribePrompts.CHARACTER_FULL), anyString(), eq("ark-test-key"), isNull()))
+                eq(ImageDescribePrompts.CHARACTER_FULL), anyString(), eq("ark-video-key"), isNull()))
                 .thenReturn(new ImageDescribeResult(
                         "中年男性短发",
                         "方脸浓眉",
                         "【identity】中年男性短发\n【t2i_prompt】方脸浓眉"));
 
-        worker.resolvePendingRoundtripDescribe(task, model);
+        worker.resolvePendingRoundtripDescribe(task, shell);
 
         assertTrue(task.getPrompt().contains("中年男性短发"));
         assertTrue(task.getPrompt().contains("方脸浓眉"));
@@ -113,35 +119,48 @@ class GenerateWorkerRoundtripDescribeTest {
     }
 
     @Test
+    void resolvePendingRoundtripDescribeUsesArkApiKeyFallback() {
+        GenTask task = pendingDescribeTask();
+        task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_USE_ARK_API_KEY, true);
+        when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1, 2, 3});
+        when(imageDescribeClient.describe(any(), eq("image/png"),
+                eq(ImageDescribePrompts.CHARACTER_FULL), anyString(), eq("ark-fallback-key"), isNull()))
+                .thenReturn(new ImageDescribeResult("a", "b", "【identity】a\n【t2i_prompt】b"));
+
+        worker.resolvePendingRoundtripDescribe(task, seedreamShellWithoutKey());
+
+        verify(imageDescribeClient).describe(any(), eq("image/png"),
+                eq(ImageDescribePrompts.CHARACTER_FULL), anyString(), eq("ark-fallback-key"), isNull());
+    }
+
+    @Test
     void resolvePendingRoundtripDescribeUsesScenePrompt() {
         GenTask task = pendingDescribeTask();
         task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE, "场景");
         task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY, "users/7/upload/scene.jpg");
-        AiModel model = seedreamModel();
-        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_USE_ARK_API_KEY, true);
         when(objectStorage.getBytes("users/7/upload/scene.jpg")).thenReturn(new byte[]{9});
         when(imageDescribeClient.describe(any(), eq("image/jpeg"),
-                eq(ImageDescribePrompts.SCENE), anyString(), eq("ark-test-key"), isNull()))
+                eq(ImageDescribePrompts.SCENE), anyString(), eq("ark-fallback-key"), isNull()))
                 .thenReturn(new ImageDescribeResult("走廊", "冷光", "【identity】走廊\n【t2i_prompt】冷光"));
 
-        worker.resolvePendingRoundtripDescribe(task, model);
+        worker.resolvePendingRoundtripDescribe(task, seedreamShellWithoutKey());
 
         verify(imageDescribeClient).describe(any(), eq("image/jpeg"),
-                eq(ImageDescribePrompts.SCENE), anyString(), eq("ark-test-key"), isNull());
+                eq(ImageDescribePrompts.SCENE), anyString(), eq("ark-fallback-key"), isNull());
         assertTrue(task.getPrompt().contains("走廊"));
     }
 
     @Test
     void resolvePendingRoundtripDescribeFailsWhenVisionEmpty() {
         GenTask task = pendingDescribeTask();
-        AiModel model = seedreamModel();
-        when(encryptor.decrypt("enc-key")).thenReturn("ark-test-key");
+        task.getParams().put(DramaAssetService.PARAM_ROUNDTRIP_USE_ARK_API_KEY, true);
         when(objectStorage.getBytes("users/7/upload/ref.png")).thenReturn(new byte[]{1});
         when(imageDescribeClient.describe(any(), any(), any(), any(), any(), any()))
                 .thenReturn(new ImageDescribeResult("", "", ""));
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> worker.resolvePendingRoundtripDescribe(task, model));
+                () -> worker.resolvePendingRoundtripDescribe(task, seedreamShellWithoutKey()));
         assertEquals("图生文未得到可用提示词", error.getMessage());
     }
 
@@ -154,20 +173,33 @@ class GenerateWorkerRoundtripDescribeTest {
         params.put(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_PENDING, true);
         params.put(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY, "users/7/upload/ref.png");
         params.put(DramaAssetService.PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE, "角色");
+        params.put(DramaAssetService.PARAM_ROUNDTRIP_CONVERT_MODEL_KEY, "doubao-seedream-5-0-pro");
+        params.put(DramaAssetService.PARAM_ROUNDTRIP_CONVERT_ADAPTER_KEY, "seedream-5.0");
         params.put("assetGenerationSource", DramaAssetService.SOURCE_ROUNDTRIP);
         task.setParams(params);
         return task;
     }
 
-    private static AiModel seedreamModel() {
+    private static AiModel seedreamShellWithoutKey() {
         AiModel model = new AiModel();
         model.setId(12L);
         model.setCategory("image");
+        model.setProvider("官方API（token plan）");
+        model.setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
+        model.setAdapterKey("seedream-5.0");
+        model.setModelKey("doubao-seedream-5-0-pro");
+        return model;
+    }
+
+    private static AiModel videoModel() {
+        AiModel model = new AiModel();
+        model.setId(6L);
+        model.setCategory("video");
         model.setProvider("官方API");
         model.setEndpoint("https://ark.cn-beijing.volces.com/api/v3");
-        model.setApiKeyEnc("enc-key");
-        model.setAdapterKey("seedream-5.0");
-        model.setModelKey("doubao-seedream-5-0-260128");
+        model.setApiKeyEnc("enc-video");
+        model.setAdapterKey("seedance-2.0");
+        model.setModelKey("doubao-seedance-2-0-260128");
         return model;
     }
 }

@@ -8,7 +8,9 @@ import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.AdapterCatalog;
 import cn.aigc.dit.generate.GenerateMode;
+import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.ark.ArkKeys;
+import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.describe.ImageDescribeClient;
 import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
@@ -82,6 +84,13 @@ public class DramaAssetService {
     public static final String PARAM_ROUNDTRIP_DESCRIBE_PENDING = "roundtripDescribePending";
     public static final String PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY = "roundtripDescribeStorageKey";
     public static final String PARAM_ROUNDTRIP_DESCRIBE_ASSET_TYPE = "roundtripDescribeAssetType";
+    /** worker 强制使用的 Seedream 5.0 模型标识（来自 ARK_SEEDREAM_CONVERT_MODEL）。 */
+    public static final String PARAM_ROUNDTRIP_CONVERT_MODEL_KEY = "roundtripConvertModelKey";
+    public static final String PARAM_ROUNDTRIP_CONVERT_ADAPTER_KEY = "roundtripConvertAdapterKey";
+    public static final String PARAM_ROUNDTRIP_CONVERT_ENDPOINT = "roundtripConvertEndpoint";
+    /** 取 Key：有则从该视频模型解密；否则用 dit.generate.ark.api-key。 */
+    public static final String PARAM_ROUNDTRIP_CREDENTIAL_VIDEO_MODEL_ID = "roundtripCredentialVideoModelId";
+    public static final String PARAM_ROUNDTRIP_USE_ARK_API_KEY = "roundtripUseArkApiKey";
 
     private final DramaAssetMapper assetMapper;
     private final DramaAssetGenerationMapper assetGenerationMapper;
@@ -99,6 +108,7 @@ public class DramaAssetService {
     private final ObjectStorage objectStorage;
     private final AesGcmEncryptor encryptor;
     private final ImageDescribeClient imageDescribeClient;
+    private final GenerateProperties generateProperties;
     private final TransactionTemplate transactionTemplate;
     private final ObjectMapper objectMapper;
 
@@ -118,6 +128,7 @@ public class DramaAssetService {
                              ObjectStorage objectStorage,
                              AesGcmEncryptor encryptor,
                              ImageDescribeClient imageDescribeClient,
+                             GenerateProperties generateProperties,
                              PlatformTransactionManager transactionManager,
                              ObjectMapper objectMapper) {
         this.assetMapper = assetMapper;
@@ -136,6 +147,7 @@ public class DramaAssetService {
         this.objectStorage = objectStorage;
         this.encryptor = encryptor;
         this.imageDescribeClient = imageDescribeClient;
+        this.generateProperties = generateProperties;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.objectMapper = objectMapper;
     }
@@ -698,9 +710,8 @@ public class DramaAssetService {
         if (isGenerating(loadTask(asset.getGenTaskId()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "资产正在生成中，请稍后再转");
         }
-        AiModel model = requireBoundImageModel(series);
-        requireSeedream50ForConvert(model);
-        assertSameArkAccountForConvert(series, model);
+        AiModel catalog = resolveSeedreamConvertCatalogModel();
+        ConvertArkCredential credential = resolveConvertArkCredential(series);
         assertGenerateCapacity(asset.getEpisodeId());
         String storageKey = asset.getImageStorageKey();
         boolean refresh = mode != null && "refresh".equalsIgnoreCase(mode.trim());
@@ -718,10 +729,11 @@ public class DramaAssetService {
         }
         String normalizedResolution = normalizeImageResolution(resolution);
         String assetType = asset.getType();
+        String convertModelKey = configuredSeedreamConvertModelKey();
         return transactionTemplate.execute(status ->
-                submitConvertRoundtrip(assetId, storageKey, model.getId(), series.getId(),
+                submitConvertRoundtrip(assetId, storageKey, catalog.getId(), series.getId(),
                         series.getAspectRatio(), trimmedPrompt, normalizedResolution,
-                        describePending, assetType));
+                        describePending, assetType, convertModelKey, credential));
     }
 
     static String roundtripPromptKey(String storageKey) {
@@ -762,7 +774,9 @@ public class DramaAssetService {
             String prompt,
             String resolution,
             boolean describePending,
-            String assetType) {
+            String assetType,
+            String convertModelKey,
+            ConvertArkCredential credential) {
         DramaAsset asset = requireAsset(assetId);
         if (!StringUtils.hasText(asset.getImageStorageKey())
                 || !expectedStorageKey.equals(asset.getImageStorageKey())) {
@@ -785,6 +799,16 @@ public class DramaAssetService {
         extra.put("episodeId", asset.getEpisodeId());
         extra.put("assetId", asset.getId());
         extra.put("assetGenerationSource", SOURCE_ROUNDTRIP);
+        extra.put(PARAM_ROUNDTRIP_CONVERT_MODEL_KEY, convertModelKey);
+        extra.put(PARAM_ROUNDTRIP_CONVERT_ADAPTER_KEY, AdapterCatalog.SEEDREAM_5_0);
+        if (StringUtils.hasText(credential.endpoint())) {
+            extra.put(PARAM_ROUNDTRIP_CONVERT_ENDPOINT, credential.endpoint());
+        }
+        if (credential.videoModelId() != null) {
+            extra.put(PARAM_ROUNDTRIP_CREDENTIAL_VIDEO_MODEL_ID, credential.videoModelId());
+        } else {
+            extra.put(PARAM_ROUNDTRIP_USE_ARK_API_KEY, true);
+        }
         if (describePending) {
             extra.put(PARAM_ROUNDTRIP_DESCRIBE_PENDING, true);
             extra.put(PARAM_ROUNDTRIP_DESCRIBE_STORAGE_KEY, expectedStorageKey);
@@ -1279,56 +1303,113 @@ public class DramaAssetService {
         }
     }
 
-    private void requireSeedream50ForConvert(AiModel model) {
-        String adapterKey = AdapterCatalog.resolveKey(
-                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
-        if (!SeedreamOriginUrls.isSeedream50(adapterKey, model.getModelKey())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "转资产图须绑定 Seedream 5.0 系列图像模型");
+    /**
+     * 管理端启用的 Seedream 5.0 作为 submit 的 modelId 壳（capabilities/pricing）；
+     * 运行时由 worker 强制配置 modelKey + convert 凭证。
+     */
+    AiModel resolveSeedreamConvertCatalogModel() {
+        String configured = configuredSeedreamConvertModelKey();
+        List<AiModel> models = aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>()
+                .eq(AiModel::getEnabled, true)
+                .eq(AiModel::getCategory, "image")
+                .orderByAsc(AiModel::getId));
+        AiModel matched = null;
+        AiModel anySeedream50 = null;
+        for (AiModel model : models) {
+            String adapter = AdapterCatalog.resolveKey(
+                    model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+            if (!AdapterCatalog.SEEDREAM_5_0.equals(adapter)
+                    && !SeedreamOriginUrls.isSeedream50(adapter, model.getModelKey())) {
+                continue;
+            }
+            if (anySeedream50 == null) {
+                anySeedream50 = model;
+            }
+            if (seedreamModelKeyMatches(configured, model.getModelKey())) {
+                matched = model;
+                break;
+            }
         }
+        AiModel chosen = matched != null ? matched : anySeedream50;
+        if (chosen == null) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "转资产图需要管理端启用官方 Seedream 5.0 模型（配置 " + configured + "）");
+        }
+        return chosen;
+    }
+
+    String configuredSeedreamConvertModelKey() {
+        GenerateProperties.Ark ark = generateProperties == null ? null : generateProperties.getArk();
+        String configured = ark == null ? null : ark.getSeedreamConvertModel();
+        if (!StringUtils.hasText(configured)) {
+            return AdapterCatalog.SEEDREAM_5_0_MODEL;
+        }
+        return configured.trim();
+    }
+
+    static boolean seedreamModelKeyMatches(String configured, String modelKey) {
+        if (!StringUtils.hasText(configured) || !StringUtils.hasText(modelKey)) {
+            return false;
+        }
+        return normalizeSeedreamModelKey(configured).equals(normalizeSeedreamModelKey(modelKey));
+    }
+
+    private static String normalizeSeedreamModelKey(String key) {
+        String s = key.trim().toLowerCase(Locale.ROOT);
+        int at = s.indexOf('@');
+        if (at > 0) {
+            s = s.substring(0, at);
+        }
+        return s.replace('_', '-').replace(".", "-");
     }
 
     /**
-     * Seedance 只信任同账号 Seedream 5.0 原 HTTPS。双方都是方舟官方类时，要求解密后 Key 一致。
+     * 优先本剧官方 Seedance 视频模型的解密 Key + endpoint；否则回退 ARK_API_KEY。
      */
-    private void assertSameArkAccountForConvert(DramaSeries series, AiModel imageModel) {
-        if (series == null || series.getVideoModelId() == null || imageModel == null) {
-            return;
+    ConvertArkCredential resolveConvertArkCredential(DramaSeries series) {
+        if (series != null && series.getVideoModelId() != null) {
+            AiModel video = aiModelMapper.selectById(series.getVideoModelId());
+            if (video != null && Boolean.TRUE.equals(video.getEnabled())) {
+                String videoAdapter = AdapterCatalog.resolveKey(
+                        video.getAdapterKey(), video.getProvider(), video.getCategory(), video.getModelKey());
+                boolean official = AdapterCatalog.SEEDANCE_2_0.equals(videoAdapter)
+                        || AdapterCatalog.SEEDANCE_2_5.equals(videoAdapter)
+                        || AdapterCatalog.looksLikeOfficialSeedance(video.getModelKey());
+                String key = tryDecryptModelApiKey(video);
+                if (official && StringUtils.hasText(key)) {
+                    String endpoint = ArkUrls.v3Base(
+                            video.getEndpoint(),
+                            generateProperties.getArk().getBaseUrl(),
+                            video.getProvider());
+                    return new ConvertArkCredential(key, endpoint, video.getId());
+                }
+            }
         }
-        if (!isArkOfficialProvider(imageModel.getProvider())) {
-            return;
-        }
-        AiModel videoModel = aiModelMapper.selectById(series.getVideoModelId());
-        if (videoModel == null || !isArkOfficialProvider(videoModel.getProvider())) {
-            return;
-        }
-        String imageKey = decryptModelApiKey(imageModel);
-        String videoKey = decryptModelApiKey(videoModel);
-        if (!imageKey.equals(videoKey)) {
+        GenerateProperties.Ark ark = generateProperties.getArk();
+        String fallback = ark == null ? null : ark.getApiKey();
+        if (!StringUtils.hasText(fallback)) {
             throw new BizException(ErrorCode.BAD_REQUEST,
-                    "转资产图与视频模型须使用同一方舟 API Key，否则 Seedance 不信任 origin");
+                    "转资产图需要剧集绑定官方 Seedance（含方舟 Key），或配置 ARK_API_KEY");
         }
+        String endpoint = ArkUrls.v3Base(
+                null,
+                ark.getBaseUrl(),
+                AdapterCatalog.PROVIDER_OFFICIAL);
+        return new ConvertArkCredential(fallback.trim(), endpoint, null);
     }
 
-    private static boolean isArkOfficialProvider(String provider) {
-        if (!StringUtils.hasText(provider)) {
-            return false;
-        }
-        String value = provider.trim();
-        return AdapterCatalog.PROVIDER_OFFICIAL.equals(value)
-                || AdapterCatalog.PROVIDER_OFFICIAL_TOKEN_PLAN.equals(value)
-                || value.contains("官方API");
-    }
-
-    private String decryptModelApiKey(AiModel model) {
+    private String tryDecryptModelApiKey(AiModel model) {
         if (model == null || !StringUtils.hasText(model.getApiKeyEnc())) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+            return null;
         }
-        String decrypted = encryptor.decrypt(model.getApiKeyEnc());
-        String key = ArkKeys.normalize(decrypted);
-        if (!StringUtils.hasText(key)) {
-            throw new BizException(ErrorCode.BAD_REQUEST, "请在管理端填写火山方舟 API Key");
+        try {
+            return ArkKeys.normalize(encryptor.decrypt(model.getApiKeyEnc()));
+        } catch (Exception e) {
+            return null;
         }
-        return key;
+    }
+
+    record ConvertArkCredential(String apiKey, String endpoint, Long videoModelId) {
     }
 
     public static String mimeFromStorageKey(String storageKey) {
