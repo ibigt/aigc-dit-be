@@ -18,6 +18,7 @@ import cn.aigc.dit.generate.comfyui.ComfyUiGeometry;
 import cn.aigc.dit.generate.minimax.MiniMaxRequestMapper;
 import cn.aigc.dit.generate.runninghub.RunningHubGenerateProvider;
 import cn.aigc.dit.server.credit.CreditCalculator;
+import cn.aigc.dit.server.credit.VideoTiers;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
@@ -93,6 +94,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         applyAgnesGuardrails(adapterKey, request);
         applyArkGuardrails(adapterKey, request);
         applyMiniMaxGuardrails(adapterKey, model.getProvider(), request);
+        // 参考视频按它自己的分辨率档计价（上游按输入视频自己的 token 计费）；查不到时按最高档兜底
+        String referenceVideoResolution = referenceVideoResolution(request, userId);
         long cost = CreditCalculator.calculate(
                 model.getPricing(),
                 request.getCategory(),
@@ -100,7 +103,8 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
                 request.getQuality(),
                 billingQuantity(model, request),
                 request.resolvedCopies(),
-                referenceVideoSeconds(request));
+                referenceVideoSeconds(request),
+                referenceVideoResolution);
         // 工作台生成的产物只进「我的创作」，不绑快速创作会话：bindsQuickCreate 的判定是
         // 「不是短剧就算快速创作」，高级工作台出现后该前提不再成立，须显式排除
         boolean workflowRun = extraParams != null && extraParams.containsKey("workflowRunId");
@@ -116,6 +120,10 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         task.setProgress(0);
         task.setPrompt(request.getPrompt());
         Map<String, Object> params = GenerateRequests.toParams(request, session == null ? null : session.getId());
+        if (referenceVideoResolution != null) {
+            // 记录本次参考视频的计价档位，便于事后对账（按最高档兜底时这里不落值）
+            params.put("referenceVideoResolution", referenceVideoResolution);
+        }
         if (extraParams != null) {
             extraParams.forEach((key, value) -> {
                 if (value != null) {
@@ -180,6 +188,29 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         Integer reported = request.getReferenceVideoSeconds();
         int fallback = reported == null ? 0 : Math.max(0, reported);
         return Math.max(measured, fallback);
+    }
+
+    /**
+     * 参考视频（视频输入）的分辨率档：逐段查服务端自己的记录——创作产物的分辨率档
+     * （工作流上游生成的视频）或素材行的宽高——多段取更贵的一档。
+     * 只要有一段查不到就整体返回 null，由 CreditCalculator 按模型最高档保守计（不亏本）。
+     */
+    String referenceVideoResolution(GenerateRequest request, Long userId) {
+        if (request == null || request.getReferences() == null) {
+            return null;
+        }
+        String tier = null;
+        for (ReferenceAsset ref : request.getReferences()) {
+            if (ref == null || !AssetKind.VIDEO.equalsIgnoreCase(ref.getType())) {
+                continue;
+            }
+            String found = assetService.findOwnedVideoResolution(userId, ref.getStorageKey());
+            if (found == null) {
+                return null;
+            }
+            tier = VideoTiers.highest(tier, found);
+        }
+        return tier;
     }
 
     private static void validatePromptAndAudio(AiModel model, GenerateRequest request) {
@@ -333,6 +364,36 @@ public class GenerateService extends ServiceImpl<GenTaskMapper, GenTask> {
         if (ModelCategory.VIDEO.equals(request.getCategory())) {
             request.setDurationSec(ArkRequestMapper.clampSeconds(request.getDurationSec()));
             request.setResolution(ArkRequestMapper.clampResolution(request));
+        }
+        validateArkReferenceVideos(request);
+    }
+
+    /**
+     * Seedance 参考视频官方约束的兜底校验（快速创作与工作流共用本提交路径）：
+     * 2.0 ≤3 段且总 ≤15s（每段 2–15s），2.5 ≤10 段且总 ≤30s。
+     * 超限在这里拦下，避免透传后被方舟以含糊的 HTTP 400 拒掉。
+     */
+    private static void validateArkReferenceVideos(GenerateRequest request) {
+        if (request.getReferences() == null || request.getReferences().isEmpty()) {
+            return;
+        }
+        long videoCount = request.getReferences().stream()
+                .filter(java.util.Objects::nonNull)
+                .filter(ref -> AssetKind.VIDEO.equalsIgnoreCase(ref.getType()))
+                .count();
+        if (videoCount == 0) {
+            return;
+        }
+        int maxVideos = ArkRequestMapper.maxVideos(request);
+        if (videoCount > maxVideos) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考视频 " + videoCount
+                    + " 段超过该模型上限 " + maxVideos + " 段（Seedance 2.0 最多 3 段、2.5 最多 10 段），请减少视频参考");
+        }
+        int seconds = referenceVideoSeconds(request);
+        int maxSeconds = ArkRequestMapper.maxReferenceVideoSeconds(request);
+        if (seconds > maxSeconds) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考视频总时长 " + seconds
+                    + " 秒超过该模型上限 " + maxSeconds + " 秒（Seedance 2.0 最多 15 秒、2.5 最多 30 秒），请减少视频参考或缩短片段");
         }
     }
 

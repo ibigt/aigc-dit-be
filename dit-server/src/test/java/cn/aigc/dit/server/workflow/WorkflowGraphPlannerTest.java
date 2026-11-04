@@ -334,6 +334,37 @@ class WorkflowGraphPlannerTest {
         assertEquals(21, WorkflowGraphPlanner.plan(graph(nodes, List.of())).size());
     }
 
+    /**
+     * 功能测试画布：一张图分流到两个视频节点，再汇入同一个剪辑节点。
+     * 剪辑节点未显式配置 clips 时应自动收下全部上游视频，且顺序按拓扑（vid-1 先、vid-2 后）。
+     */
+    @Test
+    void singleImageFeedsTwoVideosIntoOneEditingNode() {
+        Map<String, Object> graph = graph(
+                List.of(
+                        generator("img-1", "ImageGenerator", "a cat"),
+                        generator("vid-1", "VideoGenerator", "cat walks"),
+                        generator("vid-2", "VideoGenerator", "cat jumps"),
+                        editing("edit-1", List.of())),
+                List.of(
+                        edge("img-1", "vid-1"),
+                        edge("img-1", "vid-2"),
+                        edge("vid-1", "edit-1"),
+                        edge("vid-2", "edit-1")));
+
+        List<WorkflowGraphPlanner.Step> steps = WorkflowGraphPlanner.plan(graph);
+
+        assertEquals(List.of("img-1", "vid-1", "vid-2", "edit-1"),
+                steps.stream().map(WorkflowGraphPlanner.Step::nodeId).toList());
+        assertEquals(List.of("GENERATE", "GENERATE", "GENERATE", "EDIT"),
+                steps.stream().map(WorkflowGraphPlanner.Step::stepType).toList());
+
+        WorkflowGraphPlanner.Step edit = steps.get(3);
+        assertEquals(List.of("vid-1", "vid-2"),
+                edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
+        assertEquals(List.of(0, 1), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
+    }
+
     private static Map<String, Object> generator(String id, String kind, String prompt) {
         return generator(id, kind, prompt, Map.of());
     }

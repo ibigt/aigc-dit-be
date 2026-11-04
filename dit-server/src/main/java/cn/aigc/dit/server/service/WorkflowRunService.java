@@ -6,6 +6,8 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.LoginUser;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.generate.AdapterCatalog;
+import cn.aigc.dit.generate.ark.ArkRequestMapper;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.entity.WorkflowRun;
@@ -43,6 +45,22 @@ public class WorkflowRunService {
     private static final int MAX_REUSE_RUNS = 50;
     /** 上游产物落盘等待上限：超过即判定素材缺失，避免把「文件还没写完」当成生成失败白扣积分。 */
     private static final long REF_WAIT_MILLIS = 90_000L;
+    /**
+     * 步骤上的「用户已请求取消」标记（毫秒时间戳）。
+     * 取消与定时推进存在竞态：cancelTaskIfActive 要等 worker 任务锁，期间 gen_task 可能仍是 RUNNING。
+     * 有了这个标记，refreshTasks 就不会把节点从 CANCELLED 刷回 RUNNING（否则表现为「停止后几秒又变成生成中」）。
+     */
+    private static final String CANCEL_REQUESTED_AT = "cancelRequestedAt";
+    /**
+     * 无生成任务、却长期停在中间态的步骤（SUBMITTING/EDITING/QUEUED）容忍时长。
+     * 只有会连真实上游的推进才会把步骤带出这些中间态；一旦进程死在「写状态 → 拿到 taskId」之间，
+     * 步骤就会永远卡住，整个 run 跟着一直 RUNNING，前端右上角就一直显示「停止」。
+     */
+    private static final long STEP_STUCK_MILLIS = 180_000L;
+    /** 运行级僵尸兜底：run 超过该时长没有任何推进，直接收敛为终态，避免永久占住前端「停止」按钮。 */
+    private static final long RUN_STALE_MILLIS = 30 * 60_000L;
+    /** 步骤进入中间态（SUBMITTING/EDITING/QUEUED）的时间戳落点，用于 {@link #STEP_STUCK_MILLIS} 计时。 */
+    private static final String STUCK_SINCE = "stuckSince";
 
     private final WorkflowRunMapper workflowRunMapper;
     private final GenTaskMapper genTaskMapper;
@@ -77,9 +95,11 @@ public class WorkflowRunService {
                 throw new BizException("前次运行不属于当前工作流");
             }
         }
+        // 整图运行与单节点运行都复用同一工作流的历史成功产物：
+        // 参数未变的节点按指纹命中历史直接复用（不重生成），只有改动过的节点与从未跑过的节点才真正执行。
         List<WorkflowRun> history = req.getWorkflowId() == null ? ownedHistoryChain(prior)
-                : req.getNodeId() == null ? List.of() : ownedHistory(req.getWorkflowId(), MAX_REUSE_RUNS);
-        initializeReusable(steps, history, req.getNodeId());
+                : ownedHistory(req.getWorkflowId(), MAX_REUSE_RUNS);
+        initializeReusable(steps, history, req.getNodeId(), Boolean.TRUE.equals(req.getForceRegenerate()));
         WorkflowRun run = new WorkflowRun();
         run.setWorkflowId(req.getWorkflowId());
         run.setPreviousRunId(prior == null ? null : prior.getId());
@@ -87,7 +107,7 @@ public class WorkflowRunService {
         run.setModelId(req.getModelId());
         run.setStatus(TaskStatus.RUNNING);
         run.setProgress(0);
-        run.setTotal(steps.size());
+        run.setTotal(workTotal(steps));
         run.setSteps(steps);
         workflowRunMapper.insert(run);
         advance(run.getId());
@@ -141,6 +161,10 @@ public class WorkflowRunService {
                         }
                         step.put("status", TaskStatus.CANCELLED);
                         step.put("error", "已取消");
+                        // 取消意图要落库：cancelTaskIfActive 需等 worker 任务锁，与 4 秒一次的 tick 存在竞态。
+                        // 没有这个标记时 refreshTasks 会把仍在 RUNNING 的 gen_task 反过来写回 step 的 RUNNING，
+                        // 用户看到「点了停止，几秒后节点又变回生成中」。
+                        step.put(CANCEL_REQUESTED_AT, System.currentTimeMillis());
                         changed = true;
                     }
                     if (changed) {
@@ -148,19 +172,31 @@ public class WorkflowRunService {
                             finish(run, steps, TaskStatus.CANCELLED, "已取消");
                         } else {
                             run.setSteps(steps);
-                            run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+                            run.setProgress(workProgress(steps));
                             workflowRunMapper.updateById(run);
                         }
                     }
                 }
             } else {
-                // 锁被定时推进占用：先幂等取消任务（worker/推进均尊重 CANCELLED），状态由 tick 收敛
-                for (Map<String, Object> step : copySteps(run.getSteps())) {
+                // 锁被定时推进占用：先幂等取消任务（worker/推进均尊重 CANCELLED），状态由 tick 收敛。
+                // 注意：这里同样要落 cancelRequestedAt，否则 tick 里的 refreshTasks 会按 gen_task 的 RUNNING
+                // 把节点写回生成中，用户看到停止后节点又「活」了。
+                boolean touched = false;
+                List<Map<String, Object>> steps = copySteps(run.getSteps());
+                for (Map<String, Object> step : steps) {
+                    if (isTerminalStep(step) || !(wholeRun || java.util.Objects.equals(nodeId, text(step.get("nodeId"))))) {
+                        continue;
+                    }
                     Long taskId = longValue(step.get("taskId"));
-                    if (!isTerminalStep(step) && taskId != null
-                            && (wholeRun || java.util.Objects.equals(nodeId, text(step.get("nodeId"))))) {
+                    if (taskId != null) {
                         generateService.cancelTaskIfActive(taskId, "取消工作流退还积分");
                     }
+                    step.put(CANCEL_REQUESTED_AT, System.currentTimeMillis());
+                    touched = true;
+                }
+                if (touched) {
+                    run.setSteps(steps);
+                    workflowRunMapper.updateById(run);
                 }
                 advance(id);
             }
@@ -279,6 +315,9 @@ public class WorkflowRunService {
         }
         List<Map<String, Object>> steps = copySteps(run.getSteps());
         boolean changed = refreshTasks(steps);
+        // 卡在「提交中 / 合成中 / 排队中」却始终没有 taskId 的步骤直接判失败，
+        // 否则 run 会永远 RUNNING：前端刷新后右上角仍显示「停止」，用户以为还在生成。
+        changed |= failStuckSteps(steps);
         changed |= markBlockedDependents(steps);
         log.debug("workflow run {} pass={}", runId,
                 steps.stream().map(item -> item.get("nodeId") + ":" + item.get("status") + ":" + item.get("taskId")).toList());
@@ -326,7 +365,7 @@ public class WorkflowRunService {
                 if (!"EDITING".equals(status)) {
                     step.put("status", "EDITING");
                     run.setSteps(steps);
-                    run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+                    run.setProgress(workProgress(steps));
                     workflowRunMapper.updateById(run);
                 }
                 try {
@@ -359,7 +398,7 @@ public class WorkflowRunService {
             }
             step.put("status", "SUBMITTING");
             run.setSteps(steps);
-            run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+            run.setProgress(workProgress(steps));
             workflowRunMapper.updateById(run);
             GenTask recovered = findWorkflowTask(run.getId(), run.getUserId(), text(step.get("nodeId")));
             if (recovered != null) {
@@ -368,6 +407,12 @@ public class WorkflowRunService {
                 step.put("progress", recovered.getProgress());
                 step.put("creditCost", recovered.getCreditCost());
                 changed = true;
+                continue;
+            }
+            if ("SUBMITTING".equals(status) && withinStuckGrace(step)) {
+                // 宽限期内先找回、找不到也不重提：上一次提交可能还在途，
+                // 立即重提会重复扣积分；超时由 failStuckSteps 收敛为 FAILED。
+                // 刚由 PENDING 置为 SUBMITTING 的步骤没有 stuckSince 标记，本轮照常提交。
                 continue;
             }
             try {
@@ -404,12 +449,70 @@ public class WorkflowRunService {
             finish(run, steps, status, error);
             return true;
         }
+        if (run.getCreatedAt() != null
+                && run.getCreatedAt().isBefore(OffsetDateTime.now().minusMinutes(RUN_STALE_MILLIS / 60_000L))) {
+            // 兜底：run 存在超过 RUN_STALE_MILLIS 仍未终态，说明推进链路已经坏死（进程重启丢失、
+            // 上游任务永久挂起等）。直接收敛为 PARTIAL_FAILED，避免 activeRuns 永远把它报成 RUNNING。
+            for (Map<String, Object> step : steps) {
+                String status = text(step.get("status"));
+                if (TaskStatus.RUNNING.equals(status) || "QUEUED".equals(status)
+                        || "SUBMITTING".equals(status) || "EDITING".equals(status)
+                        || TaskStatus.PENDING.equals(status) || "IDLE".equals(status)) {
+                    step.put("status", TaskStatus.FAILED);
+                    step.put("error", "运行超时未完成");
+                }
+            }
+            log.warn("workflow run {} exceeded {} minutes without reaching a terminal state, forcing close",
+                    runId, RUN_STALE_MILLIS / 60_000L);
+            finish(run, steps, "PARTIAL_FAILED", "运行超时未完成");
+            return true;
+        }
         if (changed) {
             run.setSteps(steps);
-            run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+            run.setProgress(workProgress(steps));
             workflowRunMapper.updateById(run);
         }
         return false;
+    }
+
+    /**
+     * 中间态卡死兜底：SUBMITTING/EDITING/QUEUED 且没有 taskId 的步骤，超过 {@link #STEP_STUCK_MILLIS}
+     * 仍未被推进，判定为推进链路坏死，直接置 FAILED。用 run 的 createdAt 作参照，
+     * 因为步骤本身不带时间戳，而 run 的开始时间就是这些中间态的上界。
+     */
+    private boolean failStuckSteps(List<Map<String, Object>> steps) {
+        boolean changed = false;
+        for (Map<String, Object> step : steps) {
+            String status = text(step.get("status"));
+            if (!"SUBMITTING".equals(status) && !"EDITING".equals(status) && !"QUEUED".equals(status)) {
+                continue;
+            }
+            if (step.containsKey(CANCEL_REQUESTED_AT)) {
+                continue;
+            }
+            if (longValue(step.get("taskId")) != null) {
+                // 已有生成任务：交给 refreshTasks 按任务终态收敛，这里不抢。
+                continue;
+            }
+            if (!step.containsKey(STUCK_SINCE)) {
+                step.put(STUCK_SINCE, System.currentTimeMillis());
+                changed = true;
+                continue;
+            }
+            long since = longValue(step.get(STUCK_SINCE)) == null ? 0L : longValue(step.get(STUCK_SINCE));
+            if (since > 0 && System.currentTimeMillis() - since > STEP_STUCK_MILLIS) {
+                step.put("status", TaskStatus.FAILED);
+                step.put("error", "生成任务提交超时，请重试");
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /** 「提交中」步骤是否仍在宽限期内（stuckSince 已记且未超 {@link #STEP_STUCK_MILLIS}）。 */
+    private static boolean withinStuckGrace(Map<String, Object> step) {
+        Long since = longValue(step.get(STUCK_SINCE));
+        return since != null && System.currentTimeMillis() - since <= STEP_STUCK_MILLIS;
     }
 
     private GenTask findWorkflowTask(Long runId, Long userId, String nodeId) {
@@ -427,6 +530,16 @@ public class WorkflowRunService {
         for (Map<String, Object> step : steps) {
             String stepStatus = text(step.get("status"));
             if (!TaskStatus.RUNNING.equals(stepStatus) && !"QUEUED".equals(stepStatus)) {
+                continue;
+            }
+            // 用户已点停止：以取消意图为准，不再用 gen_task 的旧状态把节点刷回生成中。
+            // 否则 worker 尚未把任务落成 CANCELLED 的窗口期内，节点会反复回弹成 RUNNING。
+            if (step.containsKey(CANCEL_REQUESTED_AT)) {
+                if (!TaskStatus.CANCELLED.equals(stepStatus)) {
+                    step.put("status", TaskStatus.CANCELLED);
+                    step.put("error", "已取消");
+                    changed = true;
+                }
                 continue;
             }
             Long taskId = longValue(step.get("taskId"));
@@ -540,6 +653,7 @@ public class WorkflowRunService {
         String category = text(step.get("category"));
         if (!ModelCategory.AUDIO.equals(category)) {
             List<GenerateSubmitReq.ReferenceInput> refs = collectRefs(step, steps, category);
+            validateReferenceCounts(refs, text(step.get("title")), referenceVideoMaxCount(step));
             log.info("workflow submit node={} refs={}", step.get("nodeId"),
                     refs.stream().map(GenerateSubmitReq.ReferenceInput::getStorageKey).toList());
             if (Boolean.TRUE.equals(step.get("frameMode"))) {
@@ -576,10 +690,11 @@ public class WorkflowRunService {
             // 工作流产物不在素材表，服务端实测不到时长，故用上游步骤产物里的时长兜底。
             int referenceVideoSeconds = referenceVideoSeconds(step, steps);
             if (referenceVideoSeconds > 0) {
-                // D2 后端兜底：参考视频总时长不得超 30s（对齐 Seedance 2.5 上限），超限直接拦截运行。
-                if (referenceVideoSeconds > REFERENCE_VIDEO_MAX_SECONDS) {
+                // D2 后端兜底：参考视频总时长按模型代际分档（Seedance 2.0 ≤15s、2.5 ≤30s），超限直接拦截运行。
+                int referenceVideoMaxSeconds = referenceVideoMaxSeconds(step);
+                if (referenceVideoSeconds > referenceVideoMaxSeconds) {
                     throw new BizException("参考视频档「" + step.get("title") + "」参考视频总时长 "
-                            + referenceVideoSeconds + " 秒超过上限 " + REFERENCE_VIDEO_MAX_SECONDS
+                            + referenceVideoSeconds + " 秒超过上限 " + referenceVideoMaxSeconds
                             + " 秒，请减少视频参考数量或缩短片段");
                 }
                 req.setReferenceVideoSeconds(referenceVideoSeconds);
@@ -593,7 +708,7 @@ public class WorkflowRunService {
      * 与后端 CreditCalculator 的「参考视频按最高档价计费」口径对齐。
      */
     private int referenceVideoSeconds(Map<String, Object> step, List<Map<String, Object>> steps) {
-        if (!Boolean.TRUE.equals(step.get("videoRefMode"))) {
+        if (!usesVideoReference(step)) {
             return 0;
         }
         int total = 0;
@@ -640,10 +755,11 @@ public class WorkflowRunService {
     private List<GenerateSubmitReq.ReferenceInput> collectRefs(Map<String, Object> step, List<Map<String, Object>> steps, String category) {
         List<GenerateSubmitReq.ReferenceInput> refs = new ArrayList<>();
         boolean frameMode = Boolean.TRUE.equals(step.get("frameMode"));
-        boolean videoRefMode = Boolean.TRUE.equals(step.get("videoRefMode"));
-        // 显式首尾帧图框（B2）：参考帧档不从参考素材取帧素材（与参考素材互斥），直接置空引用列表
+        boolean videoRefMode = usesVideoReference(step);
+        // 显式首帧图框（B2）：参考帧档不再从连线推断首帧，且不取参考素材（与参考素材互斥）。
+        // 只设置尾帧时，仍允许上游视频/图片按连线推断出首帧。
         boolean explicitFrames = frameMode
-                && (text(step.get("firstFrameKey")) != null || text(step.get("lastFrameKey")) != null);
+                && text(step.get("firstFrameKey")) != null;
         if (step.get("staticRefs") instanceof List<?> raw) {
             for (Object item : raw) {
                 if (item instanceof Map<?, ?> map) {
@@ -681,15 +797,88 @@ public class WorkflowRunService {
         if (explicitFrames) {
             return List.of();
         }
-        // 上限与 Seedance 2.5 对齐（30 图 / 10 视频 + 10 音频，合计 ≤50）；超出直接截断
-        return refs.size() > MAX_WORKFLOW_REFS ? refs.subList(0, MAX_WORKFLOW_REFS) : refs;
+        return refs;
     }
 
-    /** 工作流节点参考素材上限：对齐 Seedance 2.5 的合计 50 份口径（前端已按类型分别提示） */
-    private static final int MAX_WORKFLOW_REFS = 50;
-
-    /** 参考视频总时长上限（秒）：对齐 Seedance 2.5 的「视频 ≤10 段（总 30s）」约束（D2 后端兜底） */
+    /** 参考视频总时长默认上限（秒）：对齐 Seedance 2.5 的「视频 ≤10 段（总 30s）」约束；Seedance 2.0 分档为 15s（D2 后端兜底） */
     private static final int REFERENCE_VIDEO_MAX_SECONDS = 30;
+
+    /** 参考图片数量上限：对齐前端 REFERENCE_LIMITS.IMAGE */
+    private static final int REFERENCE_IMAGE_MAX_COUNT = 30;
+
+    /** 参考视频段数默认上限：对齐前端 REFERENCE_LIMITS.VIDEO（总时长另行限制）；Seedance 2.0 分档为 3 段 */
+    private static final int REFERENCE_VIDEO_MAX_COUNT = 10;
+
+    /** 参考音频数量上限：对齐前端 REFERENCE_LIMITS.AUDIO */
+    private static final int REFERENCE_AUDIO_MAX_COUNT = 10;
+
+    /** Seedance 2.0 参考视频段数上限（官方约束：≤3 段且总 ≤15s）。 */
+    private static final int REFERENCE_VIDEO_MAX_COUNT_2_0 = 3;
+
+    /**
+     * 按类型校验参考数量上限，防止绕过前端直接提交超量引用。
+     * 口径与前端 REFERENCE_LIMITS 一致：图片 ≤30、视频 ≤10 段（Seedance 2.0 为 3 段）、音频 ≤10。
+     */
+    private void validateReferenceCounts(List<GenerateSubmitReq.ReferenceInput> refs, String nodeTitle, int videoMaxCount) {
+        if (refs == null || refs.isEmpty()) {
+            return;
+        }
+        long imageCount = refs.stream().filter(ref -> ModelCategory.IMAGE.equalsIgnoreCase(ref.getType())).count();
+        long videoCount = refs.stream().filter(ref -> ModelCategory.VIDEO.equalsIgnoreCase(ref.getType())).count();
+        long audioCount = refs.stream().filter(ref -> ModelCategory.AUDIO.equalsIgnoreCase(ref.getType())).count();
+        if (imageCount > REFERENCE_IMAGE_MAX_COUNT) {
+            throw new BizException("节点「" + nodeTitle + "」参考图片 " + imageCount
+                    + " 张超过上限 " + REFERENCE_IMAGE_MAX_COUNT + " 张，请减少图片参考");
+        }
+        if (videoCount > videoMaxCount) {
+            throw new BizException("节点「" + nodeTitle + "」参考视频 " + videoCount
+                    + " 段超过上限 " + videoMaxCount + " 段，请减少视频参考");
+        }
+        if (audioCount > REFERENCE_AUDIO_MAX_COUNT) {
+            throw new BizException("节点「" + nodeTitle + "」参考音频 " + audioCount
+                    + " 条超过上限 " + REFERENCE_AUDIO_MAX_COUNT + " 条，请减少音频参考");
+        }
+    }
+
+    /**
+     * 参考视频守卫按模型代际分档：Seedance 2.0 官方限 ≤3 段/总 ≤15s，
+     * 2.5 及其他视频模型沿用 ≤10 段/总 ≤30s。GenerateService 提交层另有同口径兜底。
+     */
+    private int referenceVideoMaxCount(Map<String, Object> step) {
+        return isSeedance20Step(step) ? REFERENCE_VIDEO_MAX_COUNT_2_0 : REFERENCE_VIDEO_MAX_COUNT;
+    }
+
+    private int referenceVideoMaxSeconds(Map<String, Object> step) {
+        return isSeedance20Step(step)
+                ? ArkRequestMapper.REFERENCE_VIDEO_MAX_SECONDS_2_0
+                : REFERENCE_VIDEO_MAX_SECONDS;
+    }
+
+    private boolean isSeedance20Step(Map<String, Object> step) {
+        Long modelId = longValue(step.get("modelId"));
+        if (modelId == null) {
+            return false;
+        }
+        AiModel model = aiModelMapper.selectById(modelId);
+        if (model == null) {
+            return false;
+        }
+        String adapterKey = AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        return AdapterCatalog.SEEDANCE_2_0.equals(adapterKey);
+    }
+
+    /**
+     * 兼容两代数据：新画布由 planner 显式写入 videoRefMode；旧运行可能没有该字段。
+     * 视频节点只要不是首尾帧档，历史行为和前端默认都按「参考视频整段透传」处理。
+     */
+    private static boolean usesVideoReference(Map<String, Object> step) {
+        if (!ModelCategory.VIDEO.equals(text(step.get("category")))
+                || Boolean.TRUE.equals(step.get("frameMode"))) {
+            return false;
+        }
+        return !Boolean.FALSE.equals(step.get("videoRefMode"));
+    }
 
     /**
      * 上游视频的尾帧 key：已抽过（如分镜/之前运行）直接复用，否则现抽一次。
@@ -909,7 +1098,8 @@ public class WorkflowRunService {
         return history;
     }
 
-    private static void initializeReusable(List<Map<String, Object>> steps, List<WorkflowRun> history, String target) {
+    private static void initializeReusable(List<Map<String, Object>> steps, List<WorkflowRun> history, String target,
+                                           boolean forceRegenerate) {
         Long userId = UserContext.requireUserId();
         for (Map<String, Object> step : steps) {
             if (!depsSucceeded(step, steps)) continue;
@@ -921,7 +1111,10 @@ public class WorkflowRunService {
                 step.put("creditCost", 0L);
                 continue;
             }
-            if (target == null || target.equals(text(step.get("nodeId")))) continue;
+            // 全部重新生成：跳过复用，所有生成/剪辑步骤都真跑（文本/已上传音频是零成本直通步骤，仍不重跑）
+            if (forceRegenerate) continue;
+            // 整图运行(target=null)复用所有命中指纹的节点；单节点运行仅跳过目标节点本身，确保它被执行
+            if (target != null && target.equals(text(step.get("nodeId")))) continue;
             for (WorkflowRun prior : history) {
                 if (!userId.equals(prior.getUserId())) continue;
                 Map<String, Object> previous = copySteps(prior.getSteps()).stream()
@@ -945,7 +1138,7 @@ public class WorkflowRunService {
     private void finish(WorkflowRun run, List<Map<String, Object>> steps, String status, String error) {
         run.setSteps(steps);
         run.setStatus(status);
-        run.setProgress(count(steps, TaskStatus.SUCCEEDED));
+        run.setProgress(workProgress(steps));
         run.setErrorMessage(error);
         run.setFinishedAt(OffsetDateTime.now());
         workflowRunMapper.updateById(run);
@@ -984,6 +1177,7 @@ public class WorkflowRunService {
             item.setStatus(text(step.get("status")));
             item.setProgress(intValue(step.get("progress")));
             item.setCreditCost(longValue(step.get("creditCost")));
+            item.setReused(step.get("reusedFromRunId") != null);
             item.setResolvedPrompt(text(step.get("resolvedPrompt")));
             item.setTaskId(longValue(step.get("taskId")));
             item.setErrorMessage(text(step.get("error")));
@@ -1086,8 +1280,24 @@ public class WorkflowRunService {
                 .findFirst().orElse(null);
     }
 
-    private static int count(List<Map<String, Object>> steps, String status) {
-        return (int) steps.stream().filter(step -> status.equals(text(step.get("status")))).count();
+    /**
+     * 需要真正干活的步骤：生成（扣积分）与剪辑合成。
+     * 文本节点与已上传音频是零成本直通步骤，不计入进度分母——否则工具条会显示「3/5」却只扣了 2 个节点的积分。
+     */
+    private static List<Map<String, Object>> workSteps(List<Map<String, Object>> steps) {
+        return steps.stream().filter(step -> {
+            String type = text(step.get("stepType"));
+            return "GENERATE".equals(type) || "EDIT".equals(type);
+        }).toList();
+    }
+
+    private static int workTotal(List<Map<String, Object>> steps) {
+        return workSteps(steps).size();
+    }
+
+    private static int workProgress(List<Map<String, Object>> steps) {
+        return (int) workSteps(steps).stream()
+                .filter(step -> TaskStatus.SUCCEEDED.equals(text(step.get("status")))).count();
     }
 
     private static List<String> strings(Object value) {

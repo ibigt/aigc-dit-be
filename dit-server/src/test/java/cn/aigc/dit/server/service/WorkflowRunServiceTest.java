@@ -9,6 +9,7 @@ import cn.aigc.dit.generate.ffmpeg.FfmpegSupport;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.entity.WorkflowRun;
+import cn.aigc.dit.server.model.req.GenerateSubmitReq;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.GenTaskMapper;
 import cn.aigc.dit.server.mapper.WorkflowRunMapper;
@@ -38,11 +39,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -216,6 +219,54 @@ class WorkflowRunServiceTest {
     }
 
     @Test
+    void stuckStepWithoutTaskIsFailedSoRunStopsHoldingTheStopButton() {
+        // 步骤卡在 SUBMITTING 且始终拿不到 taskId：旧逻辑下 run 会永远 RUNNING，
+        // 前端刷新后右上角一直显示「停止」。现在超时即判 FAILED 并收敛终态。
+        Map<String, Object> step = step("video-a", "SUBMITTING", null, List.of());
+        step.put("stuckSince", System.currentTimeMillis() - 10 * 60_000L);
+        WorkflowRun run = run(step);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, response.getSteps().get(0).getStatus());
+        assertEquals("生成任务提交超时，请重试", response.getSteps().get(0).getErrorMessage());
+        assertNotEquals(TaskStatus.RUNNING, response.getStatus());
+    }
+
+    @Test
+    void freshStuckStepIsGivenTimeBeforeBeingFailed() {
+        // 刚进入中间态就判失败会误伤正常提交，必须先记下 stuckSince 再说
+        Map<String, Object> step = step("video-a", "SUBMITTING", null, List.of());
+        step.put("stuckSince", System.currentTimeMillis());
+        WorkflowRun run = run(step);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        assertNotEquals(TaskStatus.FAILED, response.getSteps().get(0).getStatus());
+    }
+
+    @Test
+    void runOlderThanHalfAnHourIsForcedToTerminal() {
+        // 运行级兜底：任何原因导致的坏死运行都不能永久占住 activeRuns
+        Map<String, Object> step = step("video-a", TaskStatus.RUNNING, 11L, List.of());
+        WorkflowRun run = run(step);
+        run.setCreatedAt(java.time.OffsetDateTime.now().minusMinutes(40));
+        GenTask running = new GenTask();
+        running.setStatus(TaskStatus.RUNNING);
+        running.setProgress(30);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(genTaskMapper.selectById(11L)).thenReturn(running);
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        assertEquals("PARTIAL_FAILED", response.getStatus());
+        assertEquals("运行超时未完成", response.getErrorMessage());
+        assertEquals(TaskStatus.FAILED, response.getSteps().get(0).getStatus());
+    }
+
+    @Test
     void textOnlyRunSucceedsWithoutModelOrGenerationTask() {
         WorkflowRunReq request = new WorkflowRunReq();
         request.setGraph(Map.of(
@@ -245,6 +296,73 @@ class WorkflowRunServiceTest {
         assertNull(response.getSteps().get(0).getTaskId());
         assertEquals(0L, response.getSteps().get(0).getCreditCost());
         verify(generateService, never()).submit(any(), any());
+    }
+
+    @Test
+    void wholeGraphRunReusesUnchangedStepFromHistory() {
+        runStore();
+        when(aiModelMapper.selectList(any())).thenReturn(List.of(imageModel()));
+        when(generateService.submit(any(), any())).thenReturn(submittedTask());
+        WorkflowRunReq request = new WorkflowRunReq();
+        request.setWorkflowId(5L);
+        request.setGraph(imageGraph());
+
+        service.start(request);
+        succeedTask(31L);
+        service.getMine(1L);
+
+        WorkflowRunResp second = service.start(request);
+
+        assertEquals(TaskStatus.SUCCEEDED, second.getStatus());
+        assertTrue(second.getSteps().get(0).getReused());
+        assertEquals(0L, second.getSteps().get(0).getCreditCost());
+        assertNotNull(second.getSteps().get(0).getOutputs().get(0).getStorageKey());
+        verify(generateService, times(1)).submit(any(), any());
+    }
+
+    @Test
+    void forceRegenerateRunsEveryStepEvenWhenHistoryMatches() {
+        runStore();
+        when(aiModelMapper.selectList(any())).thenReturn(List.of(imageModel()));
+        when(generateService.submit(any(), any())).thenReturn(submittedTask());
+        WorkflowRunReq request = new WorkflowRunReq();
+        request.setWorkflowId(5L);
+        request.setGraph(imageGraph());
+
+        service.start(request);
+        succeedTask(31L);
+        service.getMine(1L);
+        request.setForceRegenerate(true);
+
+        WorkflowRunResp second = service.start(request);
+
+        assertEquals(TaskStatus.RUNNING, second.getStatus());
+        assertEquals(Boolean.FALSE, second.getSteps().get(0).getReused());
+        assertEquals(TaskStatus.RUNNING, second.getSteps().get(0).getStatus());
+        verify(generateService, times(2)).submit(any(), any());
+    }
+
+    @Test
+    void runTotalCountsOnlyWorkStepsSoProgressMatchesRealWork() {
+        runStore();
+        when(aiModelMapper.selectList(any())).thenReturn(List.of(imageModel()));
+        when(generateService.submit(any(), any())).thenReturn(submittedTask());
+        WorkflowRunReq request = new WorkflowRunReq();
+        request.setGraph(Map.of(
+                "nodes", List.of(
+                        Map.of("id", "brief", "data", Map.of(
+                                "kind", "MarkdownNote", "title", "Brief", "enabled", true,
+                                "fields", List.of(Map.of("label", "内容", "value", "Rainy night")))),
+                        Map.of("id", "image-a", "data", Map.of(
+                                "kind", "ImageGenerator", "title", "Image A", "enabled", true,
+                                "media", Map.of("prompt", "a cat", "model", "demo-image")))),
+                "edges", List.of()));
+
+        WorkflowRunResp response = service.start(request);
+
+        // 文本节点是零成本直通步骤，不计入进度分母：只显示真正干活的 1 个生成节点
+        assertEquals(1, response.getTotal());
+        assertEquals(2, response.getSteps().size());
     }
 
     @Test
@@ -287,6 +405,152 @@ class WorkflowRunServiceTest {
         run.getSteps().get(1).remove("taskId");
         service.getMine(1L);
         assertEquals(List.of("users/7/selected.mp4", "users/7/first.mp4"), received);
+    }
+
+    @Test
+    void frameModeInfersFirstFrameWhenOnlyLastFrameIsExplicit() {
+        Map<String, Object> source = step("source", TaskStatus.SUCCEEDED, 11L, List.of());
+        source.put("outputStorageKey", "users/7/input.mp4");
+        Map<String, Object> target = step("target", TaskStatus.PENDING, null, List.of("source"));
+        target.put("prompt", "film");
+        target.put("modelId", 2L);
+        target.put("frameMode", true);
+        target.put("videoRefMode", false);
+        target.put("lastFrameKey", "users/7/last.jpg");
+        WorkflowRun run = run(source, target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        List<GenerateSubmitReq.FrameInput> frames = new ArrayList<>();
+        List<Object> references = new ArrayList<>();
+        when(generateService.submit(any(), any())).thenAnswer(invocation -> {
+            GenerateSubmitReq request = invocation.getArgument(0);
+            frames.add(request.getFrames());
+            references.add(request.getReferences());
+            GenerateTaskResp response = new GenerateTaskResp();
+            response.setId(22L);
+            return response;
+        });
+
+        service.getMine(1L);
+
+        assertEquals("users/7/input-tail.webp", frames.get(0).getFirstFrameKey());
+        assertEquals("users/7/last.jpg", frames.get(0).getLastFrameKey());
+        assertNull(references.get(0));
+    }
+
+    @Test
+    void referenceImageCountOverLimitIsRejected() {
+        List<Map<String, Object>> staticRefs = new java.util.ArrayList<>();
+        for (int i = 0; i < 31; i++) {
+            staticRefs.add(Map.of("type", "image", "storageKey", "users/7/ref-" + i + ".png"));
+        }
+        Map<String, Object> target = step("image-node", TaskStatus.PENDING, null, List.of());
+        target.put("category", "image");
+        target.put("prompt", "style");
+        target.put("modelId", 2L);
+        target.put("staticRefs", staticRefs);
+        WorkflowRun run = run(target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenReturn(1);
+
+        service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, run.getSteps().get(0).get("status"));
+        assertTrue(String.valueOf(run.getSteps().get(0).get("error")).contains("参考图片 31 张超过上限 30"));
+    }
+
+    @Test
+    void referenceVideoCountOverLimitIsRejected() {
+        List<Map<String, Object>> staticRefs = new java.util.ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            staticRefs.add(Map.of("type", "video", "storageKey", "users/7/ref-" + i + ".mp4"));
+        }
+        Map<String, Object> target = step("video-node", TaskStatus.PENDING, null, List.of());
+        target.put("category", "video");
+        target.put("prompt", "transfer");
+        target.put("modelId", 2L);
+        target.put("staticRefs", staticRefs);
+        WorkflowRun run = run(target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenReturn(1);
+
+        service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, run.getSteps().get(0).get("status"));
+        assertTrue(String.valueOf(run.getSteps().get(0).get("error")).contains("参考视频 11 段超过上限 10"));
+    }
+
+    @Test
+    void seedance20ReferenceVideoCountUsesTighterLimit() {
+        List<Map<String, Object>> staticRefs = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            staticRefs.add(Map.of("type", "video", "storageKey", "users/7/ref-" + i + ".mp4"));
+        }
+        Map<String, Object> target = step("video-node", TaskStatus.PENDING, null, List.of());
+        target.put("prompt", "transfer");
+        target.put("modelId", 2L);
+        target.put("staticRefs", staticRefs);
+        WorkflowRun run = run(target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenReturn(1);
+        when(aiModelMapper.selectById(2L)).thenReturn(seedance20Model());
+
+        service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, run.getSteps().get(0).get("status"));
+        assertTrue(String.valueOf(run.getSteps().get(0).get("error")).contains("参考视频 4 段超过上限 3"));
+    }
+
+    @Test
+    void seedance20ReferenceVideoSecondsUseTighterLimit() {
+        Map<String, Object> first = step("source-1", TaskStatus.SUCCEEDED, 11L, List.of());
+        first.put("outputs", List.of(Map.of(
+                "type", "video", "storageKey", "users/7/a.mp4", "metadata", Map.of("durationSec", 8D))));
+        Map<String, Object> second = step("source-2", TaskStatus.SUCCEEDED, 12L, List.of());
+        second.put("outputs", List.of(Map.of(
+                "type", "video", "storageKey", "users/7/b.mp4", "metadata", Map.of("durationSec", 8D))));
+        Map<String, Object> target = step("video-node", TaskStatus.PENDING, null, List.of("source-1", "source-2"));
+        target.put("prompt", "transfer");
+        target.put("modelId", 2L);
+        WorkflowRun run = run(first, second, target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenReturn(1);
+        when(aiModelMapper.selectById(2L)).thenReturn(seedance20Model());
+
+        service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, run.getSteps().get(2).get("status"));
+        assertTrue(String.valueOf(run.getSteps().get(2).get("error")).contains("总时长 16 秒超过上限 15 秒"));
+    }
+
+    private static AiModel seedance20Model() {
+        AiModel model = new AiModel();
+        model.setId(2L);
+        model.setName("Seedance 2.0");
+        model.setCategory("video");
+        model.setAdapterKey("seedance-2.0");
+        model.setModelKey("doubao-seedance-2-0-260128");
+        return model;
+    }
+
+    @Test
+    void referenceAudioCountOverLimitIsRejected() {
+        List<Map<String, Object>> staticRefs = new java.util.ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            staticRefs.add(Map.of("type", "audio", "storageKey", "users/7/ref-" + i + ".mp3"));
+        }
+        Map<String, Object> target = step("video-node", TaskStatus.PENDING, null, List.of());
+        target.put("category", "video");
+        target.put("prompt", "voiceover video");
+        target.put("modelId", 2L);
+        target.put("staticRefs", staticRefs);
+        WorkflowRun run = run(target);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenReturn(1);
+
+        service.getMine(1L);
+
+        assertEquals(TaskStatus.FAILED, run.getSteps().get(0).get("status"));
+        assertTrue(String.valueOf(run.getSteps().get(0).get("error")).contains("参考音频 11 条超过上限 10"));
     }
 
     @Test
@@ -628,6 +892,63 @@ class WorkflowRunServiceTest {
 
         assertEquals(TaskStatus.FAILED, response.getSteps().get(1).getStatus());
         verify(filmComposer, never()).compose(any(), any(), any(), any());
+    }
+
+    /** 内存版运行存储：insert/selectById/updateById/selectList 全部落到同一个列表 */
+    private List<WorkflowRun> runStore() {
+        List<WorkflowRun> stored = new ArrayList<>();
+        when(workflowRunMapper.insert(any(WorkflowRun.class))).thenAnswer(invocation -> {
+            WorkflowRun run = invocation.getArgument(0);
+            run.setId((long) stored.size() + 1);
+            stored.add(run);
+            return 1;
+        });
+        when(workflowRunMapper.selectById(anyLong())).thenAnswer(invocation ->
+                stored.get(((Long) invocation.getArgument(0)).intValue() - 1));
+        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenAnswer(invocation -> {
+            WorkflowRun run = invocation.getArgument(0);
+            stored.set((int) (run.getId() - 1), run);
+            return 1;
+        });
+        // 历史查询只有带 workflowId 的运行才会用到，未保存画布走 previousRunId 链
+        lenient().when(workflowRunMapper.selectList(any())).thenReturn(stored);
+        return stored;
+    }
+
+    private static AiModel imageModel() {
+        AiModel model = new AiModel();
+        model.setId(9L);
+        model.setCategory("image");
+        model.setName("demo-image");
+        model.setEnabled(true);
+        return model;
+    }
+
+    private static GenerateTaskResp submittedTask() {
+        GenerateTaskResp task = new GenerateTaskResp();
+        task.setId(31L);
+        task.setProgress(0);
+        task.setCreditCost(12L);
+        return task;
+    }
+
+    private void succeedTask(Long taskId) {
+        GenTask task = new GenTask();
+        task.setId(taskId);
+        task.setStatus(TaskStatus.SUCCEEDED);
+        task.setCategory("image");
+        task.setOutputKeys(List.of("users/7/outputs/1/1.png"));
+        task.setProgress(100);
+        task.setCreditCost(12L);
+        when(genTaskMapper.selectById(taskId)).thenReturn(task);
+    }
+
+    private static Map<String, Object> imageGraph() {
+        return Map.of(
+                "nodes", List.of(Map.of("id", "image-a", "data", Map.of(
+                        "kind", "ImageGenerator", "title", "Image A", "enabled", true,
+                        "media", Map.of("prompt", "a cat", "model", "demo-image")))),
+                "edges", List.of());
     }
 
     private static Map<String, Object> videoOutput(String key, int durationSec) {

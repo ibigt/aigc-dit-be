@@ -21,6 +21,9 @@ public class WorkflowRunReq {
     @Schema(description = "只运行该节点及其上游生成节点")
     private String nodeId;
 
+    @Schema(description = "true = 全部重新生成（不复用历史产物，所有生成/剪辑步骤都真跑）；缺省或 false = 复用参数未变节点的既有产物")
+    private Boolean forceRegenerate;
+
     @NotNull(message = "画布不能为空")
     private Map<String, Object> graph;
 }

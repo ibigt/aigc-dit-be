@@ -29,6 +29,8 @@ public class WorkflowRunResp {
         private String status;
         private Integer progress;
         private Long creditCost;
+        @Schema(description = "该步骤是否复用了历史运行的成功产物（未真跑）")
+        private Boolean reused;
         private String resolvedPrompt;
         private Long taskId;
         private String errorMessage;
