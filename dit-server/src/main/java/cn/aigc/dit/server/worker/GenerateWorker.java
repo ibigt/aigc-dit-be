@@ -993,9 +993,7 @@ public class GenerateWorker {
             return false;
         }
         String lower = message.toLowerCase(java.util.Locale.ROOT);
-        return lower.contains("exceeded the quota")
-                || lower.contains("quota exceeded")
-                || lower.contains("insufficient quota")
+        return GenerateTaskViews.isExhaustedQuota(message)
                 || lower.contains("insufficient balance")
                 || lower.contains("balance is insufficient")
                 || lower.contains("subscription has expired")

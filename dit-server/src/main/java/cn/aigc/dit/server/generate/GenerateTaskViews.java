@@ -81,15 +81,30 @@ public final class GenerateTaskViews {
         return value.isBlank() ? null : value;
     }
 
+    /**
+     * 套餐额度用尽。月额度文案是 “exceeded the monthly usage quota”，
+     * 中间隔了 monthly usage，对不上 “exceeded the quota”。
+     * 限流文案只有 rate limit，不会命中这里。
+     */
+    public static boolean isExhaustedQuota(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase(Locale.ROOT);
+        return lower.contains("exceeded the quota")
+                || lower.contains("quota exceeded")
+                || lower.contains("insufficient quota")
+                || lower.contains("usage quota");
+    }
+
     public static String friendlySeedanceError(String message) {
         if (message == null || message.isBlank()) {
             return message;
         }
-        String lower = message.toLowerCase(Locale.ROOT);
-        if (lower.contains("exceeded the quota") || lower.contains("quota exceeded")
-                || lower.contains("insufficient quota")) {
+        if (isExhaustedQuota(message)) {
             return QUOTA_EXHAUSTED_MESSAGE;
         }
+        String lower = message.toLowerCase(Locale.ROOT);
         if (lower.contains("http 429") || lower.contains("rate limit")) {
             return QUOTA_MESSAGE;
         }

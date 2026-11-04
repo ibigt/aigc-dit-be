@@ -67,9 +67,16 @@ class GenerateTaskViewsTest {
         assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
                 GenerateTaskViews.friendlySeedanceError(
                         "Seedance HTTP 429: The request has exceeded the quota."));
+        assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
+                GenerateTaskViews.friendlySeedanceError(
+                        "Seedance HTTP 429: You have exceeded the monthly usage quota. "
+                                + "It will reset at 2026-11-21 23:59:59 +0800 CST."));
         assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
                 GenerateTaskViews.friendlySeedanceError(
                         "Seedance HTTP 429: too many requests, rate limit"));
+        assertEquals(GenerateTaskViews.QUOTA_MESSAGE,
+                GenerateTaskViews.friendlySeedanceError(
+                        "Agnes HTTP 429: video status query rate limit exceeded"));
     }
 
     private static GenTask seedanceTask() {

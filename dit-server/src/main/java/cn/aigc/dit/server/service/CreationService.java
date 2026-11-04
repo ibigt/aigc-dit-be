@@ -4,9 +4,14 @@ import cn.aigc.dit.common.constant.ModelCategory;
 import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
+import cn.aigc.dit.server.drama.DramaFilmModes;
+import cn.aigc.dit.server.drama.DramaFilms;
 import cn.aigc.dit.server.drama.entity.DramaEpisode;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.entity.DramaShot;
+import cn.aigc.dit.server.drama.mapper.DramaEpisodeMapper;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
+import cn.aigc.dit.server.drama.mapper.DramaShotMapper;
 import cn.aigc.dit.server.entity.AiModel;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.entity.CreationSession;
@@ -51,6 +56,8 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
     private final AiModelMapper aiModelMapper;
     private final AssetService assetService;
     private final DramaSeriesMapper dramaSeriesMapper;
+    private final DramaEpisodeMapper dramaEpisodeMapper;
+    private final DramaShotMapper dramaShotMapper;
     private final MediaRetentionService mediaRetention;
 
     public CreationService(CreationSessionMapper sessionMapper,
@@ -58,12 +65,16 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                            AiModelMapper aiModelMapper,
                            AssetService assetService,
                            DramaSeriesMapper dramaSeriesMapper,
+                           DramaEpisodeMapper dramaEpisodeMapper,
+                           DramaShotMapper dramaShotMapper,
                            MediaRetentionService mediaRetention) {
         this.sessionMapper = sessionMapper;
         this.genTaskMapper = genTaskMapper;
         this.aiModelMapper = aiModelMapper;
         this.assetService = assetService;
         this.dramaSeriesMapper = dramaSeriesMapper;
+        this.dramaEpisodeMapper = dramaEpisodeMapper;
+        this.dramaShotMapper = dramaShotMapper;
         this.mediaRetention = mediaRetention;
     }
 
@@ -245,8 +256,11 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         return toGallery(List.of(creation)).get(0);
     }
 
+    /**
+     * 成片不是单次模型生成。比例、清晰度和视频模型取自短剧项目，时长取拼接后实际保留的秒数。
+     */
     @Transactional
-    public void recordDramaFilm(DramaEpisode episode) {
+    public void recordDramaFilm(DramaEpisode episode, Integer durationSec) {
         if (episode == null || episode.getUserId() == null || !StringUtils.hasText(episode.getFilmKey())) {
             return;
         }
@@ -263,6 +277,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             existing.setPrompt(title);
             existing.setProjectKind("drama");
             existing.setProjectId(episode.getSeriesId());
+            applyFilmFacts(existing, series, durationSec, true);
             updateById(existing);
             return;
         }
@@ -277,6 +292,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         creation.setCopyIndex(1);
         creation.setProjectKind("drama");
         creation.setProjectId(episode.getSeriesId());
+        applyFilmFacts(creation, series, durationSec, true);
         save(creation);
     }
 
@@ -512,6 +528,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         if (items.isEmpty()) {
             return List.of();
         }
+        hydrateDramaFilms(items);
         Map<Long, GenTask> tasks = loadTasks(items.stream().map(Creation::getTaskId).toList());
         Map<Long, String> modelNames = loadModelNames(items.stream().map(Creation::getModelId).toList());
         Map<Long, String> sessionNames = loadSessionNames(items.stream()
@@ -577,6 +594,160 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         return dramaSeriesMapper.selectBatchIds(seriesIds).stream()
                 .filter(item -> item.getId() != null)
                 .collect(Collectors.toMap(DramaSeries::getId, item -> StringUtils.hasText(item.getName()) ? item.getName() : "短剧项目", (a, b) -> a, HashMap::new));
+    }
+
+    /**
+     * 已入库、但当时没写下模型或规格的成片，按当前项目和入片镜头补齐，让列表直接可见。
+     * 补过一次就落库，避免每次打开都重算。
+     */
+    private void hydrateDramaFilms(List<Creation> items) {
+        List<Creation> pending = items.stream().filter(CreationService::needsFilmFacts).toList();
+        if (pending.isEmpty()) {
+            return;
+        }
+        Map<Long, DramaSeries> seriesById = loadSeriesById(pending.stream().map(Creation::getProjectId).toList());
+        Map<String, DramaEpisode> episodeByKey = loadEpisodesByFilmKey(pending.stream().map(Creation::getStorageKey).toList());
+        Map<Long, List<DramaShot>> shotsByEpisode = loadShotsByEpisode(
+                episodeByKey.values().stream().map(DramaEpisode::getId).toList());
+        for (Creation film : pending) {
+            DramaSeries series = film.getProjectId() == null ? null : seriesById.get(film.getProjectId());
+            DramaEpisode episode = film.getStorageKey() == null ? null : episodeByKey.get(film.getStorageKey());
+            List<DramaShot> shots = episode == null
+                    ? List.of()
+                    : shotsByEpisode.getOrDefault(episode.getId(), List.of());
+            Integer duration = film.getDurationSec() != null && film.getDurationSec() > 0
+                    ? null
+                    : filmDurationSec(episode, shots);
+            if (applyFilmFacts(film, series, duration, false)) {
+                updateById(film);
+            }
+        }
+    }
+
+    private Map<Long, DramaSeries> loadSeriesById(List<Long> ids) {
+        List<Long> seriesIds = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (seriesIds.isEmpty()) {
+            return Map.of();
+        }
+        return dramaSeriesMapper.selectBatchIds(seriesIds).stream()
+                .filter(item -> item.getId() != null)
+                .collect(Collectors.toMap(DramaSeries::getId, item -> item, (a, b) -> a, HashMap::new));
+    }
+
+    private Map<String, DramaEpisode> loadEpisodesByFilmKey(List<String> keys) {
+        List<String> filmKeys = keys.stream().filter(StringUtils::hasText).distinct().toList();
+        if (filmKeys.isEmpty()) {
+            return Map.of();
+        }
+        return dramaEpisodeMapper.selectList(new LambdaQueryWrapper<DramaEpisode>()
+                        .in(DramaEpisode::getFilmKey, filmKeys)).stream()
+                .filter(item -> StringUtils.hasText(item.getFilmKey()))
+                .collect(Collectors.toMap(DramaEpisode::getFilmKey, item -> item, (a, b) -> a, HashMap::new));
+    }
+
+    private Map<Long, List<DramaShot>> loadShotsByEpisode(List<Long> ids) {
+        List<Long> episodeIds = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (episodeIds.isEmpty()) {
+            return Map.of();
+        }
+        return dramaShotMapper.selectList(new LambdaQueryWrapper<DramaShot>()
+                        .in(DramaShot::getEpisodeId, episodeIds)).stream()
+                .filter(item -> item.getEpisodeId() != null)
+                .collect(Collectors.groupingBy(DramaShot::getEpisodeId, HashMap::new, Collectors.toList()));
+    }
+
+    static boolean isDramaFilm(Creation creation) {
+        return creation != null
+                && "drama".equals(creation.getProjectKind())
+                && creation.getTaskId() == null
+                && creation.getStorageKey() != null
+                && creation.getStorageKey().endsWith("/film.mp4");
+    }
+
+    static boolean needsFilmFacts(Creation creation) {
+        return isDramaFilm(creation) && (
+                creation.getModelId() == null
+                        || !StringUtils.hasText(creation.getRatio())
+                        || !StringUtils.hasText(creation.getResolution())
+                        || creation.getDurationSec() == null
+                        || creation.getDurationSec() <= 0);
+    }
+
+    static boolean applyFilmFacts(Creation creation, DramaSeries series, Integer durationSec, boolean overwrite) {
+        boolean changed = false;
+        if (series != null && series.getVideoModelId() != null
+                && (overwrite || creation.getModelId() == null)
+                && !series.getVideoModelId().equals(creation.getModelId())) {
+            creation.setModelId(series.getVideoModelId());
+            changed = true;
+        }
+        String ratio = filmRatio(series);
+        if (ratio != null && (overwrite || !StringUtils.hasText(creation.getRatio())) && !ratio.equals(creation.getRatio())) {
+            creation.setRatio(ratio);
+            changed = true;
+        }
+        String resolution = series == null || !StringUtils.hasText(series.getDefaultResolution())
+                ? null
+                : series.getDefaultResolution().trim();
+        if (resolution != null && !resolution.isEmpty()
+                && (overwrite || !StringUtils.hasText(creation.getResolution()))
+                && !resolution.equals(creation.getResolution())) {
+            creation.setResolution(resolution);
+            changed = true;
+        }
+        if (durationSec != null && durationSec > 0
+                && (overwrite || creation.getDurationSec() == null || creation.getDurationSec() <= 0)
+                && !durationSec.equals(creation.getDurationSec())) {
+            creation.setDurationSec(durationSec);
+            changed = true;
+        }
+        return changed;
+    }
+
+    static String filmRatio(DramaSeries series) {
+        if (series == null || !StringUtils.hasText(series.getAspectRatio())) {
+            return null;
+        }
+        String ratio = series.getAspectRatio().trim().replace('：', ':');
+        return ratio.isEmpty() ? null : ratio;
+    }
+
+    /** 按成片当时的衔接方式，把入片镜头裁完后的时长加总。缺入片清单时用本集已出片镜头。 */
+    static Integer filmDurationSec(DramaEpisode episode, List<DramaShot> shots) {
+        List<DramaShot> included = includedFilmShots(episode, shots);
+        if (included.isEmpty()) {
+            return null;
+        }
+        String mode = DramaFilms.assembledMode(episode);
+        if (!StringUtils.hasText(mode)) {
+            mode = DramaFilmModes.DIRECT;
+        }
+        int kept = DramaFilmModes.totalKeptSec(DramaFilmModes.plan(mode, included, null, null));
+        return kept > 0 ? kept : null;
+    }
+
+    private static List<DramaShot> includedFilmShots(DramaEpisode episode, List<DramaShot> shots) {
+        if (shots == null || shots.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = episode == null ? null : episode.getFilmShotIds();
+        if (ids == null || ids.isEmpty()) {
+            return DramaFilms.clips(shots);
+        }
+        Map<Long, DramaShot> byId = new HashMap<>();
+        for (DramaShot shot : shots) {
+            if (shot != null && shot.getId() != null) {
+                byId.putIfAbsent(shot.getId(), shot);
+            }
+        }
+        List<DramaShot> included = new ArrayList<>();
+        for (Long id : ids) {
+            DramaShot shot = byId.get(id);
+            if (shot != null) {
+                included.add(shot);
+            }
+        }
+        return included;
     }
 
     private static String filmTitle(String seriesName, DramaEpisode episode) {

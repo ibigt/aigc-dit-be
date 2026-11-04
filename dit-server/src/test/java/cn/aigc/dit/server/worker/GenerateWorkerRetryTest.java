@@ -27,6 +27,9 @@ class GenerateWorkerRetryTest {
         assertFalse(GenerateWorker.isRetryableSubmitError(
                 "Seedance HTTP 429: The request has exceeded the quota. Request id: 0217"));
         assertFalse(GenerateWorker.isRetryableSubmitError(
+                "Seedance HTTP 429: You have exceeded the monthly usage quota. "
+                        + "It will reset at 2026-11-21 23:59:59 +0800 CST."));
+        assertFalse(GenerateWorker.isRetryableSubmitError(
                 "RunningHub 返回错误：Your balance is insufficient. Please top up your account. 请稍后"));
         assertFalse(GenerateWorker.isRetryableSubmitError(
                 "Seedance HTTP 400: Your account does not have a valid AgentPlan subscription, "
@@ -41,6 +44,10 @@ class GenerateWorkerRetryTest {
         assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
                 GenerateWorker.friendlyBusyMessage(
                         "Seedance HTTP 429: The request has exceeded the quota."));
+        assertEquals(GenerateTaskViews.QUOTA_EXHAUSTED_MESSAGE,
+                GenerateWorker.friendlyBusyMessage(
+                        "Seedance HTTP 429: You have exceeded the monthly usage quota. "
+                                + "It will reset at 2026-11-21 23:59:59 +0800 CST."));
     }
 
     @Test
