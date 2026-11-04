@@ -182,14 +182,32 @@ class ArkGenerateProviderTest {
         storage.put("users/8/assets/a.png", TINY_PNG, "image/png");
         storage.put("users/8/assets/b.mp4", new byte[]{1, 2, 3, 4}, "video/mp4");
 
-        provider.submit(video("r2v").setReferences(List.of(
+        BizException error = assertThrows(BizException.class, () -> provider.submit(video("r2v").setReferences(List.of(
                 new ReferenceAsset("image", "users/8/assets/a.png"),
-                new ReferenceAsset("video", "users/8/assets/b.mp4"))));
-        JsonNode body = mapper.readTree(http.lastJson);
-        assertEquals("reference_image", body.get("content").get(1).get("role").asText());
-        assertEquals("video_url", body.get("content").get(2).get("type").asText());
-        assertEquals("reference_video", body.get("content").get(2).get("role").asText());
-        assertEquals(3, body.get("content").size());
+                new ReferenceAsset("video", "users/8/assets/b.mp4")))));
+        assertTrue(error.getMessage().contains("可公网访问"));
+    }
+
+    @Test
+    void submitR2vRejectsInsecureHttpReferenceVideoUrl() {
+        // 方舟只认公网 https：内网/裸 IP 的 http 地址会被判成 "not a web url"（400），
+        // 就地失败，别把注定被拒的地址递上去
+        http.postBody = """
+                {"id":"cgt-http","status":"queued"}
+                """;
+        storage.put("users/8/assets/b.mp4", new byte[]{1, 2, 3, 4}, "video/mp4");
+
+        ObjectStorage httpStorage = new LocalObjectStorage(tempDir) {
+            @Override
+            public String presignGet(String storageKey, Duration expiry) {
+                return "http://172.171.113.250:9000/" + storageKey + "?sig=abc";
+            }
+        };
+        ArkGenerateProvider httpProvider = new ArkGenerateProvider(httpStorage, properties, http, mapper, audioReferenceProcessor);
+
+        BizException error = assertThrows(BizException.class, () -> httpProvider.submit(video("r2v").setReferences(List.of(
+                new ReferenceAsset("video", "users/8/assets/b.mp4")))));
+        assertTrue(error.getMessage().contains("HTTPS"));
     }
 
     @Test
@@ -219,7 +237,8 @@ class ArkGenerateProviderTest {
     }
 
     @Test
-    void submitSeedance25ReadsAudioFromStorageAndSendsBase64() throws Exception {        http.postBody = "{\"id\":\"cgt-audio\",\"status\":\"queued\"}";
+    void submitSeedance25ReadsAudioFromStorageAndSendsBase64() throws Exception {
+        http.postBody = "{\"id\":\"cgt-audio\",\"status\":\"queued\"}";
         storage.put("users/8/assets/voice.wav", new byte[]{1, 2, 3}, "audio/wav");
 
         provider.submit(video("r2v")

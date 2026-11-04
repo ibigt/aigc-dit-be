@@ -24,14 +24,26 @@ public final class CreditCalculator {
     }
 
     /**
-     * 参考视频（r2v 的视频输入）秒数按模型<b>最高档价</b>计费，不按输出所选分辨率档价：
-     * 上游中转把输入视频 token 也按最高档价扣我们的钱（官方直连的输入价更低），
-     * 而参考视频本身的分辨率/码率由用户决定、无从得知——只能统一取最高标准，保证不亏本。
+     * 参考视频（r2v 的视频输入）秒数按<b>它自己的分辨率档</b>计费：
+     * 上游按输入视频自己的 token 计费（中转 ¥51/M 一口价，token 数随输入视频的分辨率走；
+     * 官方直连的输入价不高于同档输出价），而各档售价本来就是各档成本 × 倍率，
+     * 所以「按自身档计」= 「按真实成本计」，不必一律套模型最高档。
      * 能力之间不分价：同一模型的各生成能力共用这一套标准。
      */
     public static long calculate(Map<String, Object> pricing, String category,
                                  String resolution, String quality,
                                  Integer durationSec, int copies, int referenceVideoSeconds) {
+        return calculate(pricing, category, resolution, quality, durationSec, copies,
+                referenceVideoSeconds, null);
+    }
+
+    /**
+     * @param referenceVideoResolution 参考视频自己的分辨率档（480P/720P/…）；查不到时传 null。
+     */
+    public static long calculate(Map<String, Object> pricing, String category,
+                                 String resolution, String quality,
+                                 Integer durationSec, int copies, int referenceVideoSeconds,
+                                 String referenceVideoResolution) {
         Double configuredPrice = saleOutput(pricing);
         double unitPrice = configuredPrice == null
                 ? (ModelCategory.VIDEO.equalsIgnoreCase(category) ? 12D
@@ -49,11 +61,12 @@ public final class CreditCalculator {
             int safeCopies = Math.min(4, Math.max(1, copies));
             // 输出部分按所选分辨率档价 × 副本数。
             quantity = perUnit * duration * safeCopies;
-            // 参考视频（r2v 的视频输入）按模型最高档价计一次（同一份输入多副本不重复计）：
-            // 上游把输入视频 token 也按最高档价扣我们的钱，参考视频本身规格又由用户决定、
-            // 无从得知——统一取最高标准，保证任何能力组合都不亏本。
+            // 参考视频（r2v 的视频输入）按它自己的分辨率档价计一次（同一份输入多副本不重复计）：
+            // 上游按输入视频自己的 token 计费，各档售价即各档成本 × 倍率，按自身档计价刚好保本；
+            // 查不到参考视频档位（或该模型没有这一档的价）时退回模型最高档，保守不亏本。
             if (referenceVideoSeconds > 0) {
-                quantity += highestUnitPrice(pricing, unitPrice) * referenceVideoSeconds;
+                quantity += referenceUnitPrice(pricing, referenceVideoResolution, unitPrice)
+                        * referenceVideoSeconds;
             }
             return (long) Math.ceil(quantity * qualityMultiplier(category, quality));
         }
@@ -65,8 +78,21 @@ public final class CreditCalculator {
     }
 
     /**
+     * 参考视频（视频输入）的单价：按它自己的分辨率档取价。
+     * 查不到参考视频档位、或该模型没有这一档的价时退回模型最高档，保守不亏本。
+     */
+    static double referenceUnitPrice(Map<String, Object> pricing, String referenceVideoResolution,
+                                     double fallbackUnitPrice) {
+        Double own = tierPrice(pricing, referenceVideoResolution);
+        if (own != null) {
+            return Math.max(0D, own);
+        }
+        return highestUnitPrice(pricing, fallbackUnitPrice);
+    }
+
+    /**
      * 模型最高档单价（每单位）：取 sale.tiers 中的最高档价与基准价里的较大者。
-     * 能力之间不分价：所有能力共用这一套标准，参考视频按最高档计。
+     * 能力之间不分价：所有能力共用这一套标准；参考视频查不到自身档位时也按最高档兜底。
      */
     static double highestUnitPrice(Map<String, Object> pricing, double fallbackUnitPrice) {
         double highest = Math.max(0D, fallbackUnitPrice);

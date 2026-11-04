@@ -143,6 +143,30 @@ class CreditCalculatorTest {
     }
 
     @Test
+    void referenceVideoIsPricedByItsOwnResolutionTier() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "秒",
+                "sale", Map.of("output", "17.5", "tiers", Map.of("480P", "3", "720P", "7", "4K", "17.5")));
+        // 输出 480P 4s = 12；参考视频 480P 4s 按自身档 3/s = 12，合计 24
+        assertEquals(24L, CreditCalculator.calculate(pricing, "video", "480P", null, 4, 1, 4, "480P"));
+        // 参考视频 720P：12 + 7*4 = 40
+        assertEquals(40L, CreditCalculator.calculate(pricing, "video", "480P", null, 4, 1, 4, "720P"));
+        // 参考视频确实是 4K：12 + 17.5*4 = 82
+        assertEquals(82L, CreditCalculator.calculate(pricing, "video", "480P", null, 4, 1, 4, "4K"));
+        // 查不到参考视频档位 → 退回模型最高档（保守不亏本）：12 + 17.5*4 = 82
+        assertEquals(82L, CreditCalculator.calculate(pricing, "video", "480P", null, 4, 1, 4, null));
+    }
+
+    @Test
+    void referenceVideoWithoutTierFallsBackToHighest() {
+        Map<String, Object> pricing = Map.of(
+                "unit", "秒",
+                "sale", Map.of("output", "7", "tiers", Map.of("480P", "7", "1080P", "33")));
+        // 模型没有 768P 这一档的价 → 退回最高档 33/s：输出 480P 4s = 28，参考 4s = 132，合计 160
+        assertEquals(160L, CreditCalculator.calculate(pricing, "video", "480P", null, 4, 1, 4, "768P"));
+    }
+
+    @Test
     void textPricingSeparatesCachedInputAndRoundsOnce() {
         Map<String, Object> pricing = Map.of(
                 "unit", "千Token",

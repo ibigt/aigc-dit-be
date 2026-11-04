@@ -451,16 +451,26 @@ public class ArkGenerateProvider implements GenerateProvider {
             String mime = contentTypeOf(storageKey, kind);
             return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
         }
-        // 视频 / 音频：方舟要求 reference_video / reference_audio 必须是可公网访问的 web url，
-        // Base64 数据不会被接受（"reference_video must be provided as a web url"）。
-        // 优先用对象存储的预签名下载地址；签不出公网地址时退回 Base64（仅内网/本地存储会走到，线上会被方舟拒绝）。
+        // 视频：方舟要求 reference_video 必须是可公网访问的 web url；Base64 不会被接受。
+        // 方舟只认公网 https：内网/裸 IP 的 http 地址会被判成 "not a web url"（400），
+        // 所以签不出 https 就地失败，别把注定被拒的地址递上去白跑一轮。
+        // 音频参考本期按规划未开放；保留既有 Base64 处理链路给受控模型使用。
         String webUrl = presignWebUrl(storageKey);
         if (webUrl != null) {
-            return webUrl;
+            if (!"video".equals(kind) || webUrl.startsWith("https://")) {
+                return webUrl;
+            }
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "参考视频需要公网 HTTPS 下载地址（方舟不接受内网 http 地址）；"
+                            + "请给对象存储配置公网域名（S3_PUBLIC_ENDPOINT）后再试");
         }
         byte[] bytes = objectStorage.getBytes(storageKey);
         if (bytes == null || bytes.length == 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空");
+        }
+        if ("video".equals(kind)) {
+            throw new BizException(ErrorCode.BAD_REQUEST,
+                    "参考视频需要可公网访问的对象存储；当前存储无法签出下载地址，请检查对象存储配置");
         }
         String mime = contentTypeOf(storageKey, kind);
         if ("audio".equals(kind)) {
@@ -469,7 +479,7 @@ public class ArkGenerateProvider implements GenerateProvider {
             bytes = processed.bytes();
             mime = processed.contentType();
         }
-        log.warn("Seedance reference {} falls back to base64 because storage has no public url, key={}", kind, storageKey);
+        log.warn("Seedance reference audio falls back to base64 because storage has no public url, key={}", storageKey);
         return "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(bytes);
     }
 
