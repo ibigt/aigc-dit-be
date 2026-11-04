@@ -156,4 +156,28 @@ class SeedreamGenerateProviderTest {
         verify(storage).put(eq("users/7/outputs/102/1.png.origin.json"), bodyCaptor.capture(), eq("application/json"));
         assertTrue(new String(bodyCaptor.getValue(), StandardCharsets.UTF_8).contains("https://cdn.example/pro.png"));
     }
+
+    @Test
+    void writeTextToImageStoresBesideTheGivenKey() {
+        when(http.postJson(any(), anyString(), anyString()))
+                .thenReturn("{\"data\":[{\"url\":\"https://cdn.example/sheet.png\"}]}");
+        when(http.getBytes(any())).thenReturn("png-bytes".getBytes(StandardCharsets.UTF_8));
+
+        GenerateRequest request = new GenerateRequest();
+        request.setCategory(ModelCategory.IMAGE);
+        request.setMode(GenerateMode.T2I);
+        request.setAdapterKey(AdapterCatalog.SEEDREAM_5_0);
+        request.setModelKey(AdapterCatalog.SEEDREAM_5_0_MODEL);
+        request.setPrompt("定妆拼版");
+        request.setApiKey("plan-key");
+        request.setEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
+
+        String key = provider.writeTextToImage(request, "users/7/outputs/249/1.png.seedream.png");
+
+        assertEquals("users/7/outputs/249/1.png.seedream.png", key);
+        verify(storage).put(eq("users/7/outputs/249/1.png.seedream.png"), any(byte[].class), eq("image/png"));
+        verify(storage).put(eq("users/7/outputs/249/1.png.seedream.png.origin.json"), any(byte[].class), eq("application/json"));
+        verify(storage, never()).put(eq("users/0/outputs/0/1.png"), any(byte[].class), anyString());
+        assertTrue(!provider.poll("not-a-job").isSucceeded());
+    }
 }

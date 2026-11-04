@@ -74,7 +74,13 @@ public class DramaShot {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String promptOverride;
     private String status;
+
+    /** 允许清空任务号，否则删光生成记录后刷新会把成功任务再写回，预览视频跟着回来。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long genTaskId;
+
+    /** 允许清空成片，否则删光生成记录后预览仍读到旧视频，对象存储也无法释放该文件。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String videoKey;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
@@ -105,7 +111,11 @@ public class DramaShot {
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Boolean videoChainPrevTail;
 
+    /** 未出片应为空；默认 NOT_NULL 会跳过 null，删光记录后仍像出过片。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private String videoGeneratedMode;
+
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long chainedFromShotId;
 
     @TableField(updateStrategy = FieldStrategy.ALWAYS)

@@ -57,6 +57,9 @@ class MediaRetentionServiceTest {
 
         verify(characterReview).release("users/7/gen/only.png");
         verify(objectStorage).delete("users/7/gen/only.png");
+        verify(objectStorage).delete("users/7/gen/only.png.seedream.png");
+        verify(objectStorage).delete("users/7/gen/only.png.seedream.png.origin.json");
+        verify(objectStorage).delete("users/7/gen/only.png.seedream-bind.json");
     }
 
     @Test

@@ -67,6 +67,8 @@ class SeedreamOriginUrlsTest {
 
         assertEquals(SeedreamOriginUrls.STATUS_ABSENT,
                 SeedreamOriginUrls.inspect(storage, mapper, "missing.png", Instant.parse("2026-10-09T04:00:00Z")).status());
+        assertEquals(saved, SeedreamOriginUrls.savedAt(storage, mapper, key));
+        assertNull(SeedreamOriginUrls.savedAt(storage, mapper, "missing.png"));
     }
 
     private static GenerateRequest request(String mode, String adapter, String model) {

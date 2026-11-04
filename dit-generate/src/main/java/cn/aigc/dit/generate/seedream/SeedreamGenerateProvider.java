@@ -67,6 +67,32 @@ public class SeedreamGenerateProvider implements GenerateProvider {
 
     @Override
     public SubmitResult submit(GenerateRequest request) {
+        Generated generated = generate(request);
+        String key = outputKey(request);
+        store(request, key, generated);
+        String jobId = "seedream-" + UUID.randomUUID();
+        completed.put(jobId, key);
+        log.info("Seedream submit jobId={}, taskId={}, model={}, mode={}",
+                jobId, request.getTaskId(), SeedreamRequestMapper.modelName(request),
+                GenerateMode.canonical(safe(request.getMode())));
+        return SubmitResult.accepted(jobId);
+    }
+
+    /**
+     * 纯文生图写入指定 key，并按资格保存方舟原始地址。不登记生成任务。
+     */
+    public String writeTextToImage(GenerateRequest request, String outputKey) {
+        if (!StringUtils.hasText(outputKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "缺少成图存储位置");
+        }
+        Generated generated = generate(request);
+        store(request, outputKey, generated);
+        log.info("Seedream text-to-image stored key={} model={}",
+                outputKey, SeedreamRequestMapper.modelName(request));
+        return outputKey;
+    }
+
+    private Generated generate(GenerateRequest request) {
         assertSupported(request);
         String apiKey = resolveApiKey(request);
         String v3Base = SeedreamUrls.v3Base(request.getEndpoint(), properties.getBaseUrl(), null);
@@ -81,17 +107,17 @@ public class SeedreamGenerateProvider implements GenerateProvider {
         String raw = http.postJson(SeedreamUrls.toUri(SeedreamUrls.imagesGenerations(v3Base)), apiKey, json);
         JsonNode response = readTree(raw);
         String originUrl = response.path("data").path(0).path("url").asText("");
-        byte[] image = decodeImage(response);
-        String key = ingestBytes(request, image);
+        return new Generated(decodeImage(response), originUrl);
+    }
+
+    private void store(GenerateRequest request, String key, Generated generated) {
+        objectStorage.put(key, generated.bytes(), "image/png");
         if (SeedreamOriginUrls.qualifies(request)) {
-            SeedreamOriginUrls.save(objectStorage, objectMapper, key, originUrl, Instant.now());
+            SeedreamOriginUrls.save(objectStorage, objectMapper, key, generated.originUrl(), Instant.now());
         }
-        String jobId = "seedream-" + UUID.randomUUID();
-        completed.put(jobId, key);
-        log.info("Seedream submit jobId={}, taskId={}, model={}, mode={}, base={}",
-                jobId, request.getTaskId(), SeedreamRequestMapper.modelName(request),
-                GenerateMode.canonical(safe(request.getMode())), v3Base);
-        return SubmitResult.accepted(jobId);
+    }
+
+    private record Generated(byte[] bytes, String originUrl) {
     }
 
     @Override
@@ -198,12 +224,6 @@ public class SeedreamGenerateProvider implements GenerateProvider {
             return http.getBytes(SeedreamUrls.toUri(url.trim()));
         }
         throw new BizException(ErrorCode.INTERNAL, "Seedream 成功但未返回成片");
-    }
-
-    private String ingestBytes(GenerateRequest request, byte[] bytes) {
-        String key = outputKey(request);
-        objectStorage.put(key, bytes, "image/png");
-        return key;
     }
 
     private String resolveApiKey(GenerateRequest request) {

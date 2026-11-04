@@ -186,6 +186,7 @@ public class DramaStoryboardService {
                 }
             }
         }
+        repairClearedGenerations(shots);
         applySucceededQuietly(shots);
         if (dirty) {
             refreshChapterStatuses(chapters, shots);
@@ -919,11 +920,13 @@ public class DramaStoryboardService {
         boolean dropTask = generation.getGenTaskId() != null
                 && generation.getGenTaskId().equals(shot.getGenTaskId());
         DramaShotGeneration next = null;
+        List<DramaShotGeneration> remaining = List.of();
         if (selected) {
-            next = listGenerationEntities(shot.getId()).stream()
+            List<DramaShotGeneration> listed = listGenerationEntities(shot.getId());
+            remaining = listed == null ? List.of() : listed.stream()
                     .filter(item -> item != null && !generation.getId().equals(item.getId()))
-                    .findFirst()
-                    .orElse(null);
+                    .toList();
+            next = remaining.isEmpty() ? null : remaining.get(0);
             if (next != null) {
                 applySelectedGeneration(shot, next);
             } else {
@@ -939,12 +942,106 @@ public class DramaStoryboardService {
             shotMapper.updateById(shot);
         }
         shotGenerationMapper.deleteById(generation.getId());
+        List<String> captionKeys = detachUnreferencedCaptions(shot, generation, remaining, selected);
         forgetCreation(generation.getUserId(), generation.getGenTaskId(), generation.getVideoKey());
-        mediaRetention.purgeAfterCommit(generation.getUserId(), java.util.stream.Stream.of(
-                generation.getVideoKey(), generation.getVideoPosterKey(), generation.getVideoTailKey())
-                .filter(StringUtils::hasText)
-                .toList());
+        LinkedHashSet<String> purgeKeys = new LinkedHashSet<>();
+        addMediaKey(purgeKeys, generation.getVideoKey());
+        addMediaKey(purgeKeys, generation.getVideoPosterKey());
+        addMediaKey(purgeKeys, generation.getVideoTailKey());
+        if (captionKeys != null) {
+            captionKeys.forEach(key -> addMediaKey(purgeKeys, key));
+        }
+        mediaRetention.purgeAfterCommit(generation.getUserId(), List.copyOf(purgeKeys));
+        if (selected && next == null) {
+            filmService.discardAssembledFilm(shot.getEpisodeId());
+        }
         touchSeries(shot.getSeriesId());
+    }
+
+    /**
+     * 旧版本删光生成记录时，selectedGenerationId 已清空，videoKey / 任务号因未标 ALWAYS 仍留在库里。
+     * 看板刷新时把这种分镜收回未出片，并释放还挂着的视频文件。
+     */
+    private void repairClearedGenerations(List<DramaShot> shots) {
+        if (shots == null || shots.isEmpty()) {
+            return;
+        }
+        for (DramaShot shot : shots) {
+            if (shot == null || shot.getSelectedGenerationId() != null || !hasLeftoverVideo(shot)) {
+                continue;
+            }
+            List<DramaShotGeneration> listed = listGenerationEntities(shot.getId());
+            if (listed != null && !listed.isEmpty()) {
+                continue;
+            }
+            String videoKey = shot.getVideoKey();
+            String posterKey = shot.getVideoPosterKey();
+            String tailKey = shot.getVideoTailKey();
+            Long taskId = shot.getGenTaskId();
+            clearSelectedVideo(shot);
+            shot.setGenTaskId(null);
+            shotMapper.updateById(shot);
+            List<String> captionKeys = detachUnreferencedCaptions(
+                    shot, captionSource(shot.getId(), shot.getUserId(), videoKey), List.of(), true);
+            forgetCreation(shot.getUserId(), taskId, videoKey);
+            LinkedHashSet<String> purgeKeys = new LinkedHashSet<>();
+            addMediaKey(purgeKeys, videoKey);
+            addMediaKey(purgeKeys, posterKey);
+            addMediaKey(purgeKeys, tailKey);
+            if (captionKeys != null) {
+                captionKeys.forEach(key -> addMediaKey(purgeKeys, key));
+            }
+            mediaRetention.purgeAfterCommit(shot.getUserId(), List.copyOf(purgeKeys));
+            filmService.discardAssembledFilm(shot.getEpisodeId());
+        }
+    }
+
+    private static boolean hasLeftoverVideo(DramaShot shot) {
+        return StringUtils.hasText(shot.getVideoKey())
+                || StringUtils.hasText(shot.getVideoPosterKey())
+                || StringUtils.hasText(shot.getVideoTailKey());
+    }
+
+    private static DramaShotGeneration captionSource(Long shotId, Long userId, String videoKey) {
+        DramaShotGeneration removed = new DramaShotGeneration();
+        removed.setId(-1L);
+        removed.setShotId(shotId);
+        removed.setUserId(userId);
+        removed.setVideoKey(videoKey);
+        return removed;
+    }
+
+    /**
+     * 这条视频已经不再被分镜或其余生成记录引用时，去掉字幕行。
+     * 字幕行的 sourceVideoKey 会让保留逻辑认为文件仍在使用，删记录后原片就会留在对象存储里。
+     */
+    private List<String> detachUnreferencedCaptions(
+            DramaShot shot,
+            DramaShotGeneration removed,
+            List<DramaShotGeneration> remaining,
+            boolean remainingKnown) {
+        if (captionPostProcessService == null || removed == null || !StringUtils.hasText(removed.getVideoKey())) {
+            return List.of();
+        }
+        String videoKey = removed.getVideoKey();
+        if (videoKey.equals(shot.getVideoKey())) {
+            return List.of();
+        }
+        List<DramaShotGeneration> rows = remaining;
+        if (!remainingKnown) {
+            List<DramaShotGeneration> listed = listGenerationEntities(shot.getId());
+            rows = listed == null ? List.of() : listed;
+        }
+        for (DramaShotGeneration item : rows) {
+            if (item == null || removed.getId().equals(item.getId())) {
+                continue;
+            }
+            if (videoKey.equals(item.getVideoKey())) {
+                return List.of();
+            }
+        }
+        List<String> detached = captionPostProcessService.detachForSource(shot.getId(), videoKey);
+        return detached == null ? List.of() : detached;
     }
 
     private List<String> detachShotMedia(DramaShot shot) {
@@ -2734,6 +2831,9 @@ public class DramaStoryboardService {
         shot.setVideoKey(null);
         shot.setVideoPosterKey(null);
         shot.setVideoTailKey(null);
+        shot.setVideoGeneratedMode(null);
+        shot.setChainedFromShotId(null);
+        shot.setChainedFromTailKey(null);
     }
 
     private void syncSelectedGenerationMedia(DramaShot shot) {

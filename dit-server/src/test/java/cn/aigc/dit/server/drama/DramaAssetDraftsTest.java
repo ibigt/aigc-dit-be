@@ -837,4 +837,30 @@ class DramaAssetDraftsTest {
         assertEquals("20岁，女，杏眼，黑色短发刚过耳，白色圆领T恤，深蓝工装背心", draft.getIdentityInvariants());
         assertTrue(draft.getImagePrompt().contains("外形与服装必须符合：20岁，女，杏眼"));
     }
+
+    @Test
+    void realisticSheetPromptUsesLiveCloseupWithoutCgi() {
+        String prompt = DramaAssetDrafts.realisticSheetPrompt(
+                DramaStyles.require(DramaStyles.LIVE_REALISM), "二十五岁，圆脸，黑长直，白衬衫，湿身");
+        assertTrue(prompt.contains("正脸近景"));
+        assertTrue(prompt.contains("严格 90 度侧面"));
+        assertTrue(prompt.contains("背面三个全身"));
+        assertTrue(prompt.contains("湿身"));
+        assertTrue(prompt.contains("现代写实风"));
+        assertTrue(!prompt.contains("原创CGI"));
+        assertTrue(!prompt.contains("电影级仿真人"));
+        assertTrue(!prompt.contains("固定四格设定拼版"));
+    }
+
+    @Test
+    void realisticSheetPromptUsesFourPanelForOtherRealism() {
+        String prompt = DramaAssetDrafts.realisticSheetPrompt(
+                DramaStyles.require(DramaStyles.GUOFENG_3D), "广袖金饰");
+        assertTrue(prompt.contains("固定四格设定拼版"));
+        assertTrue(prompt.contains("3/4 侧脸"));
+        assertTrue(prompt.contains("不得只出单人全身单帧"));
+        assertTrue(prompt.contains("广袖金饰"));
+        assertTrue(!prompt.contains("正脸近景"));
+        assertTrue(!prompt.contains("原创CGI"));
+    }
 }

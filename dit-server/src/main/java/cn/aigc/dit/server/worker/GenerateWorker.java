@@ -33,6 +33,7 @@ import cn.aigc.dit.server.entity.CreationSession;
 import cn.aigc.dit.server.entity.GenTask;
 import cn.aigc.dit.server.drama.DramaContract;
 import cn.aigc.dit.server.drama.DramaShotCaptionService;
+import cn.aigc.dit.server.drama.SeedreamShotBindService;
 import cn.aigc.dit.server.drama.DramaShotCaptionPostProcessService;
 import cn.aigc.dit.server.generate.GenerateRequests;
 import cn.aigc.dit.server.generate.GenerateTaskViews;
@@ -101,6 +102,9 @@ public class GenerateWorker {
     private cn.aigc.dit.generate.describe.ImageDescribeClient imageDescribeClient;
     @Autowired(required = false)
     private cn.aigc.dit.storage.ObjectStorage objectStorage;
+    /** 写实角色在官方 Seedance 出片前换成原图旁的定妆图。未装配时保持原参考。 */
+    @Autowired(required = false)
+    private SeedreamShotBindService seedreamShotBindService;
     private final CreditService creditService;
     private final AesGcmEncryptor encryptor;
 
@@ -424,6 +428,10 @@ public class GenerateWorker {
             task = genTaskMapper.selectById(taskId);
             if (task == null) {
                 return;
+            }
+            // 调用官方 Seedance 之前完成定妆绑定。失败则本镜不出片，原图不会送出去。
+            if (seedreamShotBindService != null) {
+                seedreamShotBindService.prepare(task, model);
             }
             GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
             GenerateProvider provider = bindAndResolve(task, model, request);

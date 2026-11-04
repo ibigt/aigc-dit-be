@@ -12,6 +12,7 @@ import cn.aigc.dit.generate.GenerateProperties;
 import cn.aigc.dit.generate.ark.ArkKeys;
 import cn.aigc.dit.generate.ark.ArkUrls;
 import cn.aigc.dit.generate.describe.ImageDescribeClient;
+import cn.aigc.dit.generate.seedream.SeedreamCharacterBinds;
 import cn.aigc.dit.generate.seedream.SeedreamOriginUrls;
 import cn.aigc.dit.server.crypto.AesGcmEncryptor;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
@@ -1764,6 +1765,7 @@ public class DramaAssetService {
         resp.setImageStorageKey(asset.getImageStorageKey());
         resp.setImageAssetId(asset.getImageAssetId());
         resp.setImageUrl(MediaUrls.of(asset.getImageStorageKey()));
+        resp.setSeedreamBindKey(seedreamBindKey(asset));
         resp.setSelectedGenerationId(asset.getSelectedGenerationId());
         resp.setGenTaskId(asset.getGenTaskId());
         if (task != null) {
@@ -1777,6 +1779,30 @@ public class DramaAssetService {
         resp.setCreatedAt(asset.getCreatedAt());
         resp.setUpdatedAt(asset.getUpdatedAt());
         return resp;
+    }
+
+    /**
+     * 当前选用图旁边若有未过期的 Seedream 绑定成图，返回那张图的 key。
+     * 当前图自己已是 Seedream 5.0 文生图时不再返回，避免和原图看成两张。
+     */
+    private String seedreamBindKey(DramaAsset asset) {
+        if (asset == null
+                || !DramaContract.ASSET_TYPE_CHARACTER.equals(asset.getType())
+                || !StringUtils.hasText(asset.getImageStorageKey())
+                || objectStorage == null) {
+            return null;
+        }
+        String originalKey = asset.getImageStorageKey().trim();
+        if (SeedreamOriginUrls.savedAt(objectStorage, objectMapper, originalKey) != null) {
+            return null;
+        }
+        SeedreamCharacterBinds.Bind bind = SeedreamCharacterBinds.read(objectStorage, objectMapper, originalKey);
+        if (!SeedreamCharacterBinds.fresh(bind, java.time.Instant.now())
+                || !StringUtils.hasText(bind.imageKey())
+                || !objectStorage.exists(bind.imageKey())) {
+            return null;
+        }
+        return bind.imageKey();
     }
 
     private static String familyKey(DramaAsset asset) {

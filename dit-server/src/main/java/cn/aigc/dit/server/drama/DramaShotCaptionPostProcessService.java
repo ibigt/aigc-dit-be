@@ -24,8 +24,10 @@ import org.springframework.util.StringUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -203,6 +205,41 @@ public class DramaShotCaptionPostProcessService {
         } catch (Exception e) {
             log.warn("on-demand caption burn failed shot={}", shotId, e);
             throw new BizException(ErrorCode.INTERNAL, "字幕烧录失败");
+        }
+    }
+
+    /**
+     * 生成记录被删、分镜不再引用这条原片时，删掉对应字幕行并返回需要一并释放的派生文件。
+     * 原片本身由调用方放入保留清理列表。
+     */
+    public List<String> detachForSource(Long shotId, String sourceVideoKey) {
+        if (shotId == null || !StringUtils.hasText(sourceVideoKey)) {
+            return List.of();
+        }
+        List<DramaShotCaption> rows = captionMapper.selectList(new LambdaQueryWrapper<DramaShotCaption>()
+                .eq(DramaShotCaption::getShotId, shotId)
+                .eq(DramaShotCaption::getSourceVideoKey, sourceVideoKey));
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        for (DramaShotCaption row : rows) {
+            if (row == null) {
+                continue;
+            }
+            addDerivative(keys, sourceVideoKey, row.getAudioKey());
+            addDerivative(keys, sourceVideoKey, row.getSubtitleJsonKey());
+            addDerivative(keys, sourceVideoKey, row.getCaptionVideoKey());
+            if (row.getId() != null) {
+                captionMapper.deleteById(row.getId());
+            }
+        }
+        return List.copyOf(keys);
+    }
+
+    private static void addDerivative(Set<String> keys, String source, String key) {
+        if (StringUtils.hasText(key) && !key.equals(source)) {
+            keys.add(key);
         }
     }
 

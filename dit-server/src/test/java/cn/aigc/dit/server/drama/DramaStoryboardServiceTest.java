@@ -44,8 +44,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
+import com.baomidou.mybatisplus.annotation.TableField;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1924,6 +1927,89 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
+    void deleteOnlySelectedGenerationClearsPreviewAndPurgesVideo() {
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(1L);
+        shot.setGenTaskId(400L);
+        shot.setVideoKey("users/7/gen/only.mp4");
+        shot.setVideoPosterKey("users/7/gen/only-poster.webp");
+        shot.setVideoTailKey("users/7/gen/only-tail.webp");
+        shot.setVideoGeneratedMode("r2v");
+        shot.setChainedFromShotId(88L);
+        shot.setChainedFromTailKey("users/7/gen/prev-tail.webp");
+        storedShots.add(shot);
+        DramaShotGeneration only = new DramaShotGeneration();
+        only.setId(1L);
+        only.setShotId(201L);
+        only.setUserId(7L);
+        only.setGenTaskId(400L);
+        only.setVideoKey("users/7/gen/only.mp4");
+        only.setVideoPosterKey("users/7/gen/only-poster.webp");
+        only.setVideoTailKey("users/7/gen/only-tail.webp");
+        when(shotGenerationMapper.selectById(1L)).thenReturn(only);
+        when(shotGenerationMapper.selectList(any())).thenReturn(List.of());
+        DramaShotCaptionPostProcessService captions = org.mockito.Mockito.mock(DramaShotCaptionPostProcessService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "captionPostProcessService", captions);
+        when(captions.detachForSource(201L, "users/7/gen/only.mp4"))
+                .thenReturn(List.of("users/7/gen/only-caption-7-audio.wav", "users/7/gen/only-caption-7-subtitle.json"));
+
+        service.deleteGeneration(201L, 1L);
+
+        assertNull(shot.getSelectedGenerationId());
+        assertNull(shot.getVideoKey());
+        assertNull(shot.getVideoPosterKey());
+        assertNull(shot.getVideoTailKey());
+        assertNull(shot.getGenTaskId());
+        assertNull(shot.getVideoGeneratedMode());
+        assertNull(shot.getChainedFromShotId());
+        assertNull(shot.getChainedFromTailKey());
+        assertClearsNull("videoKey");
+        assertClearsNull("genTaskId");
+        assertClearsNull("videoGeneratedMode");
+        assertClearsNull("chainedFromShotId");
+        verify(shotGenerationMapper).deleteById(1L);
+        verify(shotMapper).updateById(shot);
+        verify(captions).detachForSource(201L, "users/7/gen/only.mp4");
+        verify(creationService).removeDramaOutputs(7L, 400L, "users/7/gen/only.mp4");
+        verify(mediaRetention).purgeAfterCommit(7L, List.of(
+                "users/7/gen/only.mp4",
+                "users/7/gen/only-poster.webp",
+                "users/7/gen/only-tail.webp",
+                "users/7/gen/only-caption-7-audio.wav",
+                "users/7/gen/only-caption-7-subtitle.json"));
+        verify(filmService).discardAssembledFilm(31L);
+    }
+
+    @Test
+    void storyboardDropsVideoLeftBehindAfterLastGenerationWasDeleted() {
+        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
+        storedChapters.add(pendingChapter());
+        DramaShot shot = pendingShot();
+        shot.setSelectedGenerationId(null);
+        shot.setGenTaskId(400L);
+        shot.setVideoKey("users/7/gen/orphan.mp4");
+        shot.setVideoPosterKey("users/7/gen/orphan-poster.webp");
+        shot.setVideoTailKey("users/7/gen/orphan-tail.webp");
+        storedShots.add(shot);
+        when(assetMapper.selectList(any())).thenReturn(List.of());
+        when(shotGenerationMapper.selectList(any())).thenReturn(List.of());
+
+        DramaStoryboardResp board = service.getStoryboard(31L);
+
+        assertNull(shot.getVideoKey());
+        assertNull(shot.getVideoPosterKey());
+        assertNull(shot.getVideoTailKey());
+        assertNull(shot.getGenTaskId());
+        assertNull(board.getChapters().get(0).getShots().get(0).getVideoKey());
+        assertNull(board.getChapters().get(0).getShots().get(0).getVideoUrl());
+        verify(mediaRetention).purgeAfterCommit(7L, List.of(
+                "users/7/gen/orphan.mp4",
+                "users/7/gen/orphan-poster.webp",
+                "users/7/gen/orphan-tail.webp"));
+        verify(filmService).discardAssembledFilm(31L);
+    }
+
+    @Test
     void deleteShotGenerationRemovesMatchingCreation() {
         DramaShot shot = pendingShot();
         shot.setSelectedGenerationId(1L);
@@ -3024,6 +3110,17 @@ class DramaStoryboardServiceTest {
         chapter.setName("第一场");
         chapter.setStatus(DramaContract.STATUS_PENDING_CONFIRM);
         return chapter;
+    }
+
+    private static void assertClearsNull(String fieldName) {
+        try {
+            Field field = DramaShot.class.getDeclaredField(fieldName);
+            TableField tableField = field.getAnnotation(TableField.class);
+            assertNotNull(tableField, fieldName);
+            assertEquals(FieldStrategy.ALWAYS, tableField.updateStrategy(), fieldName);
+        } catch (NoSuchFieldException e) {
+            throw new AssertionError(fieldName, e);
+        }
     }
 
     private static DramaShot pendingShot() {

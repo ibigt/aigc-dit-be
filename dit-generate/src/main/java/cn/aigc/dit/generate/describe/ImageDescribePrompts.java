@@ -30,6 +30,28 @@ public final class ImageDescribePrompts {
                     + "腰带徽章等配饰及左右位置、站姿手脚、灰底棚拍光影。次要才写氛围形容词。\n"
                     + COMMON_TAIL;
 
+    /**
+     * 出片前图生文：外形要求与 {@link #CHARACTER_FULL} 相同，尾句改成写实风格的真人实拍，不再写成 CGI 数字人。
+     */
+    private static final String REALISM_TAIL =
+            "人物写成真人实拍写真，自然肤质与可见毛孔，真实发丝与布料质感，棚拍柔光，"
+                    + "不要3D渲染，不要CG数字人，不要塑料皮肤，不要二次元卡通。"
+                    + "不要第二个人、不要字幕水印、不要空话评价（禁止堆砌 8K/次表面散射等无判别信息的词）。";
+
+    public static final String CHARACTER_REALISM = CHARACTER_FULL.replace(CGI_TAIL, REALISM_TAIL);
+
+    /**
+     * 出片前自动定妆：只抽外形锚点，构图交给定妆拼版，不写 CGI 数字人。
+     */
+    public static final String CHARACTER_ANCHORS =
+            "这是一张角色参考图。只抽取换一张脸或换一身衣服就会错的外形锚点，不要决定构图。\n"
+                    + "写清：年龄、脸型五官、发型、服装款式颜色材质与配饰、必须保留的状态（湿身、换装、受伤等）。\n"
+                    + "不要写机位、背景、光影、画面分格，不要写正脸近景、三视图或全身站位。\n"
+                    + "不要写「原创CGI数字人」「电影级仿真人」「真人照片」。\n"
+                    + "用中文输出两段，且只输出这两段：\n"
+                    + "【identity】一行短句（≤40字）：年龄气质 + 最可识别的外形锚点（发型/五官/标志配饰）。\n"
+                    + "【t2i_prompt】只写外形：年龄、脸型五官、发型、服装、必须保留的状态。不要写构图和背景。";
+
     public static final String SCENE =
             "这是一张无人室内空镜参考图。请穷尽描述空间以便文生图还原同一走廊/门口。\n"
                     + "关注：机位高低与左右偏、前景遮挡、墙面上下分区颜色、地面铺装、天花灯具、"

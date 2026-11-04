@@ -440,22 +440,7 @@ public final class DramaAssetDrafts {
         } else if (DramaContract.STATE_TAG_CUSTOM.equals(stateTag)) {
             text.append("角色特殊状态独立成图，脸与发型与主身份保持一致。");
         }
-        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
-            // 现代写实：定妆转面压缩版；禁 CG/质感由 prefix 承担，此处只保留构图与白底。
-            text.append("同一张图做成同一人的真人实拍定妆：左侧正脸近景（头肩，侧光单灯，看清毛孔发丝），");
-            text.append("右侧正面、严格 90 度侧面、背面三个全身视图横排对齐，机位与比例一致。");
-            text.append("不得只出单帧，不得拼不同人，侧面禁止用 3/4 侧脸代替。中老年须保留皱纹眼袋，禁止磨成青年脸。");
-            text.append("纯白无缝背景，四视图同一白底；禁止房间窗户墙角与任何可读文字。");
-        } else if (spec.realistic()) {
-            // 古风写实 / 霓虹赛博：四格设定表；写真质感由 prefix 承担。
-            text.append("真人写真定妆。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
-            text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
-            text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
-            text.append("禁止正面大头照与证件照特写。浅灰或纯白干净背景。");
-        } else {
-            text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
-            text.append("浅灰或纯白干净背景。");
-        }
+        appendTurnaround(text, spec);
         text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
         if (hasIdentity) {
             text.append("外形与服装必须符合：").append(identity.trim()).append("。");
@@ -465,6 +450,49 @@ public final class DramaAssetDrafts {
         if (!hasIdentity) {
             text.append("同一角色在不同提示词中，外貌、发型、服装和年龄必须保持一致。");
         }
+        return text.toString();
+    }
+
+    /** 设定图拼版句。现代写实是正脸近景加三个全身，其余写实是四格定妆，动漫仍是三视图。 */
+    private static void appendTurnaround(StringBuilder text, DramaStyles.Spec spec) {
+        if (DramaStyles.LIVE_REALISM.equals(spec.key())) {
+            // 现代写实：定妆转面压缩版；禁 CG/质感由 prefix 承担，此处只保留构图与白底。
+            text.append("同一张图做成同一人的真人实拍定妆：左侧正脸近景（头肩，侧光单灯，看清毛孔发丝），");
+            text.append("右侧正面、严格 90 度侧面、背面三个全身视图横排对齐，机位与比例一致。");
+            text.append("不得只出单帧，不得拼不同人，侧面禁止用 3/4 侧脸代替。中老年须保留皱纹眼袋，禁止磨成青年脸。");
+            text.append("纯白无缝背景，四视图同一白底；禁止房间窗户墙角与任何可读文字。");
+        } else if (spec.realistic()) {
+            // 古风写实 / 霓虹赛博等：四格设定表；写真质感由 prefix 承担。
+            text.append("真人写真定妆。同一张图必须做成固定四格设定拼版，不得只出单人全身单帧：");
+            text.append("左侧一张 3/4 侧脸或 3/4 半身肖像（看清发型五官与服装领口），");
+            text.append("右侧全身三视图站立（正面、侧面、背面）横排对齐。");
+            text.append("禁止正面大头照与证件照特写。浅灰或纯白干净背景。");
+        } else {
+            text.append("同一张图内三视图排列：正面全身、侧面半身、面部特写。");
+            text.append("浅灰或纯白干净背景。");
+        }
+    }
+
+    /**
+     * 出片前自动定妆的文生图提示词：复用设定图拼版句，外形来自图生文锚点。
+     * 不写「原创CGI数字人」；写实 prefix 里已有「不要CG数字人」。
+     */
+    public static String realisticSheetPrompt(DramaStyles.Spec spec, String appearance) {
+        if (spec == null || !spec.realistic()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append("角色设定图。单独站立，全身可见。");
+        String look = styleLookExtra(spec);
+        if (StringUtils.hasText(look)) {
+            text.append(look);
+        }
+        appendTurnaround(text, spec);
+        text.append("只要这一个角色，不要剧情场面，不要其他人物，不要漫画分镜格子，不要大段文字说明，不要配件拆解图。");
+        if (StringUtils.hasText(appearance)) {
+            text.append("外形与服装必须符合：").append(appearance.trim()).append("。");
+        }
+        text.append(spec.prefix()).append("。");
         return text.toString();
     }
 

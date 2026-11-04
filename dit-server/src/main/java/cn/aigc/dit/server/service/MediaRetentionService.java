@@ -1,5 +1,6 @@
 package cn.aigc.dit.server.service;
 
+import cn.aigc.dit.generate.seedream.SeedreamCharacterBinds;
 import cn.aigc.dit.server.drama.ArkCharacterReview;
 import cn.aigc.dit.server.drama.DramaShotCaptionPostProcessService;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
@@ -407,6 +408,15 @@ public class MediaRetentionService {
             objectStorage.delete(key);
         } catch (RuntimeException e) {
             log.warn("delete unreferenced media failed, key={}", key, e);
+            return;
+        }
+        // 原图被真正清掉时，旁边的定妆成图、原链和绑定一起删。只改选用图不会走到这里。
+        if (isImage(key)) {
+            try {
+                SeedreamCharacterBinds.deleteAll(objectStorage, key);
+            } catch (RuntimeException e) {
+                log.warn("delete seedream character bind failed, key={}", key, e);
+            }
         }
     }
 

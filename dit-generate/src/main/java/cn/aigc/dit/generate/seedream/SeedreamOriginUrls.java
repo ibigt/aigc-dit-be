@@ -101,6 +101,35 @@ public final class SeedreamOriginUrls {
     }
 
     /**
+     * 原链文件里的保存时间。地址过期后仍可读，用来判断这张图是不是 30 天内的 Seedream 5.0 文生图。
+     *
+     * @return 没有记录、地址非法或时间无法解析时返回 null
+     */
+    public static Instant savedAt(ObjectStorage storage, ObjectMapper mapper, String storageKey) {
+        if (storage == null || mapper == null || storageKey == null || storageKey.isBlank()) {
+            return null;
+        }
+        String sidecar = sidecarKey(storageKey);
+        if (!storage.exists(sidecar)) {
+            return null;
+        }
+        try {
+            byte[] bytes = storage.getBytes(sidecar);
+            if (bytes == null || bytes.length == 0) {
+                return null;
+            }
+            JsonNode node = mapper.readTree(new String(bytes, StandardCharsets.UTF_8));
+            String url = node.path("url").asText("").trim();
+            if (!isHttps(url)) {
+                return null;
+            }
+            return parseInstant(node.path("savedAt").asText(""));
+        } catch (RuntimeException | java.io.IOException e) {
+            return null;
+        }
+    }
+
+    /**
      * @return 仍在有效期内的原始 HTTPS 地址；没有记录、已过期或无法读取时返回 null
      */
     public static String resolve(ObjectStorage storage, ObjectMapper mapper, String storageKey, Instant now) {
