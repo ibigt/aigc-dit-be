@@ -38,6 +38,7 @@ import org.springframework.util.StringUtils;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -174,9 +175,10 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         return text.length() > 12 ? text.substring(0, 12) : text;
     }
 
-    public List<CreationItemResp> listMine(String category, String query, String project, OffsetDateTime from, OffsetDateTime to) {
+    public List<CreationItemResp> listMine(String category, String query, String project, String exclude, OffsetDateTime from, OffsetDateTime to) {
         Long userId = UserContext.requireUserId();
         ProjectFilter filter = ProjectFilter.parse(project);
+        List<String> exclusions = parseExclude(exclude);
         LambdaQueryWrapper<Creation> wrapper = new LambdaQueryWrapper<Creation>()
                 .eq(Creation::getUserId, userId)
                 .eq(StringUtils.hasText(category) && !"all".equalsIgnoreCase(category), Creation::getCategory, category)
@@ -186,9 +188,20 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 .and(filter.none(), w -> w.isNull(Creation::getProjectKind).or().isNull(Creation::getProjectId))
                 .eq(!filter.all() && !filter.none(), Creation::getProjectKind, filter.kind())
                 .eq(!filter.all() && !filter.none() && filter.id() != null, Creation::getProjectId, filter.id())
+                .notIn(!exclusions.isEmpty(), Creation::getProjectKind, exclusions)
                 .orderByDesc(Creation::getCreatedAt);
         List<Creation> items = list(wrapper);
         return toGallery(items);
+    }
+
+    private static List<String> parseExclude(String exclude) {
+        if (!StringUtils.hasText(exclude)) {
+            return List.of();
+        }
+        return Arrays.stream(exclude.split(","))
+                .map(String::trim)
+                .filter(StringUtils::hasText)
+                .toList();
     }
 
     public List<CreationProjectResp> listProjects() {
@@ -281,6 +294,39 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
         creation.setProjectId(episode.getSeriesId());
         applyFilmFacts(creation, series, durationSec, true);
         save(creation);
+    }
+
+    @Transactional
+    public void recordWorkflowFilm(Long userId, Long runId, String nodeId, String title,
+                                   String storageKey, String posterKey, double durationSeconds) {
+        if (userId == null || runId == null || !StringUtils.hasText(storageKey)) {
+            throw new IllegalArgumentException("工作流成片信息不完整");
+        }
+        String filmTitle = StringUtils.hasText(title) ? title.trim() : "工作流成片";
+        Creation creation = getOne(new LambdaQueryWrapper<Creation>()
+                .eq(Creation::getUserId, userId)
+                .eq(Creation::getStorageKey, storageKey)
+                .last("LIMIT 1"), false);
+        boolean existing = creation != null;
+        if (!existing) {
+            creation = new Creation();
+            creation.setUserId(userId);
+            creation.setStorageKey(storageKey);
+            creation.setCategory(ModelCategory.VIDEO);
+            creation.setCopyIndex(1);
+            creation.setCreditCost(0L);
+        }
+        creation.setTitle(filmTitle);
+        creation.setPrompt(filmTitle);
+        creation.setPosterKey(posterKey);
+        creation.setDurationSec((int) Math.ceil(durationSeconds));
+        creation.setProjectKind("workflow");
+        creation.setProjectId(runId);
+        if (existing) {
+            updateById(creation);
+        } else {
+            save(creation);
+        }
     }
 
     @Transactional
@@ -720,7 +766,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
             if ("none".equalsIgnoreCase(project)) {
                 return new ProjectFilter(null, null, false, true);
             }
-            if ("quick".equals(project) || "drama".equals(project)) {
+            if ("quick".equals(project) || "drama".equals(project) || "workflow".equals(project)) {
                 return new ProjectFilter(project, null, false, false);
             }
             int split = project.indexOf(':');
@@ -728,7 +774,7 @@ public class CreationService extends ServiceImpl<CreationMapper, Creation> {
                 return new ProjectFilter(null, null, true, false);
             }
             String kind = project.substring(0, split);
-            if (!"quick".equals(kind) && !"drama".equals(kind)) {
+            if (!"quick".equals(kind) && !"drama".equals(kind) && !"workflow".equals(kind)) {
                 return new ProjectFilter(null, null, true, false);
             }
             try {

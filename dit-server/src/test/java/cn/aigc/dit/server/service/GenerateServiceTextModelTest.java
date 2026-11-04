@@ -40,6 +40,43 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class GenerateServiceTextModelTest {
 
+    @Test
+    void audioCopiesSurviveRealSubmissionNormalizationAndBilling() {
+        AiModel model = new AiModel(); model.setId(12L); model.setEnabled(true); model.setName("Mock Audio");
+        model.setCategory("audio"); model.setAdapterKey("mock"); model.setModelKey("mock-audio");
+        model.setPricing(Map.of("unit", "次", "sale", Map.of("output", 5)));
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        java.util.concurrent.atomic.AtomicReference<GenTask> saved = new java.util.concurrent.atomic.AtomicReference<>();
+        when(genTaskMapper.insert(any(GenTask.class))).thenAnswer(call -> { GenTask task = call.getArgument(0); task.setId(88L); saved.set(task); return 1; });
+        GenerateSubmitReq req = new GenerateSubmitReq(); req.setModelId(12L); req.setCategory("audio"); req.setPrompt("hello"); req.setCopies(3);
+        service.submit(req, Map.of("source", GenerateRequests.SOURCE_DRAMA));
+        assertEquals(3, saved.get().getCopies());
+        assertEquals(3, saved.get().getParams().get("copies"));
+        assertEquals(15L, saved.get().getCreditCost());
+        var providerRequest = GenerateRequests.fromTask(saved.get(), "mock-audio");
+        assertEquals(3, providerRequest.resolvedCopies());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 5})
+    void rejectsOutOfRangeAudioCopiesBeforeCharging(int copies) {
+        AiModel model = new AiModel(); model.setId(12L); model.setEnabled(true); model.setName("Mock Audio");
+        model.setCategory("audio"); model.setAdapterKey("mock"); model.setModelKey("mock-audio");
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        GenerateSubmitReq req = new GenerateSubmitReq(); req.setModelId(12L); req.setCategory("audio"); req.setPrompt("hello"); req.setCopies(copies);
+        assertThrows(BizException.class, () -> service.submit(req));
+    }
+
+    @Test
+    void rejectsMusicForSpeechOnlyAdapterBeforeBilling() {
+        AiModel model = new AiModel(); model.setId(12L); model.setEnabled(true); model.setName("Speech");
+        model.setCategory("audio"); model.setAdapterKey("openai-speech"); model.setModelKey("tts-1");
+        when(aiModelMapper.selectById(12L)).thenReturn(model);
+        GenerateSubmitReq req = new GenerateSubmitReq(); req.setModelId(12L); req.setCategory("audio"); req.setPrompt("strings"); req.setAudioMode("music");
+        BizException error = assertThrows(BizException.class, () -> service.submit(req));
+        org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("音乐"));
+    }
+
     @Mock
     private AiModelMapper aiModelMapper;
     @Mock

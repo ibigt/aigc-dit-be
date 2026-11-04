@@ -48,6 +48,12 @@ public final class GenerateRequests {
                 .setDurationSec(req.getDurationSec())
                 .setReferenceVideoSeconds(req.getReferenceVideoSeconds())
                 .setVoiceId(blankToNull(req.getVoiceId()))
+                .setAudioMode(blankToNull(req.getAudioMode()))
+                .setEmotion(blankToNull(req.getEmotion()))
+                .setLyrics(blankToNull(req.getLyrics()))
+                .setInstrumental(req.getInstrumental())
+                .setMusicStyle(blankToNull(req.getMusicStyle()))
+                .setMusicDuration(req.getMusicDuration())
                 .setSpeed(req.getSpeed())
                 .setAudioFormat(blankToNull(req.getAudioFormat()))
                 .setCopies(req.getCopies() == null ? 1 : req.getCopies())
@@ -58,6 +64,11 @@ public final class GenerateRequests {
     /** 漫剧任务不挂快速创作会话。图像和视频成功后仍写入「我的创作」。 */
     public static boolean isDramaSource(Map<String, Object> params) {
         return SOURCE_DRAMA.equals(sourceOf(params));
+    }
+
+    /** 高级工作台（工作流）任务带 workflowRunId，落库时标记 projectKind=workflow。 */
+    public static boolean isWorkflowSource(Map<String, Object> params) {
+        return params != null && params.get("workflowRunId") != null;
     }
 
     /** 分镜出片任务（视频成片；开场静帧另见 {@link #isOpeningStill}）。 */
@@ -97,6 +108,10 @@ public final class GenerateRequests {
         return longVal(params, "sessionId");
     }
 
+    public static Long workflowRunIdFromParams(Map<String, Object> params) {
+        return longVal(params, "workflowRunId");
+    }
+
     public static Long shotIdFromParams(Map<String, Object> params) {
         return longVal(params, "shotId");
     }
@@ -132,6 +147,12 @@ public final class GenerateRequests {
             params.put("referenceVideoSeconds", request.getReferenceVideoSeconds());
         }
         params.put("voiceId", request.getVoiceId());
+        params.put("audioMode", request.getAudioMode());
+        params.put("emotion", request.getEmotion());
+        params.put("lyrics", request.getLyrics());
+        params.put("instrumental", request.getInstrumental());
+        params.put("musicStyle", request.getMusicStyle());
+        params.put("musicDuration", request.getMusicDuration());
         params.put("speed", request.getSpeed());
         params.put("audioFormat", request.getAudioFormat());
         params.put("copies", request.resolvedCopies());
@@ -195,6 +216,12 @@ public final class GenerateRequests {
                 .setDurationSec(intVal(params.get("durationSec")))
                 .setReferenceVideoSeconds(intVal(params.get("referenceVideoSeconds")))
                 .setVoiceId(stringVal(params.get("voiceId"), null))
+                .setAudioMode(stringVal(params.get("audioMode"), null))
+                .setEmotion(stringVal(params.get("emotion"), null))
+                .setLyrics(stringVal(params.get("lyrics"), null))
+                .setInstrumental(params.get("instrumental") instanceof Boolean flag ? flag : null)
+                .setMusicStyle(stringVal(params.get("musicStyle"), null))
+                .setMusicDuration(doubleVal(params.get("musicDuration")))
                 .setSpeed(doubleVal(params.get("speed")))
                 .setAudioFormat(stringVal(params.get("audioFormat"), null))
                 .setCopies(task.getCopies() == null ? intVal(params.get("copies")) : task.getCopies())

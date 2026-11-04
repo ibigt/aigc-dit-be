@@ -82,12 +82,25 @@ class SglangGenerateProviderTest {
     @Test void rejectsInvalidModesDurationsAndMultipleOutputs() {
         SglangGenerateProvider provider = new SglangGenerateProvider(mock(ObjectStorage.class), mock(SglangHttp.class));
         assertThrows(BizException.class, () -> provider.createBody(request().setMode("t2i")));
+        assertThrows(BizException.class, () -> provider.createBody(request().setDurationSec(4)));
         assertThrows(BizException.class, () -> provider.createBody(request().setDurationSec(16)));
         assertThrows(BizException.class, () -> provider.createBody(request().setCopies(2)));
         assertThrows(BizException.class, () -> provider.createBody(request().setMode("i2v")));
-        Map<?, ?> target = (Map<?, ?>) provider.createBody(request().setResolution("2K")
-                .setAdapterConfig(Map.of("shortEdge", 768))).get("target");
-        assertEquals(768, target.get("short_edge"));
+    }
+
+    @Test void mapsResolutionTiersToShortEdgeOverridingConfiguredDefault() {
+        SglangGenerateProvider provider = new SglangGenerateProvider(mock(ObjectStorage.class), mock(SglangHttp.class));
+        // 分辨率优先：2K→1440、数字档取值；无分辨率时回退 shortEdge 配置，再无则默认 768
+        assertEquals(1440, targetEdge(provider.createBody(request().setResolution("2K").setAdapterConfig(Map.of("shortEdge", 768)))));
+        assertEquals(2160, targetEdge(provider.createBody(request().setResolution("4K"))));
+        assertEquals(768, targetEdge(provider.createBody(request().setResolution("768P"))));
+        assertEquals(1080, targetEdge(provider.createBody(request().setResolution("1080P").setAdapterConfig(Map.of("shortEdge", 768)))));
+        assertEquals(640, targetEdge(provider.createBody(request().setAdapterConfig(Map.of("shortEdge", 640)))));
+        assertEquals(768, targetEdge(provider.createBody(request())));
+    }
+
+    private int targetEdge(Map<String, Object> body) {
+        return (Integer) ((Map<?, ?>) body.get("target")).get("short_edge");
     }
 
     @Test void queuedJobStaysPendingAndEmptyCompletedVideoFails() {

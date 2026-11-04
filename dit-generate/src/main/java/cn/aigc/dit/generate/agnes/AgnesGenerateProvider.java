@@ -457,6 +457,9 @@ public class AgnesGenerateProvider implements GenerateProvider {
         if (!StringUtils.hasText(storageKey)) {
             return null;
         }
+        if (!objectStorage.exists(storageKey)) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "参考素材不存在：" + storageKey);
+        }
         byte[] bytes = objectStorage.getBytes(storageKey);
         if (bytes == null || bytes.length == 0) {
             throw new BizException(ErrorCode.BAD_REQUEST, "参考素材文件为空");

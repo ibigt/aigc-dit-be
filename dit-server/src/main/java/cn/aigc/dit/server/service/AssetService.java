@@ -5,6 +5,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.generate.poster.PosterExtractor;
+import cn.aigc.dit.server.credit.VideoTiers;
 import cn.aigc.dit.server.entity.Asset;
 import cn.aigc.dit.server.entity.Creation;
 import cn.aigc.dit.server.drama.entity.DramaAsset;
@@ -145,6 +146,44 @@ public class AssetService extends ServiceImpl<AssetMapper, Asset> {
                 .eq(Asset::getStorageKey, storageKey)
                 .last("LIMIT 1"));
         return asset == null ? null : asset.getDurationMs();
+    }
+
+    /**
+     * 参考视频（视频输入）的分辨率档（480P/720P/…）：优先用创作产物的分辨率档位
+     * （工作流里上游生成的视频走这条，creation.resolution 记的是生成时选的那档），
+     * 其次用素材行的宽高按短边折档（素材库上传的视频）。都查不到时返回 null，
+     * 由调用方按保守口径（模型最高档）兜底。
+     */
+    public String findOwnedVideoResolution(Long userId, String storageKey) {
+        if (!StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        LambdaQueryWrapper<Creation> creationQuery = new LambdaQueryWrapper<Creation>()
+                .select(Creation::getResolution)
+                .eq(Creation::getStorageKey, storageKey)
+                .last("LIMIT 1");
+        if (userId != null) {
+            creationQuery.eq(Creation::getUserId, userId);
+        }
+        Creation creation = creationMapper.selectOne(creationQuery);
+        if (creation != null) {
+            String tier = VideoTiers.normalize(creation.getResolution());
+            if (tier != null) {
+                return tier;
+            }
+        }
+        LambdaQueryWrapper<Asset> assetQuery = new LambdaQueryWrapper<Asset>()
+                .select(Asset::getWidth, Asset::getHeight)
+                .eq(Asset::getStorageKey, storageKey)
+                .last("LIMIT 1");
+        if (userId != null) {
+            assetQuery.eq(Asset::getUserId, userId);
+        }
+        Asset asset = getOne(assetQuery);
+        if (asset != null) {
+            return VideoTiers.byShortSide(asset.getWidth(), asset.getHeight());
+        }
+        return null;
     }
 
     @Transactional

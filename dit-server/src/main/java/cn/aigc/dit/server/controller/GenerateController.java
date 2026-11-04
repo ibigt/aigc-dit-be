@@ -34,4 +34,11 @@ public class GenerateController {
     public CommonResult<GenerateTaskResp> get(@PathVariable Long id) {
         return CommonResult.success(generateService.getMine(id));
     }
+
+    @Operation(summary = "取消等待中或运行中的生成任务，未提交供应商的退还积分")
+    @PostMapping("/tasks/{id}/cancel")
+    public CommonResult<Void> cancel(@PathVariable Long id) {
+        generateService.cancelOwned(id);
+        return CommonResult.success();
+    }
 }

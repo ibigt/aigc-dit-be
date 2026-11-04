@@ -22,6 +22,10 @@ public final class ArkRequestMapper {
     public static final int MAX_VIDEOS = 3;
     public static final int MAX_AUDIO_2_0 = 3;
     public static final int MAX_AUDIO_2_5 = 10;
+    /** 参考视频总时长上限（秒）：Seedance 2.0 官方限每段 2–15s 且总 ≤15s。 */
+    public static final int REFERENCE_VIDEO_MAX_SECONDS_2_0 = 15;
+    /** 参考视频总时长上限（秒）：Seedance 2.5 官方限总 ≤30s。 */
+    public static final int REFERENCE_VIDEO_MAX_SECONDS_2_5 = 30;
     static final Set<String> RATIOS = Set.of(
             "16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive");
     static final Set<String> RESOLUTIONS_720 = Set.of("480p", "720p");
@@ -150,6 +154,13 @@ public final class ArkRequestMapper {
 
     public static int maxVideos(GenerateRequest request) {
         return isSeedance25(request) ? 10 : MAX_VIDEOS;
+    }
+
+    /** 参考视频总时长上限（秒）：与 {@link #maxVideos} 同口径按代际分档（2.0 ≤15s / 2.5 ≤30s）。 */
+    public static int maxReferenceVideoSeconds(GenerateRequest request) {
+        return isSeedance25(request)
+                ? REFERENCE_VIDEO_MAX_SECONDS_2_5
+                : REFERENCE_VIDEO_MAX_SECONDS_2_0;
     }
 
     public static int maxAudios(GenerateRequest request) {

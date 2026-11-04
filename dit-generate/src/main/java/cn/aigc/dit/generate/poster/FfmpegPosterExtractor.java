@@ -181,7 +181,8 @@ public class FfmpegPosterExtractor implements PosterExtractor {
         return withSuffix(storageKey, "-poster.webp");
     }
 
-    static String toTailKey(String storageKey) {
+    /** 尾帧固定落在「原 key 去扩展名 + -tail.webp」；工作流视频串联据此复用已抽好的尾帧。 */
+    public static String toTailKey(String storageKey) {
         return withSuffix(storageKey, "-tail.webp");
     }
 

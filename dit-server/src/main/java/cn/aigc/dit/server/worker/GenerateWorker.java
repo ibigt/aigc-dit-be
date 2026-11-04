@@ -550,6 +550,10 @@ public class GenerateWorker {
         if (GenerateTaskViews.isForeignAgnesError(task.getErrorMessage())) {
             task.setErrorMessage(null);
         }
+        // MyBatis-Plus 的 strictUpdateFill 只在字段为 null 时填充，而这里是从库里 select 出来的，
+        // updatedAt 必然已有值，不显式赋值就永远刷不动。后果是 resumeStaleJobs 的
+        // updatedAt < now-20s 判据一直命中同一批任务，反复空轮询。
+        task.setUpdatedAt(OffsetDateTime.now());
         genTaskMapper.updateById(task);
     }
 
@@ -577,6 +581,8 @@ public class GenerateWorker {
         if (result.getProgress() > 0) {
             latest.setProgress(Math.max(latest.getProgress() == null ? 0 : latest.getProgress(), result.getProgress()));
         }
+        // 同上：显式刷新 updatedAt，否则上游长时间 PENDING 时 updated_at 一直停在创建时间。
+        latest.setUpdatedAt(OffsetDateTime.now());
         genTaskMapper.updateById(latest);
     }
 
@@ -649,6 +655,9 @@ public class GenerateWorker {
                 if (GenerateRequests.isDramaSource(latest.getParams())) {
                     creation.setProjectKind("drama");
                     creation.setProjectId(GenerateRequests.seriesIdFromParams(latest.getParams()));
+                } else if (GenerateRequests.isWorkflowSource(latest.getParams())) {
+                    creation.setProjectKind("workflow");
+                    creation.setProjectId(GenerateRequests.workflowRunIdFromParams(latest.getParams()));
                 } else if (sessionId != null) {
                     creation.setProjectKind("quick");
                     creation.setProjectId(sessionId);

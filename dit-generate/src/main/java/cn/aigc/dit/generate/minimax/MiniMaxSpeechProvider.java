@@ -38,12 +38,29 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     static final String DEFAULT_VOICE = "male-qn-qingse";
     static final String DEFAULT_FORMAT = "mp3";
     private static final Set<String> FORMATS = Set.of("mp3", "wav", "flac", "pcm");
+    /** MiniMax speech-2.x voice_setting.emotion 的合法枚举。 */
+    private static final Set<String> EMOTION_ENUMS =
+            Set.of("happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral");
+    private static final Map<String, String> EMOTION_ALIASES = Map.ofEntries(
+            Map.entry("", ""),
+            Map.entry("默认", ""),
+            Map.entry("平静", "neutral"),
+            Map.entry("开心", "happy"),
+            Map.entry("高兴", "happy"),
+            Map.entry("悲伤", "sad"),
+            Map.entry("难过", "sad"),
+            Map.entry("愤怒", "angry"),
+            Map.entry("生气", "angry"),
+            Map.entry("恐惧", "fearful"),
+            Map.entry("害怕", "fearful"),
+            Map.entry("惊讶", "surprised"),
+            Map.entry("厌恶", "disgusted"));
 
     private final ObjectStorage objectStorage;
     private final GenerateProperties.Minimax properties;
     private final MiniMaxHttp http;
     private final ObjectMapper objectMapper;
-    private final Map<String, String> completed = new ConcurrentHashMap<>();
+    private final Map<String, java.util.List<String>> completed = new ConcurrentHashMap<>();
 
     @Autowired
     public MiniMaxSpeechProvider(ObjectStorage objectStorage, GenerateProperties properties) {
@@ -67,25 +84,27 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     public SubmitResult submit(GenerateRequest request) {
         assertSupported(request);
         String format = formatOf(request);
-        String response = http.postJson(endpoint(request.getEndpoint(), properties.getBaseUrl()),
-                firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
-        JsonNode root = readJson(response);
-        assertSuccess(root);
-        byte[] audio = audioBytes(root);
-        if (audio.length == 0) {
-            throw new BizException(ErrorCode.INTERNAL, "MiniMax 语音接口未返回音频内容");
+        java.util.List<String> keys = outputKeys(request, format);
+        for (String key : keys) {
+            String response = http.postJson(endpoint(request.getEndpoint(), properties.getBaseUrl()),
+                    firstNonBlank(request.getApiKey(), properties.getApiKey()), toJson(request, format));
+            JsonNode root = readJson(response);
+            assertSuccess(root);
+            byte[] audio = audioBytes(root);
+            if (audio.length == 0) {
+                throw new BizException(ErrorCode.INTERNAL, "MiniMax 语音接口未返回音频内容");
+            }
+            objectStorage.put(key, audio, contentType(format));
         }
-        String key = outputKey(request, format);
-        objectStorage.put(key, audio, contentType(format));
         String jobId = "minimax-speech-" + UUID.randomUUID();
-        completed.put(jobId, key);
+        completed.put(jobId, keys);
         return SubmitResult.accepted(jobId);
     }
 
     @Override
     public PollResult poll(String jobId) {
-        String key = completed.get(jobId);
-        return key == null ? PollResult.failed(jobId, "MiniMax 语音任务不存在") : PollResult.succeeded(jobId, key);
+        java.util.List<String> keys = completed.get(jobId);
+        return keys == null ? PollResult.failed(jobId, "MiniMax 语音任务不存在") : PollResult.succeeded(jobId, keys);
     }
 
     @Override
@@ -95,7 +114,7 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
 
     public void remember(String jobId, GenerateRequest request) {
         if (StringUtils.hasText(jobId) && request != null) {
-            completed.putIfAbsent(jobId, outputKey(request, formatOf(request)));
+            completed.putIfAbsent(jobId, outputKeys(request, formatOf(request)));
         }
     }
 
@@ -149,6 +168,9 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     }
 
     private void assertSupported(GenerateRequest request) {
+        if ("music".equals(request.getAudioMode())) {
+            throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax 语音协议不支持 AI 音乐模式");
+        }
         if (!ModelCategory.AUDIO.equalsIgnoreCase(request.getCategory())
                 || !GenerateMode.T2A.equalsIgnoreCase(GenerateMode.canonical(request.getMode()))) {
             throw new BizException(ErrorCode.BAD_REQUEST, "MiniMax 语音协议仅支持文本生成语音（t2a）");
@@ -158,10 +180,25 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
         }
     }
 
+    /** MiniMax 只认英文情感枚举，历史数据里的中文档位按映射兜底，未知值直接不下发。 */
+    private static String normalizeEmotion(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return null;
+        }
+        String value = raw.trim().toLowerCase();
+        String mapped = EMOTION_ALIASES.get(value);
+        if (mapped != null) {
+            return mapped.isEmpty() ? null : mapped;
+        }
+        return EMOTION_ENUMS.contains(value) ? value : null;
+    }
+
     private String toJson(GenerateRequest request, String format) {
         Map<String, Object> voice = new LinkedHashMap<>();
         voice.put("voice_id", firstNonBlank(request.getVoiceId(), configString(request, "defaultVoice"), DEFAULT_VOICE));
         voice.put("speed", request.getSpeed() == null ? 1D : request.getSpeed());
+        String emotion = normalizeEmotion(request.getEmotion());
+        if (emotion != null) voice.put("emotion", emotion);
         voice.put("vol", configDouble(request, "volume", 1D));
         voice.put("pitch", configInt(request, "pitch", 0));
 
@@ -240,6 +277,12 @@ public class MiniMaxSpeechProvider implements GenerateProvider {
     static String outputKey(GenerateRequest request, String format) {
         return "users/" + (request.getUserId() == null ? 0 : request.getUserId()) + "/outputs/"
                 + (request.getTaskId() == null ? 0 : request.getTaskId()) + "/1." + format;
+    }
+
+    private static java.util.List<String> outputKeys(GenerateRequest request, String format) {
+        String first = outputKey(request, format);
+        String prefix = first.substring(0, first.lastIndexOf('/') + 1);
+        return java.util.stream.IntStream.rangeClosed(1, request.resolvedCopies()).mapToObj(index -> prefix + index + "." + format).toList();
     }
 
     static String contentType(String format) {
