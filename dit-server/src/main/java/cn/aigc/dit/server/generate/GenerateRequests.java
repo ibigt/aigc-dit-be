@@ -66,6 +66,11 @@ public final class GenerateRequests {
         return SOURCE_DRAMA.equals(sourceOf(params));
     }
 
+    /** 高级工作台（工作流）任务带 workflowRunId，落库时标记 projectKind=workflow。 */
+    public static boolean isWorkflowSource(Map<String, Object> params) {
+        return params != null && params.get("workflowRunId") != null;
+    }
+
     /** 分镜出片任务（视频成片；开场静帧另见 {@link #isOpeningStill}）。 */
     public static boolean isDramaShot(Map<String, Object> params) {
         return isDramaSource(params) && params != null && params.get("shotId") != null && !isOpeningStill(params);
@@ -101,6 +106,10 @@ public final class GenerateRequests {
 
     public static Long sessionIdFromParams(Map<String, Object> params) {
         return longVal(params, "sessionId");
+    }
+
+    public static Long workflowRunIdFromParams(Map<String, Object> params) {
+        return longVal(params, "workflowRunId");
     }
 
     public static Long shotIdFromParams(Map<String, Object> params) {

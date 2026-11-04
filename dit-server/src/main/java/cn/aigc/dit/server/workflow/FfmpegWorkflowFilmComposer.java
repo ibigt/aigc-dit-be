@@ -48,7 +48,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
 
         @Override
         public boolean hasAudio(Path input) throws Exception {
-            Process process = new ProcessBuilder("ffprobe", "-v", "error", "-select_streams", "a",
+            Process process = new ProcessBuilder(FfmpegSupport.ffprobeBinary(), "-v", "error", "-select_streams", "a",
                     "-show_entries", "stream=index", "-of", "csv=p=0", input.toString())
                     .redirectErrorStream(true)
                     .start();
@@ -215,7 +215,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             }
             Path probeOutput = FfmpegSupport.tempFile("dit-workflow-probe-", ".txt");
             try {
-                Process process = new ProcessBuilder("ffprobe", "-v", "error", "-count_frames",
+                Process process = new ProcessBuilder(FfmpegSupport.ffprobeBinary(), "-v", "error", "-count_frames",
                         "-select_streams", "v:0", "-show_entries",
                         "stream=nb_read_frames:format=format_name:format_tags=major_brand",
                         "-of", "default=noprint_wrappers=1", film.toString())

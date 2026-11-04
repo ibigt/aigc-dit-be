@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -162,6 +163,108 @@ public class WorkflowService {
         workflow.setSourcePath(nodeCount == 0 ? trimToNull(req.getSourcePath()) : null);
         workflow.setNodeCount(nodeCount);
         workflow.setGraph(graph);
+        workflow.setTopology(buildTopology(graph));
+    }
+
+    /** Generate compact thumbnail coordinates from the persisted canvas so every workflow card can draw its real topology. */
+    private Map<String, Object> buildTopology(Map<String, Object> graph) {
+        List<Map<String, Object>> graphNodes = mapValues(mapValue(graph).get("nodes"));
+        List<Map<String, Object>> graphEdges = mapValues(mapValue(graph).get("edges"));
+        if (graphNodes.isEmpty()) {
+            return Map.of("nodes", List.of(), "edges", List.of());
+        }
+
+        List<Map<String, Object>> topologyNodes = new ArrayList<>();
+        Map<String, Integer> nodeIndexes = new LinkedHashMap<>();
+        double minX = Double.POSITIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY;
+        double maxX = Double.NEGATIVE_INFINITY;
+        double maxY = Double.NEGATIVE_INFINITY;
+        List<double[]> geometry = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        List<String> tones = new ArrayList<>();
+
+        for (Map<String, Object> node : graphNodes) {
+            Map<String, Object> position = mapValue(node.get("position"));
+            Map<String, Object> style = mapValue(node.get("style"));
+            Map<String, Object> data = mapValue(node.get("data"));
+            double x = numberValue(position.get("x"));
+            double y = numberValue(position.get("y"));
+            double width = numberValue(style.get("width"), 270);
+            geometry.add(new double[]{x, y, width});
+            labels.add(textValue(data.get("title"), "节点 " + (labels.size() + 1)));
+            tones.add(textValue(data.get("tone"), "blue"));
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x + width);
+            maxY = Math.max(maxY, y);
+        }
+
+        double widthSpan = Math.max(1, maxX - minX);
+        double heightSpan = Math.max(1, maxY - minY);
+        double scale = Math.min(1, Math.min(416 / widthSpan, 200 / heightSpan));
+        for (int index = 0; index < graphNodes.size(); index += 1) {
+            double[] bounds = geometry.get(index);
+            Map<String, Object> thumbnailNode = new LinkedHashMap<>();
+            thumbnailNode.put("x", rounded(12 + (bounds[0] - minX) * scale));
+            thumbnailNode.put("y", rounded(10 + (bounds[1] - minY) * scale));
+            thumbnailNode.put("w", rounded(Math.max(44, bounds[2] * scale)));
+            thumbnailNode.put("label", labels.get(index));
+            thumbnailNode.put("tone", tones.get(index));
+            topologyNodes.add(thumbnailNode);
+            nodeIndexes.put(textValue(graphNodes.get(index).get("id"), String.valueOf(index)), index);
+        }
+
+        List<List<Integer>> topologyEdges = new ArrayList<>();
+        for (Map<String, Object> edge : graphEdges) {
+            Integer source = nodeIndexes.get(textValue(edge.get("source"), null));
+            Integer target = nodeIndexes.get(textValue(edge.get("target"), null));
+            if (source != null && target != null) {
+                topologyEdges.add(List.of(source, target));
+            }
+        }
+
+        Map<String, Object> topology = new LinkedHashMap<>();
+        topology.put("nodes", topologyNodes);
+        topology.put("edges", topologyEdges);
+        return topology;
+    }
+
+    private static Map<String, Object> mapValue(Object value) {
+        if (!(value instanceof Map<?, ?> source)) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
+    }
+
+    private static List<Map<String, Object>> mapValues(Object value) {
+        if (!(value instanceof List<?> source)) return List.of();
+        return source.stream().map(WorkflowService::mapValue).toList();
+    }
+
+    private static double numberValue(Object value) {
+        return numberValue(value, 0);
+    }
+
+    private static double numberValue(Object value, double fallback) {
+        if (value instanceof Number number) return number.doubleValue();
+        if (value != null) {
+            try {
+                return Double.parseDouble(String.valueOf(value));
+            } catch (NumberFormatException ignored) {
+                return fallback;
+            }
+        }
+        return fallback;
+    }
+
+    private static String textValue(Object value, String fallback) {
+        String text = value == null ? "" : String.valueOf(value).trim();
+        return text.isEmpty() ? fallback : text;
+    }
+
+    private static double rounded(double value) {
+        return Math.round(value * 10) / 10.0;
     }
 
     private String modelLabel(Long modelId) {
@@ -199,7 +302,9 @@ public class WorkflowService {
         resp.setCoverPath(workflow.getCoverPath());
         resp.setVersion(workflow.getVersion());
         resp.setModelAdapter(workflow.getModelAdapter());
-        resp.setTopology(workflow.getTopology());
+        resp.setTopology(workflow.getTopology() != null
+                ? workflow.getTopology()
+                : buildTopology(workflow.getGraph()));
         resp.setDefaultParams(workflow.getDefaultParams());
         if (includeGraph) {
             resp.setGraph(workflow.getGraph());

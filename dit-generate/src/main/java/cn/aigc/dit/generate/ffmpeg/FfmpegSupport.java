@@ -4,6 +4,7 @@ import cn.aigc.dit.common.exception.BizException;
 import cn.aigc.dit.common.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -15,18 +16,58 @@ import java.util.regex.Pattern;
 
 /**
  * 调用本机 / 镜像内 ffmpeg。不可用时调用方自行降级。
+ *
+ * <p>可执行文件解析顺序：系统属性 {@code dit.ffmpeg.path}（bin 目录或 ffmpeg.exe 全路径）
+ * &gt; 环境变量 {@code DIT_FFMPEG_PATH} &gt; PATH 上的 ffmpeg/ffprobe。
+ * 生产镜像内 ffmpeg 在 PATH 上，无需配置；开发机不在 PATH 时通过启动参数
+ * {@code -Ddit.ffmpeg.path=C:/tools/ffmpeg/bin} 指定。
  */
 @Slf4j
 public final class FfmpegSupport {
 
     private static final Pattern DURATION = Pattern.compile("Duration: (\\d+):(\\d+):(\\d+(?:\\.\\d+)?)");
 
+    /** 配置的 ffmpeg 目录/全路径；null 表示走 PATH。启动后不变，仅字符串引用读。 */
+    private static final String CONFIGURED_PATH = resolveConfiguredPath();
+
     private FfmpegSupport() {
+    }
+
+    private static String resolveConfiguredPath() {
+        String value = System.getProperty("dit.ffmpeg.path");
+        if (value == null || value.isBlank()) {
+            value = System.getenv("DIT_FFMPEG_PATH");
+        }
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** ffmpeg 可执行：配置了路径时解析为绝对路径，否则用 PATH 上的 ffmpeg。 */
+    public static String ffmpegBinary() {
+        return resolveBinary("ffmpeg");
+    }
+
+    /** ffprobe 可执行：同 {@link #ffmpegBinary()}，目录型配置自动换名。 */
+    public static String ffprobeBinary() {
+        return resolveBinary("ffprobe");
+    }
+
+    private static String resolveBinary(String name) {
+        String base = CONFIGURED_PATH;
+        if (base == null) {
+            return name;
+        }
+        String lower = base.toLowerCase();
+        // 配的是 ffmpeg.exe 全路径：ffmpeg 直接用；ffprobe 同目录换名（ffmpeg 目录约定两个 exe 并排）
+        if (lower.endsWith(".exe") || lower.endsWith("ffmpeg")) {
+            return "ffprobe".equals(name) ? base.replaceAll("(?i)ffmpeg", "ffprobe") : base;
+        }
+        // 配的是 bin 目录
+        return base.endsWith(File.separator) ? base + name : base + File.separator + name;
     }
 
     public static boolean available() {
         try {
-            Process process = new ProcessBuilder("ffmpeg", "-version")
+            Process process = new ProcessBuilder(ffmpegBinary(), "-version")
                     .redirectErrorStream(true)
                     .start();
             boolean finished = process.waitFor(8, TimeUnit.SECONDS);
@@ -48,7 +89,7 @@ public final class FfmpegSupport {
             return probed;
         }
         try {
-            Process process = new ProcessBuilder("ffmpeg", "-hide_banner", "-i", input.toString())
+            Process process = new ProcessBuilder(ffmpegBinary(), "-hide_banner", "-i", input.toString())
                     .redirectErrorStream(true)
                     .start();
             String text = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -77,7 +118,7 @@ public final class FfmpegSupport {
     private static Double probeDuration(Path input) {
         try {
             Process process = new ProcessBuilder(
-                    "ffprobe", "-v", "error",
+                    ffprobeBinary(), "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1",
                     input.toString())
@@ -101,7 +142,7 @@ public final class FfmpegSupport {
 
     public static void run(List<String> args, long timeoutSeconds) {
         List<String> command = new ArrayList<>();
-        command.add("ffmpeg");
+        command.add(ffmpegBinary());
         command.add("-y");
         command.addAll(args);
         long timeout = timeoutSeconds < 1 ? 120 : timeoutSeconds;

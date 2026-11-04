@@ -76,9 +76,10 @@ public class CreationController {
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String project,
+            @RequestParam(required = false) String exclude,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime to) {
-        return CommonResult.success(creationService.listMine(category, q, project, from, to));
+        return CommonResult.success(creationService.listMine(category, q, project, exclude, from, to));
     }
 
     @Operation(summary = "作品详情")
