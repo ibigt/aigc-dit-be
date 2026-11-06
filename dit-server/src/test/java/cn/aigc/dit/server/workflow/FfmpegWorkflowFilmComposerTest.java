@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static cn.aigc.dit.server.workflow.WorkflowFilmComposer.Clip;
@@ -195,6 +196,52 @@ class FfmpegWorkflowFilmComposerTest {
         assertTrue(command.contains("volume=0.5"));
         assertTrue(command.contains("volume=0"));
         assertTrue(command.contains("concat=n=2:v=1:a=1"));
+        // 缺省沿用历史 1280x720
+        assertTrue(command.contains("scale=1280:720:force_original_aspect_ratio=decrease"));
+        assertTrue(command.contains("pad=1280:720:(ow-iw)/2:(oh-ih)/2"));
+    }
+
+    @Test
+    void appliesWhitelistedTargetSizeInScaleAndPad() {
+        for (var entry : Map.of(
+                new WorkflowFilmComposer.FilmSize(1920, 1080), "scale=1920:1080:force_original_aspect_ratio=decrease",
+                new WorkflowFilmComposer.FilmSize(1080, 1920), "scale=1080:1920:force_original_aspect_ratio=decrease",
+                new WorkflowFilmComposer.FilmSize(1920, 816), "pad=1920:816:(ow-iw)/2:(oh-ih)/2",
+                new WorkflowFilmComposer.FilmSize(1280, 544), "pad=1280:544:(ow-iw)/2:(oh-ih)/2").entrySet()) {
+            String command = String.join(" ", FfmpegWorkflowFilmComposer.args(
+                    List.of(Path.of("a.mp4")), List.of(new Clip("a.mp4", 0, 1, false, 1)),
+                    List.of(true), entry.getKey(), Path.of("out.mp4")));
+            assertTrue(command.contains(entry.getValue()), entry.getKey() + " missing in " + command);
+        }
+    }
+
+    @Test
+    void rejectsNonWhitelistedTargetSizeBeforeBuildingArgs() {
+        assertThrows(IllegalArgumentException.class, () -> FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("a.mp4")), List.of(new Clip("a.mp4", 0, 1, false, 1)),
+                List.of(true), new WorkflowFilmComposer.FilmSize(1234, 567), Path.of("out.mp4")));
+        assertThrows(IllegalArgumentException.class,
+                () -> WorkflowFilmComposer.FilmSize.of(1234, 567));
+        // 画幅/清晰度解析：白名单命中、未知画幅返回 null（走默认）
+        assertEquals(new WorkflowFilmComposer.FilmSize(1920, 816),
+                WorkflowFilmComposer.FilmSize.of("2.35:1", "1080p"));
+        assertEquals(new WorkflowFilmComposer.FilmSize(1280, 720),
+                WorkflowFilmComposer.FilmSize.of("16:9", "720"));
+        assertNull(WorkflowFilmComposer.FilmSize.of("21:9", "1080p"));
+        assertNull(WorkflowFilmComposer.FilmSize.of(null, "1080p"));
+    }
+
+    @Test
+    void filmOutputCarriesTargetDimensions() {
+        WorkflowFilmComposer.FilmOutput output = new WorkflowFilmComposer.FilmOutput(
+                "film.mp4", "poster.webp", 3.5, 1920, 816);
+        assertEquals(1920, output.width());
+        assertEquals(816, output.height());
+        // 三参构造（历史默认）不带尺寸
+        WorkflowFilmComposer.FilmOutput legacy = new WorkflowFilmComposer.FilmOutput(
+                "film.mp4", "poster.webp", 3.5);
+        assertNull(legacy.width());
+        assertNull(legacy.height());
     }
 
     @Test

@@ -156,8 +156,11 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         this.runner = runner;
     }
 
+    private static final int DEFAULT_WIDTH = 1280;
+    private static final int DEFAULT_HEIGHT = 720;
+
     @Override
-    public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips) {
+    public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
         validate(userId, runId, nodeId, clips);
         String key = filmKey(userId, runId, nodeId);
         if (!exists(key)) {
@@ -199,7 +202,9 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             }
         }
         double duration = clips.stream().mapToDouble(clip -> clip.trimEnd() - clip.trimStart()).sum();
-        return new FilmOutput(key, posterKey, duration);
+        int width = target == null ? DEFAULT_WIDTH : target.width();
+        int height = target == null ? DEFAULT_HEIGHT : target.height();
+        return new FilmOutput(key, posterKey, duration, width, height);
     }
 
     private static boolean playableMp4(Path film) {
@@ -263,7 +268,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
     }
 
     @Override
-    public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips) {
+    public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
         validate(userId, runId, nodeId, clips);
         if (!runner.available()) {
             throw new BizException(ErrorCode.INTERNAL, "服务器未安装 ffmpeg，无法生成工作流成片");
@@ -297,7 +302,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             long timeout = generateProperties.getFfmpeg() == null ? 900
                     : generateProperties.getFfmpeg().getConcatEncodeTimeoutSeconds();
             try {
-                runner.run(args(inputs, clips, hasAudio, output), timeout);
+                runner.run(args(inputs, clips, hasAudio, target, output), timeout);
             } catch (BizException e) {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
                     throw new BizException(ErrorCode.INTERNAL, "工作流成片编码超时");
@@ -324,7 +329,9 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 log.warn("workflow film poster extraction failed, key={}", key, e);
             }
             double duration = clips.stream().mapToDouble(clip -> clip.trimEnd() - clip.trimStart()).sum();
-            return new FilmOutput(key, posterKey, duration);
+            int width = target == null ? DEFAULT_WIDTH : target.width();
+            int height = target == null ? DEFAULT_HEIGHT : target.height();
+            return new FilmOutput(key, posterKey, duration, width, height);
         } catch (BizException e) {
             throw e;
         } catch (Exception e) {
@@ -363,13 +370,22 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
     }
 
     static List<String> args(List<Path> inputs, List<Clip> clips, Path output) {
-        return args(inputs, clips, java.util.Collections.nCopies(clips.size(), true), output);
+        return args(inputs, clips, java.util.Collections.nCopies(clips.size(), true), null, output);
     }
 
     static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, Path output) {
+        return args(inputs, clips, hasAudio, null, output);
+    }
+
+    static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target, Path output) {
         if (inputs.size() != clips.size() || hasAudio.size() != clips.size()) {
             throw new IllegalArgumentException("clip inputs mismatch");
         }
+        if (target != null && !SUPPORTED_SIZES.containsValue(target)) {
+            throw new IllegalArgumentException("不支持的成片尺寸：" + target.text());
+        }
+        int width = target == null ? DEFAULT_WIDTH : target.width();
+        int height = target == null ? DEFAULT_HEIGHT : target.height();
         List<String> args = new ArrayList<>(List.of("-hide_banner"));
         for (Path input : inputs) {
             args.add("-i");
@@ -392,8 +408,10 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             double duration = clip.trimEnd() - clip.trimStart();
             filter.append("[").append(i).append(":v]trim=start=").append(clip.trimStart())
                     .append(":end=").append(clip.trimEnd())
-                    .append(",setpts=PTS-STARTPTS,fps=30,scale=1280:720:force_original_aspect_ratio=decrease,")
-                    .append("pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v").append(i).append("]; ");
+                    .append(",setpts=PTS-STARTPTS,fps=30,scale=").append(width).append(":").append(height)
+                    .append(":force_original_aspect_ratio=decrease,")
+                    .append("pad=").append(width).append(":").append(height)
+                    .append(":(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[v").append(i).append("]; ");
             filter.append("[").append(audioIndexes.get(i)).append(":a]");
             if (hasAudio.get(i)) {
                 filter.append("atrim=start=").append(clip.trimStart()).append(":end=").append(clip.trimEnd());

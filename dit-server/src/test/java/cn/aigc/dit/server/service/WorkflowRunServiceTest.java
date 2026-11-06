@@ -46,6 +46,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -267,7 +269,7 @@ class WorkflowRunServiceTest {
     }
 
     @Test
-    void textOnlyRunSucceedsWithoutModelOrGenerationTask() {
+    void textOnlyRunIsRejectedWithoutRunnableGenerateNode() {
         WorkflowRunReq request = new WorkflowRunReq();
         request.setGraph(Map.of(
                 "nodes", List.of(Map.of("id", "brief", "data", Map.of(
@@ -275,26 +277,11 @@ class WorkflowRunServiceTest {
                         "fields", List.of(Map.of("label", "内容", "value", "Rainy night"))))),
                 "edges", List.of()));
         when(aiModelMapper.selectList(any())).thenReturn(List.of());
-        final WorkflowRun[] stored = new WorkflowRun[1];
-        when(workflowRunMapper.selectById(1L)).thenAnswer(invocation -> stored[0]);
-        when(workflowRunMapper.updateById(any(WorkflowRun.class))).thenAnswer(invocation -> {
-            stored[0] = invocation.getArgument(0);
-            return 1;
-        });
-        when(workflowRunMapper.insert(any(WorkflowRun.class))).thenAnswer(invocation -> {
-            stored[0] = invocation.getArgument(0);
-            stored[0].setId(1L);
-            return 1;
-        });
 
-        WorkflowRunResp response = service.start(request);
-
-        assertEquals(TaskStatus.SUCCEEDED, response.getStatus());
-        assertEquals("TEXT", response.getSteps().get(0).getStepType());
-        assertEquals("text", response.getSteps().get(0).getOutputs().get(0).getType());
-        assertEquals("Rainy night", response.getSteps().get(0).getOutputs().get(0).getValue());
-        assertNull(response.getSteps().get(0).getTaskId());
-        assertEquals(0L, response.getSteps().get(0).getCreditCost());
+        // 纯文本画布没有任何 GENERATE/EDIT 步骤：不再创建「0 分母、瞬间成功」的空运行，直接拦截
+        BizException error = assertThrows(BizException.class, () -> service.start(request));
+        assertTrue(error.getMessage().contains("本次运行没有可执行的生成节点"), error.getMessage());
+        verify(workflowRunMapper, never()).insert(any(WorkflowRun.class));
         verify(generateService, never()).submit(any(), any());
     }
 
@@ -691,9 +678,9 @@ class WorkflowRunServiceTest {
                 clip("video-a", 1, 2, 1.0, 4.0, false, 0.5)));
         WorkflowRun run = run(first, second, edit);
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
-        when(filmComposer.compose(7L, 1L, "edit", List.of(
+        when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
                 new WorkflowFilmComposer.Clip("users/7/b-0.mp4", 0, 6, true, 1),
-                new WorkflowFilmComposer.Clip("users/7/a-1.mp4", 1, 4, false, 0.5))))
+                new WorkflowFilmComposer.Clip("users/7/a-1.mp4", 1, 4, false, 0.5))), isNull()))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", "users/7/poster.jpg", 9));
 
         WorkflowRunResp response = service.getMine(1L);
@@ -749,10 +736,10 @@ class WorkflowRunServiceTest {
                 clip("video-b", 0, 20, 0.0, 5.0, false, 1.0),
                 clip("video-c", 0, 2, 0.0, 5.0, false, 1.0)));
         when(workflowRunMapper.selectById(1L)).thenReturn(run(first, second, added, edit));
-        when(filmComposer.compose(7L, 1L, "edit", List.of(
+        when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
                 new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1),
                 new WorkflowFilmComposer.Clip("users/7/b.mp4", 0, 5, false, 1),
-                new WorkflowFilmComposer.Clip("users/7/c.mp4", 0, 5, false, 1))))
+                new WorkflowFilmComposer.Clip("users/7/c.mp4", 0, 5, false, 1))), isNull()))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", null, 15));
 
         WorkflowRunResp response = service.getMine(1L);
@@ -821,18 +808,20 @@ class WorkflowRunServiceTest {
         }
 
         @Override
-        public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips) {
+        public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
             composeCalls++;
             String key = "users/7/workflows/1/edit/film.mp4";
             String poster = "users/7/workflows/1/edit/film-poster.webp";
             storage.put(key, playableMp4, "video/mp4");
             storage.put(poster, "poster".getBytes(), "image/webp");
-            return new FilmOutput(key, poster, 0.4);
+            return target == null
+                    ? new FilmOutput(key, poster, 0.4)
+                    : new FilmOutput(key, poster, 0.4, target.width(), target.height());
         }
 
         @Override
-        public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips) {
-            return recovery.findExisting(userId, runId, nodeId, clips);
+        public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
+            return recovery.findExisting(userId, runId, nodeId, clips, target);
         }
     }
 
@@ -845,8 +834,8 @@ class WorkflowRunServiceTest {
         edit.put("clips", List.of(clip("video-a", 0, 0, 0.0, 5.0, false, 1.0)));
         WorkflowRun run = run(video, edit);
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
-        when(filmComposer.compose(7L, 1L, "edit", List.of(
-                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))))
+        when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
+                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))), isNull()))
                 .thenThrow(new IllegalStateException("编码失败"));
 
         WorkflowRunResp response = service.getMine(1L);
