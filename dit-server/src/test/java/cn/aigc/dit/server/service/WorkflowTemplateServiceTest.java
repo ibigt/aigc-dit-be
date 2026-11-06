@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -138,12 +139,18 @@ class WorkflowTemplateServiceTest {
 
     @Test
     void listTemplatesAppliesSourceFilter() {
+        // 官方内置模板已下线：source=official 直接返回空列表，不再触发数据库查询
+        assertTrue(service.listTemplates(null, null, null, "official").isEmpty());
+        verify(workflowMapper, never()).selectList(any());
+
+        // 其余来源（custom / 全部）落到「我的模板」查询；
+        // 先取 targetSql 再读参数（MP 3.5.7 的查询参数在生成 SQL 时才惰性写入 paramNameValuePairs）
         when(workflowMapper.selectList(any())).thenReturn(List.of());
-
-        service.listTemplates(null, null, null, "official");
-
+        service.listTemplates(null, null, null, "custom");
         LambdaQueryWrapper<Workflow> wrapper = capturedWrapper();
-        assertTrue(wrapper.getTargetSql().contains("builtin"), "官方来源筛选必须落到 builtin 条件：" + wrapper.getTargetSql());
+        String sql = wrapper.getTargetSql();
+        assertTrue(sql.contains("type ="), "自定义模板必须限定 type：" + sql);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("template"), "type 参数必须为 template：" + sql + " " + wrapper.getParamNameValuePairs());
     }
 
     @SuppressWarnings("unchecked")
@@ -166,7 +173,9 @@ class WorkflowTemplateServiceTest {
 
     @Test
     void getMineIncludesGraphForTemplateDetail() {
+        // builtin 不再享受可读豁免：模板详情也必须落在当前用户名下才可读
         Workflow item = template("Minimax-H3 图生视频", "minimax-h3-i2v", "video", true, "image-to-video");
+        item.setUserId(7L);
         item.setGraph(Map.of("nodes", List.of(), "edges", List.of()));
         when(workflowMapper.selectById(any())).thenReturn(item);
 

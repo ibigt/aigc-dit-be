@@ -33,7 +33,7 @@ public class WorkflowController {
     private final WorkflowService workflowService;
     private final WorkflowRunService workflowRunService;
 
-    @Operation(summary = "我的工作流与官方示例")
+    @Operation(summary = "我的工作流列表")
     @GetMapping
     public CommonResult<List<WorkflowResp>> list(
             @RequestParam(required = false) String type,
@@ -41,7 +41,7 @@ public class WorkflowController {
         return CommonResult.success(workflowService.listMine(type, q));
     }
 
-    @Operation(summary = "模板库列表，支持分类、标签、来源与关键字筛选")
+    @Operation(summary = "我的模板列表，支持分类、标签与关键字筛选")
     @GetMapping("/templates")
     public CommonResult<List<WorkflowResp>> templates(
             @RequestParam(required = false) String category,
