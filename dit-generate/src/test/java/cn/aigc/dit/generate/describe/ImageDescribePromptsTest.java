@@ -51,14 +51,36 @@ class ImageDescribePromptsTest {
         assertEquals("二十五岁短发。圆脸，白衬衫，湿身", result.appearance());
         assertFalse(result.appearance().contains("原创CGI"));
         assertTrue(result.assembledPrompt().contains("原创CGI数字人"));
-        assertTrue(result.realisticPrompt().contains("真人实拍写真"));
-        assertTrue(result.realisticPrompt().contains("棚拍柔光"));
-        assertTrue(result.realisticPrompt().contains("不要CG数字人"));
+        assertEquals(
+                "二十五岁短发。圆脸，白衬衫，湿身。真人实拍，不要3D渲染，不要CG数字人，不要塑料皮肤。",
+                result.realisticPrompt());
+        assertTrue(result.realisticPrompt().indexOf("圆脸") < result.realisticPrompt().indexOf("真人实拍"));
+        assertTrue(result.realisticPrompt().endsWith("不要塑料皮肤。"));
+        assertFalse(result.realisticPrompt().contains("棚拍柔光"));
+        assertFalse(result.realisticPrompt().contains("可见毛孔"));
         assertFalse(result.realisticPrompt().contains("原创CGI"));
         assertFalse(result.realisticPrompt().contains("正脸近景"));
-        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("真人实拍写真"));
-        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("灰底棚拍光影"));
+        assertEquals(
+                "圆脸。真人实拍，不要3D渲染，不要CG数字人，不要塑料皮肤。",
+                new ImageDescribeResult("", "圆脸", "raw").realisticPrompt());
+        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("黑底就写黑底"));
+        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("风格约束写在提示词最后"));
+        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains(
+                "肤色按原图写（冷白、暖白、小麦、浅黄，只写最接近的一种）"));
+        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("五官与脸型细节 → 肤色 → 发型鬓角灰白"));
+        assertTrue(ImageDescribePrompts.CHARACTER_REALISM.contains("年龄气质 + 最可识别的外形锚点（发型/五官/标志配饰）"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("灰底棚拍光影"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("自然肤质与可见毛孔"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("真人实拍写真"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("毛孔"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("法令纹"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("和常见脸的差别"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("杏眼"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("五官只按画面左侧近景写"));
+        assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("网红脸"));
         assertFalse(ImageDescribePrompts.CHARACTER_REALISM.contains("原创 CGI 数字人"));
         assertTrue(ImageDescribePrompts.CHARACTER_FULL.contains("CGI 数字人"));
+        assertTrue(ImageDescribePrompts.CHARACTER_FULL.contains("灰底棚拍光影"));
+        assertFalse(ImageDescribePrompts.CHARACTER_FULL.contains("肤色按原图写"));
     }
 }

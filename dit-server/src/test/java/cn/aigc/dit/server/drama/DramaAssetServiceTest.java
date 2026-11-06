@@ -609,30 +609,6 @@ class DramaAssetServiceTest {
     }
 
     @Test
-    void listExposesFreshSeedreamBindBesideNonSeedreamImage() {
-        DramaAsset asset = ownedAsset();
-        String key = "users/7/outputs/16/1.png";
-        asset.setImageStorageKey(key);
-        asset.setSelectedGenerationId(11L);
-        when(assetMapper.selectList(any())).thenReturn(List.of(asset));
-        when(episodeMapper.selectById(31L)).thenReturn(ownedEpisode());
-        when(seriesMapper.selectById(21L)).thenReturn(ownedSeries());
-        String bindKey = cn.aigc.dit.generate.seedream.SeedreamCharacterBinds.bindKey(key);
-        String sheetKey = cn.aigc.dit.generate.seedream.SeedreamCharacterBinds.imageKey(key);
-        when(objectStorage.exists(key + ".origin.json")).thenReturn(false);
-        when(objectStorage.exists(bindKey)).thenReturn(true);
-        when(objectStorage.exists(sheetKey)).thenReturn(true);
-        when(objectStorage.getBytes(bindKey)).thenReturn(
-                ("{\"imageKey\":\"" + sheetKey + "\",\"boundAt\":\""
-                        + java.time.Instant.now().toString() + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8));
-
-        List<DramaAssetResp> list = service.listByEpisode(31L);
-
-        assertEquals(sheetKey, list.get(0).getSeedreamBindKey());
-        assertEquals(key, list.get(0).getImageStorageKey());
-    }
-
-    @Test
     void listByEpisodeClearsOrphanedPreviewWithoutSelection() {
         DramaAsset asset = ownedAsset();
         asset.setImageStorageKey("users/7/gen/stale.png");

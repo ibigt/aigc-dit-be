@@ -39,8 +39,6 @@ public class DramaAssetResp {
     private String imageStorageKey;
     private Long imageAssetId;
     private String imageUrl;
-    @Schema(description = "出片前图生文生图写在原图旁的 Seedream 绑定图；没有绑定则为空。只用于查看，不改变当前选用图。")
-    private String seedreamBindKey;
     @Schema(description = "当前选用的生成记录 id")
     private Long selectedGenerationId;
     private Long genTaskId;

@@ -17,20 +17,26 @@ public record ImageDescribeResult(String identity, String t2iPrompt, String raw)
         return id + "。原创CGI数字人，电影级仿真人。" + body;
     }
 
-    /** 与 {@link #assembledPrompt()} 同一拼接位置，尾句改成写实真人实拍。 */
+    /** 写在正文后面，避免棚拍句盖住前面的外形。 */
     public static final String REALISM_CLAUSE =
-            "真人实拍写真，自然肤质与可见毛孔，真实发丝与布料质感，棚拍柔光，不要3D渲染，不要CG数字人，不要塑料皮肤。";
+            "真人实拍，不要3D渲染，不要CG数字人，不要塑料皮肤。";
 
     public String realisticPrompt() {
         String id = identity == null ? "" : identity.trim();
         String body = stripCgi(t2iPrompt == null ? "" : t2iPrompt.trim());
-        if (id.isEmpty()) {
-            return body;
+        String core;
+        if (id.isEmpty() || body.startsWith(id)) {
+            core = body;
+        } else {
+            core = id + "。" + body;
         }
-        if (body.startsWith(id)) {
-            return body;
+        if (core.isEmpty()) {
+            return "";
         }
-        return id + "。" + REALISM_CLAUSE + body;
+        if (core.endsWith("。")) {
+            return core + REALISM_CLAUSE;
+        }
+        return core + "。" + REALISM_CLAUSE;
     }
 
     private static String stripCgi(String text) {
