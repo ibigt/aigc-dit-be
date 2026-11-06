@@ -16,6 +16,7 @@ import cn.aigc.dit.server.credit.CreditCalculator;
 import cn.aigc.dit.server.credit.PricingPolicy;
 import cn.aigc.dit.server.credit.SupplierBillingRules;
 import cn.aigc.dit.server.drama.entity.DramaSeries;
+import cn.aigc.dit.server.drama.DramaDurations;
 import cn.aigc.dit.server.drama.mapper.DramaSeriesMapper;
 import cn.aigc.dit.server.drama.text.OpenAiCompatChatClient;
 import cn.aigc.dit.server.drama.text.TextAdapterCatalog;
@@ -368,7 +369,26 @@ public class AdminModelService extends ServiceImpl<AiModelMapper, AiModel> {
         resp.setDescription(model.getDescription());
         resp.setBadge(model.getBadge());
         resp.setLogo(model.getLogo());
+        applyVideoCapabilities(model, resp);
         return resp;
+    }
+
+    /**
+     * 视频模型的时长可选档位（需求 A4 统一口径）。
+     * 后端是唯一权威来源：合同 5–15 逐秒，再与当前适配器真实区间求交。
+     * 前端（快速创作 / 高级工作台 / 短剧分镜）统一消费这份数据，
+     * 不再各自按品牌名硬编码——此前三处口径漂移（工作台给出 4–12、分镜给出 5–15）。
+     *
+     * 清晰度档位暂不走这里：前后端对 MiniMax 官方（768P/2K）与 Wan（4K）的口径尚未对齐，
+     * 贸然下发会把工作台已支持的档位收窄，等口径统一后再并入。
+     */
+    private static void applyVideoCapabilities(AiModel model, ModelPublicResp resp) {
+        if (!ModelCategory.VIDEO.equalsIgnoreCase(model.getCategory())) {
+            return;
+        }
+        String adapter = AdapterCatalog.resolveKeyForGenerate(
+                model.getAdapterKey(), model.getProvider(), model.getCategory(), model.getModelKey());
+        resp.setDurations(DramaDurations.supported(adapter, model.getAdapterKey(), model.getModelKey()));
     }
 
     private static void applyAudioCapabilities(

@@ -79,14 +79,43 @@ public class WorkflowRunService {
         if (req.getWorkflowId() != null) {
             workflowService.requireReadable(req.getWorkflowId());
         }
-        List<Step> plan = WorkflowGraphPlanner.plan(req.getGraph(), req.getNodeId());
+        // 宽松规划（需求 4.6.4）：整图运行时单个节点不可运行（缺提示词/缺模型/剪辑缺上游等）
+        // 标记为跳过、下游连带跳过，不再整次终止；单节点运行仍按 4.6.4.1 直接抛错拦截。
+        List<Step> plan = WorkflowGraphPlanner.planForRun(req.getGraph(), req.getNodeId());
+        boolean singleNode = req.getNodeId() != null && !req.getNodeId().isBlank();
         List<AiModel> models = aiModelMapper.selectList(new LambdaQueryWrapper<AiModel>().eq(AiModel::getEnabled, true));
         List<Map<String, Object>> steps = new ArrayList<>();
         for (Step step : plan) {
             if ("ASSET".equals(step.stepType()) && step.refs().stream().anyMatch(ref -> !ownedKey(ref.storageKey(), UserContext.requireUserId()))) {
                 throw new BizException("节点「" + step.nodeId() + "」参考音频不属于当前用户");
             }
-            steps.add(toStep(step, resolveModel(step, req.getModelId(), models)));
+            // 模型解析失败（没有可用的分类模型）：单节点运行硬拦；整图运行转为跳过，不牵连其余节点
+            String skipReason = step.skipReason();
+            Long modelId = null;
+            if (skipReason == null) {
+                try {
+                    modelId = resolveModel(step, req.getModelId(), models);
+                } catch (BizException noModel) {
+                    if (singleNode) throw noModel;
+                    skipReason = noModel.getMessage();
+                }
+            }
+            Map<String, Object> map = toStep(step, modelId);
+            if (skipReason != null) {
+                map.put("status", "SKIPPED");
+                map.put("error", clip(skipReason));
+            }
+            steps.add(map);
+        }
+        // 全部生成/剪辑节点都被跳过时，本次运行没有任何可干活步骤：直接拦截并说明首个原因，
+        // 避免创建一个 0 分母、瞬间「成功」却什么都没做的空运行。
+        if (steps.stream().noneMatch(step -> !"SKIPPED".equals(text(step.get("status")))
+                && List.of("GENERATE", "EDIT").contains(text(step.get("stepType"))))) {
+            String firstReason = steps.stream()
+                    .filter(step -> "SKIPPED".equals(text(step.get("status"))))
+                    .map(step -> "节点「" + text(step.get("title")) + "」" + text(step.get("error")))
+                    .findFirst().orElse("没有可运行的节点");
+            throw new BizException("本次运行没有可执行的生成节点：" + firstReason);
         }
         WorkflowRun prior = null;
         if (req.getPreviousRunId() != null) {
@@ -207,7 +236,7 @@ public class WorkflowRunService {
     private static boolean isTerminalStep(Map<String, Object> step) {
         String status = text(step.get("status"));
         return TaskStatus.SUCCEEDED.equals(status) || TaskStatus.FAILED.equals(status)
-                || TaskStatus.CANCELLED.equals(status) || "BLOCKED".equals(status);
+                || TaskStatus.CANCELLED.equals(status) || "BLOCKED".equals(status) || "SKIPPED".equals(status);
     }
 
     public WorkflowSnapshotResp snapshotMine(Long workflowId) {
@@ -371,10 +400,18 @@ public class WorkflowRunService {
                 try {
                     List<WorkflowFilmComposer.Clip> clips = editClips(step, steps);
                     String nodeId = text(step.get("nodeId"));
+                    // 剪辑台画幅×清晰度 → 白名单目标尺寸（AC-014：分辨率随成片真实回写）；
+                    // 画幅缺省或不在白名单时 target=null，沿用历史 1280x720 行为
+                    WorkflowFilmComposer.FilmSize target = null;
+                    try {
+                        target = WorkflowFilmComposer.FilmSize.of(text(step.get("ratio")), text(step.get("resolution")));
+                    } catch (IllegalArgumentException ignored) {
+                        target = null;
+                    }
                     WorkflowFilmComposer.FilmOutput film = filmComposer.findExisting(run.getUserId(), run.getId(),
-                            nodeId, clips);
+                            nodeId, clips, target);
                     if (film == null) {
-                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips);
+                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target);
                     }
                     creationService.recordWorkflowFilm(run.getUserId(), run.getId(), text(step.get("nodeId")),
                             text(step.get("title")), film.storageKey(), film.posterKey(), film.durationSeconds());
@@ -382,7 +419,14 @@ public class WorkflowRunService {
                     output.put("type", "film");
                     output.put("storageKey", film.storageKey());
                     output.put("posterKey", film.posterKey());
-                    output.put("metadata", Map.of("durationSec", film.durationSeconds()));
+                    Map<String, Object> metadata = new LinkedHashMap<>();
+                    metadata.put("durationSec", film.durationSeconds());
+                    if (film.width() != null && film.height() != null) {
+                        metadata.put("width", film.width());
+                        metadata.put("height", film.height());
+                        metadata.put("resolution", film.width() + "x" + film.height());
+                    }
+                    output.put("metadata", metadata);
                     step.put("outputs", List.of(output));
                     step.put("outputStorageKey", film.storageKey());
                     step.put("status", TaskStatus.SUCCEEDED);
@@ -1102,6 +1146,8 @@ public class WorkflowRunService {
                                            boolean forceRegenerate) {
         Long userId = UserContext.requireUserId();
         for (Map<String, Object> step : steps) {
+            // 已被规划为跳过的步骤不参与复用回填（如缺提示词/缺模型），保留跳过状态与原因
+            if ("SKIPPED".equals(text(step.get("status")))) continue;
             if (!depsSucceeded(step, steps)) continue;
             String fingerprint = WorkflowStepFingerprint.of(step, steps);
             step.put("inputFingerprint", fingerprint);
@@ -1247,8 +1293,16 @@ public class WorkflowRunService {
             for (String depId : strings(step.get("dependsOn"))) {
                 Map<String, Object> dependency = steps.stream()
                         .filter(item -> depId.equals(text(item.get("nodeId")))).findFirst().orElse(null);
-                if (dependency != null && (TaskStatus.FAILED.equals(text(dependency.get("status")))
-                        || "BLOCKED".equals(text(dependency.get("status"))))) {
+                if (dependency == null) continue;
+                String depStatus = text(dependency.get("status"));
+                // 上游被跳过（如缺模型，规划期之外的运行期跳过）：下游连带跳过而非阻塞（需求 4.6.4.2）
+                if ("SKIPPED".equals(depStatus)) {
+                    step.put("status", "SKIPPED");
+                    step.put("error", "上游节点「" + text(dependency.get("title")) + "」未运行");
+                    changed = true;
+                    break;
+                }
+                if (TaskStatus.FAILED.equals(depStatus) || "BLOCKED".equals(depStatus)) {
                     step.put("status", "BLOCKED");
                     step.put("error", "上游节点「" + text(dependency.get("title")) + "」未成功");
                     changed = true;
@@ -1263,7 +1317,8 @@ public class WorkflowRunService {
         return steps.stream().allMatch(step -> TaskStatus.SUCCEEDED.equals(text(step.get("status")))
                 || TaskStatus.FAILED.equals(text(step.get("status")))
                 || TaskStatus.CANCELLED.equals(text(step.get("status")))
-                || "BLOCKED".equals(text(step.get("status"))));
+                || "BLOCKED".equals(text(step.get("status")))
+                || "SKIPPED".equals(text(step.get("status"))));
     }
 
     private static String aggregateErrors(List<Map<String, Object>> steps) {
@@ -1286,6 +1341,10 @@ public class WorkflowRunService {
      */
     private static List<Map<String, Object>> workSteps(List<Map<String, Object>> steps) {
         return steps.stream().filter(step -> {
+            // 被跳过的步骤本次不干活，不计入分母（需求 4.6.3.1），否则进度永远到不了 100%
+            if ("SKIPPED".equals(text(step.get("status")))) {
+                return false;
+            }
             String type = text(step.get("stepType"));
             return "GENERATE".equals(type) || "EDIT".equals(type);
         }).toList();

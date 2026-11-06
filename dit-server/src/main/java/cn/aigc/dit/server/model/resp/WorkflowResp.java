@@ -18,6 +18,9 @@ public class WorkflowResp {
     private String type;
     private Long modelId;
     private String modelLabel;
+
+    @Schema(description = "输出链路上真实使用的生成模型（上游 -> 下游，最多 3 个）；与 modelLabel（运行模型）语义不同")
+    private List<String> outputModels;
     private String origin;
     private String demoKey;
     private String sourcePath;

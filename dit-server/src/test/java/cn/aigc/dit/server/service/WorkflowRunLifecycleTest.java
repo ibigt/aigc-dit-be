@@ -464,7 +464,8 @@ class WorkflowRunLifecycleTest {
                         .sorted(Comparator.comparing(WorkflowRun::getId).reversed()).limit(Long.parseLong(limit.group(1))).map(Harness::copy).toList();
             });
             WorkflowFilmComposer composer = mock(WorkflowFilmComposer.class);
-            when(composer.compose(anyLong(), anyLong(), anyString(), anyList())).thenAnswer(call -> {
+            // 成片接口带目标尺寸参数（AC-014）：桩必须挂在 5 参重载上，挂在旧 4 参默认方法上会拿到 null 合成结果
+            when(composer.compose(anyLong(), anyLong(), anyString(), anyList(), any())).thenAnswer(call -> {
                 List<WorkflowFilmComposer.Clip> clips = call.getArgument(3); composedKeys.clear();
                 clips.forEach(clip -> composedKeys.add(clip.storageKey()));
                 return new WorkflowFilmComposer.FilmOutput("users/7/workflows/film.mp4", null, 10);

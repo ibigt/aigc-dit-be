@@ -32,6 +32,12 @@ public class WorkflowSaveReq {
     @Size(max = 256)
     private String sourcePath;
 
+    @Schema(description = "模板分类：image / video / audio（仅 type=template 时生效）")
+    private String category;
+
+    @Schema(description = "模板标签列表（仅 type=template 时生效）")
+    private java.util.List<String> tags;
+
     @Schema(description = "画布 JSON：nodes、edges")
     private Map<String, Object> graph;
 }

@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -73,6 +74,36 @@ class WorkflowGraphPlannerTest {
                 "edges", List.of());
         BizException blankError = assertThrows(BizException.class, () -> WorkflowGraphPlanner.plan(blank));
         assertTrue(blankError.getMessage().contains("提示词"));
+    }
+
+    /** 需求 4.6.4.2：整图运行时单个节点缺提示词不牵连整次运行，跳过该节点及其下游并点名原因。 */
+    @Test
+    void lenientWholeRunSkipsBlankPromptNodeAndItsDownstream() {
+        Map<String, Object> graph = graph(
+                List.of(generator("ok", "ImageGenerator", "正常"),
+                        generator("bad", "ImageGenerator", ""),
+                        generator("down", "VideoGenerator", "下游有自己的提示词")),
+                List.of(edge("bad", "down")));
+
+        List<WorkflowGraphPlanner.Step> steps = WorkflowGraphPlanner.planForRun(graph, null);
+
+        // 三个步骤都在计划里（跳过的也要进 run，前端才能点名展示），bad/down 带 skipReason
+        assertEquals(3, steps.size());
+        var byId = steps.stream().collect(java.util.stream.Collectors.toMap(WorkflowGraphPlanner.Step::nodeId, s -> s));
+        assertNull(byId.get("ok").skipReason());
+        assertEquals("缺少提示词", byId.get("bad").skipReason());
+        // 下游连带跳过：依赖被跳过上游的产物，即便自身有提示词
+        assertTrue(byId.get("down").skipReason() != null && byId.get("down").skipReason().contains("未运行"));
+    }
+
+    /** 需求 4.6.4.1：单节点运行目标节点不可运行时仍直接拦截（strict 抛错）。 */
+    @Test
+    void lenientSingleNodeRunStillInterceptsBlankPrompt() {
+        Map<String, Object> graph = graph(
+                List.of(generator("bad", "ImageGenerator", "")), List.of());
+        BizException error = assertThrows(BizException.class,
+                () -> WorkflowGraphPlanner.planForRun(graph, "bad"));
+        assertTrue(error.getMessage().contains("提示词"));
     }
 
     @Test

@@ -1,6 +1,7 @@
 package cn.aigc.dit.server.workflow;
 
 import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.server.drama.DramaContract;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -65,7 +66,8 @@ public final class WorkflowGraphPlanner {
             List<Output> outputs,
             List<Clip> clips,
             Integer outputIndex,
-            Map<String, Object> audio) {
+            Map<String, Object> audio,
+            String skipReason) {
     }
 
     public static List<Step> plan(Map<String, Object> graph) {
@@ -110,6 +112,21 @@ public final class WorkflowGraphPlanner {
     }
 
     public static List<Step> plan(Map<String, Object> graph, String onlyNodeId) {
+        return planInternal(graph, onlyNodeId, false);
+    }
+
+    /**
+     * 运行入口的规划（需求 4.6.4）：
+     * - 单节点运行（onlyNodeId 非空）：目标节点不可运行时直接抛错拦截，提示如何修复（4.6.4.1）；
+     * - 整图运行（onlyNodeId 为空）：宽松模式——单个节点不可运行（缺提示词、剪辑缺上游、片段全禁用、
+     *   上传音频缺地址等）不牵连整次运行，该节点标记 skipReason 跳过，其下游连带跳过（4.6.4.2）。
+     */
+    public static List<Step> planForRun(Map<String, Object> graph, String onlyNodeId) {
+        boolean lenient = onlyNodeId == null || onlyNodeId.isBlank();
+        return planInternal(graph, onlyNodeId, lenient);
+    }
+
+    private static List<Step> planInternal(Map<String, Object> graph, String onlyNodeId, boolean lenient) {
         if (graph == null) {
             throw new BizException("画布不能为空");
         }
@@ -150,7 +167,7 @@ public final class WorkflowGraphPlanner {
             if (category != null) {
                 generatorCount++;
             }
-            steps.add(toStep(nodeId, data, category, edges, byId));
+            steps.add(toStep(nodeId, data, category, edges, byId, lenient));
         }
         if (steps.isEmpty()) {
             throw new BizException("当前画布没有可运行的节点");
@@ -161,11 +178,12 @@ public final class WorkflowGraphPlanner {
         List<Step> ordered = topological(steps);
         List<Step> selected = onlyNodeId == null || onlyNodeId.isBlank()
                 ? ordered : filterNode(ordered, onlyNodeId.trim());
-        return resolve(selected, byId, edges);
+        return resolve(selected, byId, edges, lenient);
     }
 
     private static Step toStep(String nodeId, Map<String, Object> data, String category,
-                               List<Map<String, Object>> edges, Map<String, Map<String, Object>> byId) {
+                               List<Map<String, Object>> edges, Map<String, Map<String, Object>> byId,
+                               boolean lenient) {
         Map<String, Object> media = map(data.get("media"));
         String prompt = text(media.get("prompt"));
         if (prompt != null && prompt.length() > 4096) {
@@ -195,11 +213,17 @@ public final class WorkflowGraphPlanner {
         String kind = text(data.get("kind"));
         String stepType = textKind(kind) ? "TEXT"
                 : "VideoEditing".equals(kind) ? "EDIT" : "GENERATE";
+        String skipReason = null;
         if ("audio".equals(category) && "uploaded".equals(text(media.get("selectedAudioSource")))) {
             String key = text(map(media.get("uploadedAudio")).get("storageKey"));
-            if (!storageKey(key)) throw new BizException("节点「" + nodeId + "」上传音频缺少有效存储地址");
-            stepType = "ASSET";
-            refs.add(new Ref("audio", key));
+            if (!storageKey(key)) {
+                // 宽松模式（整图运行）下不牵连整次运行：标记跳过，由 resolve 统一处理；单节点运行仍抛错拦截
+                if (!lenient) throw new BizException("节点「" + nodeId + "」上传音频缺少有效存储地址");
+                skipReason = "上传音频缺少有效存储地址";
+            } else {
+                stepType = "ASSET";
+                refs.add(new Ref("audio", key));
+            }
         }
         Map<String, Object> audio = new LinkedHashMap<>();
         if ("audio".equals(category)) {
@@ -222,7 +246,10 @@ public final class WorkflowGraphPlanner {
                 clip(text(media.get("ratio")), 32),
                 clip(text(media.get("resolution")), 32),
                 quality(text(media.get("quality"))),
-                video ? intValue(media.getOrDefault("durationSec", media.get("duration")), 5, 1, 30) : null,
+                // 视频时长按合同 5–15 逐秒钳制（与 DramaContract.DURATION_OPTIONS 同源）。
+                // 原先放宽到 1–30，越界值会被供应商适配器静默降级（多收钱、少出片），前端口径统一后此处同步收紧。
+                video ? intValue(media.getOrDefault("durationSec", media.get("duration")), 5,
+                        DramaContract.MIN_DURATION_SEC, DramaContract.MAX_DURATION_SEC) : null,
                 intValue(media.get("copies"), 1, 1, 4),
                 speed(media.get("speed")),
                 "music".equals(audio.get("audioMode"))
@@ -240,7 +267,8 @@ public final class WorkflowGraphPlanner {
                 null,
                 outputs,
                 List.of(),
-                intValue(media.getOrDefault("selectedOutputIndex", media.get("outputIndex")), 0, 0, Integer.MAX_VALUE), audio);
+                intValue(media.getOrDefault("selectedOutputIndex", media.get("outputIndex")), 0, 0, Integer.MAX_VALUE), audio,
+                skipReason);
     }
 
     private static void collectInputs(String nodeId, String category, List<Map<String, Object>> edges,
@@ -269,13 +297,21 @@ public final class WorkflowGraphPlanner {
     }
 
     private static List<Step> resolve(List<Step> ordered, Map<String, Map<String, Object>> nodes,
-                                      List<Map<String, Object>> edges) {
+                                      List<Map<String, Object>> edges, boolean lenient) {
         Map<String, Step> resolved = new LinkedHashMap<>();
         Map<String, Step> selected = new LinkedHashMap<>();
         for (Step step : ordered) {
             selected.put(step.nodeId(), step);
         }
+        // 被跳过的节点 → 原因；ordered 为拓扑序，主循环后一遍即可把下游连带传播（需求 4.6.4.2）
+        Map<String, String> skipped = new LinkedHashMap<>();
         for (Step step : ordered) {
+            // toStep 阶段已判定不可运行（如上传音频缺地址）：直接跳过，不再解析
+            if (step.skipReason() != null) {
+                skipped.put(step.nodeId(), step.skipReason());
+                resolved.put(step.nodeId(), step);
+                continue;
+            }
             Map<String, Object> data = map(nodes.get(step.nodeId()).get("data"));
             try {
                 if ("TEXT".equals(step.stepType())) {
@@ -299,7 +335,7 @@ public final class WorkflowGraphPlanner {
                         prompt = inheritedPrompt(step, resolved);
                     }
                     if (prompt == null) {
-                        throw new BizException("节点「" + step.title() + "」缺少提示词");
+                        throw new BizException("缺少提示词");
                     }
                     String value = WorkflowVariables.resolve(clip(prompt, 4096), scopes(step, nodes, resolved, edges)).value();
                     resolved.put(step.nodeId(), withResolved(step, value, List.of(), List.of()));
@@ -310,7 +346,23 @@ public final class WorkflowGraphPlanner {
                     resolved.put(step.nodeId(), withResolved(step, null, List.of(), clips));
                 }
             } catch (BizException error) {
-                throw new BizException("节点「" + step.title() + "」(" + step.nodeId() + "): " + error.getMessage());
+                if (!lenient) {
+                    throw new BizException("节点「" + step.title() + "」(" + step.nodeId() + "): " + error.getMessage());
+                }
+                skipped.put(step.nodeId(), error.getMessage());
+                resolved.put(step.nodeId(), withSkip(step, error.getMessage()));
+            }
+        }
+        // 下游连带跳过：ordered 拓扑序保证上游先处理，单遍扫描即可传递整条链。
+        // 下游节点即便自身可运行，也依赖被跳过上游的产物，一并跳过（需求 4.6.4.2「跳过该节点及其下游」）。
+        for (Step step : ordered) {
+            if (skipped.containsKey(step.nodeId())) continue;
+            for (String depId : step.dependsOn()) {
+                if (!skipped.containsKey(depId)) continue;
+                String reason = "上游节点「" + selected.get(depId).title() + "」未运行";
+                skipped.put(step.nodeId(), reason);
+                resolved.put(step.nodeId(), withSkip(step, reason));
+                break;
             }
         }
         return List.copyOf(resolved.values());
@@ -514,7 +566,18 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
-                step.stepType(), resolvedPrompt, outputs, clips, step.outputIndex(), step.audio());
+                step.stepType(), resolvedPrompt, outputs, clips, step.outputIndex(), step.audio(),
+                step.skipReason());
+    }
+
+    /** 标记该步骤为「跳过」（需求 4.6.4.2）：保留原步骤信息，仅附跳过原因。 */
+    private static Step withSkip(Step step, String reason) {
+        return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
+                step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
+                step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
+                step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(),
+                step.audio(), reason);
     }
 
     private static List<Step> topological(List<Step> steps) {
@@ -601,7 +664,8 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), List.copyOf(dependsOn), step.refs(),
-                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(), step.audio());
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(),
+                step.audio(), step.skipReason());
     }
 
     /** 参考帧图框取值（media.frames.firstKey / lastKey）：仅认合法存储 key，其余当未设置。 */
@@ -646,9 +710,10 @@ public final class WorkflowGraphPlanner {
 
     private static boolean acceptRef(String category, String refType) {
         if ("audio".equals(category)) {
-            // 音频节点可连线图片/视频作为「画面参考」（对应 visual 端口）；音频适配器按需忽略视觉素材，
-            // 但依赖关系与提示词兜底（复用画面描述）依赖这条引用成立
-            return "image".equals(refType) || "video".equals(refType);
+            // 需求 1.6（AC-011）：音频节点只接受文本输入，不接受图片或视频输入。
+            // 前端已删 visual 端口并在连线预检拒绝；此处收紧服务端兜底——
+            // 历史画布里既存的图片/视频连线不再进入参考集合（提示词补充不受影响，走 dependsOn 文本链）。
+            return false;
         }
         if ("image".equals(category)) {
             return "image".equals(refType);
