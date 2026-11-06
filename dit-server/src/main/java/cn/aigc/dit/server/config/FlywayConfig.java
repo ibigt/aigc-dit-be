@@ -130,7 +130,7 @@ public class FlywayConfig {
                 )
                 """);
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_series_user ON drama_series (user_id, updated_at DESC)");
-        // 已建库的 CREATE TABLE IF NOT EXISTS 不会改旧约束；与 V60 保持同一套取值。
+        // 已建库的 CREATE TABLE IF NOT EXISTS 不会改旧约束；与 V61 保持同一套取值。
         statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_aspect");
         statement.execute("""
                 ALTER TABLE drama_series
