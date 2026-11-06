@@ -31,14 +31,25 @@ public final class ImageDescribePrompts {
                     + COMMON_TAIL;
 
     /**
-     * 出片前图生文：外形要求与 {@link #CHARACTER_FULL} 相同，尾句改成写实风格的真人实拍，不再写成 CGI 数字人。
+     * 出片前图生文：外形要求与 {@link #CHARACTER_FULL} 相同，但按原图写肤色和光，不再写成棚拍写真或 CGI 数字人。
+     * 风格约束放在提示词最后。
      */
     private static final String REALISM_TAIL =
-            "人物写成真人实拍写真，自然肤质与可见毛孔，真实发丝与布料质感，棚拍柔光，"
-                    + "不要3D渲染，不要CG数字人，不要塑料皮肤，不要二次元卡通。"
+            "肤色、背景和光都按原图写，黑底就写黑底，不要改成棚拍柔光或灰底。"
+                    + "风格约束写在提示词最后，不要写在开头：真人实拍，不要3D渲染，不要CG数字人，不要塑料皮肤，不要二次元卡通。"
                     + "不要第二个人、不要字幕水印、不要空话评价（禁止堆砌 8K/次表面散射等无判别信息的词）。";
 
-    public static final String CHARACTER_REALISM = CHARACTER_FULL.replace(CGI_TAIL, REALISM_TAIL);
+    public static final String CHARACTER_REALISM = CHARACTER_FULL
+            .replace(CGI_TAIL, REALISM_TAIL)
+            .replace(
+                    "优先写清：年龄性别族群观感、脸型五官、发型鬓角灰白、",
+                    "优先写清：年龄性别族群观感、脸型五官、"
+                            + "肤色按原图写（冷白、暖白、小麦、浅黄，只写最接近的一种）、"
+                            + "发型鬓角灰白、")
+            .replace(
+                    "五官与脸型细节 → 发型鬓角灰白 →",
+                    "五官与脸型细节 → 肤色 → 发型鬓角灰白 →")
+            .replace("站姿手脚、灰底棚拍光影。", "站姿手脚、背景与光影（按原图写，黑底就写黑底）。");
 
     /**
      * 出片前自动定妆：只抽外形锚点，构图交给定妆拼版，不写 CGI 数字人。

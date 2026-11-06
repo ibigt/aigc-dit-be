@@ -131,7 +131,7 @@ public class SeedreamShotBindService {
     }
 
     /**
-     * 角色全身图生文后纯文生图。尾句用写实风格的真人实拍，不用「原创CGI数字人」。
+     * 角色全身图生文后纯文生图。风格句写在正文后面，不用「原创CGI数字人」。
      */
     private String createSheet(String originalKey, DramaSeries series, Long userId) {
         byte[] imageBytes = objectStorage.getBytes(originalKey);
