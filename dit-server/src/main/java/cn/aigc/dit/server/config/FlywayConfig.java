@@ -123,13 +123,26 @@ public class FlywayConfig {
                     video_chain_prev_tail   BOOLEAN      NOT NULL DEFAULT FALSE,
                     created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
                     updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-                    CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('16:9', '9:16', '1:1')),
-                    CONSTRAINT ck_drama_series_resolution CHECK (default_resolution IN ('480P', '720P')),
+                    CONSTRAINT ck_drama_series_aspect CHECK (aspect_ratio IN ('21:9', '16:9', '4:3', '1:1', '3:4', '9:16')),
+                    CONSTRAINT ck_drama_series_resolution CHECK (default_resolution IN ('480P', '720P', '1080P', '2K')),
                     CONSTRAINT ck_drama_series_duration CHECK (default_duration_sec >= 5 AND default_duration_sec <= 15),
                     CONSTRAINT ck_drama_series_planned CHECK (planned_episode_count >= 1 AND planned_episode_count <= 99)
                 )
                 """);
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_series_user ON drama_series (user_id, updated_at DESC)");
+        // 已建库的 CREATE TABLE IF NOT EXISTS 不会改旧约束；与 V60 保持同一套取值。
+        statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_aspect");
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD CONSTRAINT ck_drama_series_aspect
+                CHECK (aspect_ratio IN ('21:9', '16:9', '4:3', '1:1', '3:4', '9:16'))
+                """);
+        statement.execute("ALTER TABLE drama_series DROP CONSTRAINT IF EXISTS ck_drama_series_resolution");
+        statement.execute("""
+                ALTER TABLE drama_series
+                ADD CONSTRAINT ck_drama_series_resolution
+                CHECK (default_resolution IN ('480P', '720P', '1080P', '2K'))
+                """);
         statement.execute("""
                 CREATE TABLE IF NOT EXISTS drama_episode (
                     id                          BIGSERIAL PRIMARY KEY,
