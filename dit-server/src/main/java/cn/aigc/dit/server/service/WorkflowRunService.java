@@ -284,7 +284,25 @@ public class WorkflowRunService {
             }
         }
         for (String nodeId : branches.keySet()) {
-            if (!validSteps.containsKey(nodeId)) steps.add(Map.of("nodeId", nodeId, "status", "IDLE"));
+            if (!validSteps.containsKey(nodeId)) {
+                Map<String, Object> idle = new LinkedHashMap<>();
+                idle.put("nodeId", nodeId);
+                idle.put("status", "IDLE");
+                steps.add(idle);
+            }
+        }
+        // 导入工程 / 模板实例化的产物随 graph 走（节点顶层 outputs），本地没有对应的运行历史。
+        // 只要本工作流跑过其它节点（例如后加的配音），上面的指纹匹配就会给这些节点留下
+        // IDLE + 空产物；直接回给前端会抹掉水合出来的视频，下一次保存把丢失写回 DB 后
+        // 「另存为模板 / 模板实例化」继续继承空图（#79~#83 视频反复消失）。
+        // 因此用 graph 自带的产物把这类 IDLE 步骤补成 SUCCEEDED，仅回显属于当前用户的 key。
+        for (Map<String, Object> step : steps) {
+            if (!"IDLE".equals(step.get("status"))) continue;
+            List<Map<String, Object>> carried = carriedOutputs(workflow.getGraph(), text(step.get("nodeId")));
+            if (carried.isEmpty()) continue;
+            step.put("status", TaskStatus.SUCCEEDED);
+            step.put("progress", 100);
+            step.put("outputs", carried);
         }
         List<WorkflowRunResp.StepResp> responses = stepResponses(steps, null);
         responses.forEach(step -> {
@@ -293,6 +311,37 @@ public class WorkflowRunService {
                     .filter(output -> "text".equals(output.getType()) || ownedKey(output.getStorageKey(), UserContext.requireUserId())).toList());
         });
         return new WorkflowSnapshotResp(workflowId, history.get(0).getId(), responses, active);
+    }
+
+    /**
+     * 读取 graph 节点顶层 outputs（persistableWorkflowGraph 落库的 storageKey 产物），
+     * 转成 step 可直接回显的 outputs。只回显 users/{当前用户}/ 下的 key，
+     * 防止导入的第三方图把别人的私有对象透出来。
+     */
+    private static List<Map<String, Object>> carriedOutputs(Map<String, Object> graph, String nodeId) {
+        if (graph == null || nodeId == null || !(graph.get("nodes") instanceof List<?> nodes)) return List.of();
+        Long userId = UserContext.requireUserId();
+        for (Object raw : nodes) {
+            if (!(raw instanceof Map<?, ?> node) || !nodeId.equals(text(node.get("id")))
+                    || !(node.get("outputs") instanceof List<?> outputs)) continue;
+            List<Map<String, Object>> carried = new ArrayList<>();
+            for (Object item : outputs) {
+                if (!(item instanceof Map<?, ?> output)) continue;
+                String key = text(output.get("storageKey"));
+                if (!ownedKey(key, userId)) continue;
+                Map<String, Object> value = new LinkedHashMap<>();
+                value.put("type", text(output.get("type")));
+                value.put("storageKey", key);
+                if (output.get("metadata") instanceof Map<?, ?> metadata) {
+                    value.put("metadata", new LinkedHashMap<>(metadata));
+                }
+                String poster = text(output.get("posterKey"));
+                if (ownedKey(poster, userId)) value.put("posterKey", poster);
+                carried.add(value);
+            }
+            return carried;
+        }
+        return List.of();
     }
 
     private static boolean durableOutputs(Map<String, Object> step) {
@@ -398,7 +447,8 @@ public class WorkflowRunService {
                     workflowRunMapper.updateById(run);
                 }
                 try {
-                    List<WorkflowFilmComposer.Clip> clips = editClips(step, steps);
+                    List<WorkflowFilmComposer.Clip> clips = editClips(step, steps, run.getUserId());
+                    List<WorkflowFilmComposer.AudioClip> audioClips = editAudioClips(step, steps, run.getUserId());
                     String nodeId = text(step.get("nodeId"));
                     // 剪辑台画幅×清晰度 → 白名单目标尺寸（AC-014：分辨率随成片真实回写）；
                     // 画幅缺省或不在白名单时 target=null，沿用历史 1280x720 行为
@@ -409,9 +459,9 @@ public class WorkflowRunService {
                         target = null;
                     }
                     WorkflowFilmComposer.FilmOutput film = filmComposer.findExisting(run.getUserId(), run.getId(),
-                            nodeId, clips, target);
+                            nodeId, clips, target, audioClips);
                     if (film == null) {
-                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target);
+                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target, audioClips);
                     }
                     creationService.recordWorkflowFilm(run.getUserId(), run.getId(), text(step.get("nodeId")),
                             text(step.get("title")), film.storageKey(), film.posterKey(), film.durationSeconds());
@@ -985,8 +1035,18 @@ public class WorkflowRunService {
         }
     }
 
+    /**
+     * 本地导入素材的 storageKey 由前端草稿透传，合成器会直接按它读对象存储。
+     * 必须与 /api/media 的鉴权口径一致：只放行当前用户目录，避免构造任意 key 越权读他人文件。
+     */
+    private static boolean ownedStorageKey(String key, Long userId) {
+        return userId != null && WorkflowGraphPlanner.storageKey(key)
+                && !key.contains("..") && key.startsWith("users/" + userId + "/");
+    }
+
     private static List<WorkflowFilmComposer.Clip> editClips(Map<String, Object> step,
-                                                               List<Map<String, Object>> steps) {
+                                                               List<Map<String, Object>> steps,
+                                                               Long userId) {
         if (!(step.get("clips") instanceof List<?> raw) || raw.isEmpty()) {
             throw new IllegalArgumentException("请选择要合成的视频片段");
         }
@@ -999,6 +1059,24 @@ public class WorkflowRunService {
         }
         List<WorkflowFilmComposer.Clip> clips = new ArrayList<>();
         for (Map<?, ?> configuredClip : configured) {
+            // 本地导入素材：不查上游步骤，直接按 storageKey 读（必须属于当前用户，防越权）
+            String localKey = text(configuredClip.get("localKey"));
+            if (localKey != null) {
+                if (!ownedStorageKey(localKey, userId)) {
+                    throw new IllegalArgumentException("本地素材路径无效或不属于当前用户");
+                }
+                double localStart = doubleValue(configuredClip.get("trimStart")) == null
+                        ? 0 : doubleValue(configuredClip.get("trimStart"));
+                Double localEnd = doubleValue(configuredClip.get("trimEnd"));
+                if (localStart < 0 || localEnd == null || localEnd <= localStart) {
+                    throw new IllegalArgumentException("本地素材裁剪范围无效");
+                }
+                Double localVolume = doubleValue(configuredClip.get("volume"));
+                clips.add(new WorkflowFilmComposer.Clip(localKey, localStart, localEnd,
+                        Boolean.TRUE.equals(configuredClip.get("muted")),
+                        localVolume == null ? 1 : localVolume));
+                continue;
+            }
             String sourceId = text(configuredClip.get("sourceNodeId"));
             Map<String, Object> source = steps.stream()
                     .filter(item -> sourceId != null && sourceId.equals(text(item.get("nodeId"))))
@@ -1038,8 +1116,75 @@ public class WorkflowRunService {
         return List.copyOf(clips);
     }
 
-    private Long resolveModel(Step step, Long fallbackId, List<AiModel> models) {
-        if (!"GENERATE".equals(step.stepType())) {
+    /**
+     * 音频轨片段的运行期解析：按 sourceNodeId 找上游音频步骤（GENERATE 的音频产物或
+     * ASSET 上传音频），取 outputs[outputIndex] 的 storageKey。与视频 editClips 的差异：
+     * ① 不做 VIDEO 硬校验（音频源本就是 audio 类型）；② 上游缺失/未成功时静默丢弃该条
+     * 而非抛错——音轨是增强项，不应阻断成片合成；③ trimEnd 缺省兜底 metadata 时长。
+     */
+    private static List<WorkflowFilmComposer.AudioClip> editAudioClips(Map<String, Object> step,
+                                                                        List<Map<String, Object>> steps,
+                                                                        Long userId) {
+        if (!(step.get("audioClips") instanceof List<?> raw) || raw.isEmpty()) {
+            return List.of();
+        }
+        List<WorkflowFilmComposer.AudioClip> audioClips = new ArrayList<>();
+        for (Object item : raw) {
+            if (!(item instanceof Map<?, ?> configured)) {
+                continue;
+            }
+            // 本地导入音频：与视频同口径，按 storageKey 直读；非法条目静默丢弃不阻断成片
+            String localKey = text(configured.get("localKey"));
+            if (localKey != null) {
+                if (!ownedStorageKey(localKey, userId)) continue;
+                Double localStart = doubleValue(configured.get("start"));
+                double clipStart = localStart == null || localStart < 0 ? 0 : localStart;
+                double trimStart = doubleValue(configured.get("trimStart")) == null ? 0 : doubleValue(configured.get("trimStart"));
+                Double trimEnd = doubleValue(configured.get("trimEnd"));
+                if (trimEnd == null || trimEnd <= trimStart) continue;
+                Double localVolume = doubleValue(configured.get("volume"));
+                audioClips.add(new WorkflowFilmComposer.AudioClip(localKey, clipStart,
+                        trimStart, trimEnd, Boolean.TRUE.equals(configured.get("muted")),
+                        localVolume == null ? 1 : Math.max(0, Math.min(2, localVolume))));
+                continue;
+            }
+            String sourceId = text(configured.get("sourceNodeId"));
+            Map<String, Object> source = steps.stream()
+                    .filter(entry -> sourceId != null && sourceId.equals(text(entry.get("nodeId"))))
+                    .findFirst().orElse(null);
+            if (source == null || !TaskStatus.SUCCEEDED.equals(text(source.get("status")))) {
+                continue;
+            }
+            Integer selectedIndex = configured.get("outputIndex") == null ? 0 : intValue(configured.get("outputIndex"));
+            int index = selectedIndex == null ? 0 : selectedIndex;
+            if (!(source.get("outputs") instanceof List<?> outputs) || index < 0 || index >= outputs.size()
+                    || !(outputs.get(index) instanceof Map<?, ?> output)
+                    || !WorkflowGraphPlanner.storageKey(text(output.get("storageKey")))) {
+                continue;
+            }
+            Double start = doubleValue(configured.get("start"));
+            double clipStart = start == null || start < 0 ? 0 : start;
+            double trimStart = doubleValue(configured.get("trimStart")) == null ? 0 : doubleValue(configured.get("trimStart"));
+            Double trimEnd = doubleValue(configured.get("trimEnd"));
+            if (trimEnd == null && output.get("metadata") instanceof Map<?, ?> metadata) {
+                trimEnd = doubleValue(metadata.get("durationSec"));
+                if (trimEnd == null) {
+                    Double durationMs = doubleValue(metadata.get("durationMs"));
+                    trimEnd = durationMs == null ? null : durationMs / 1000;
+                }
+            }
+            if (trimEnd == null || trimEnd <= trimStart) {
+                continue;
+            }
+            Double volume = doubleValue(configured.get("volume"));
+            audioClips.add(new WorkflowFilmComposer.AudioClip(text(output.get("storageKey")), clipStart,
+                    trimStart, trimEnd, Boolean.TRUE.equals(configured.get("muted")),
+                    volume == null ? 1 : Math.max(0, Math.min(2, volume))));
+        }
+        return List.copyOf(audioClips);
+    }
+
+    private Long resolveModel(Step step, Long fallbackId, List<AiModel> models) {        if (!"GENERATE".equals(step.stepType())) {
             return null;
         }
         if (step.modelName() != null) {
@@ -1079,6 +1224,20 @@ public class WorkflowRunService {
         map.put("lastFrameKey", step.lastFrameKey());
         map.put("outputIndex", step.outputIndex());
         map.put("dependsOn", step.dependsOn());
+        // 音频轨片段也进 step map：既参与运行指纹（改音轨触发重合成），也供运行期解析产物
+        map.put("audioClips", step.audioClips().stream().map(clip -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("sourceNodeId", clip.sourceNodeId());
+            item.put("outputIndex", clip.outputIndex());
+            item.put("start", clip.start());
+            item.put("trimStart", clip.trimStart());
+            item.put("trimEnd", clip.trimEnd());
+            item.put("muted", clip.muted());
+            item.put("volume", clip.volume());
+            // 仅在本地导入片段上写：无导入素材时 step map 与旧版逐字节一致
+            if (clip.localKey() != null) item.put("localKey", clip.localKey());
+            return item;
+        }).toList());
         map.put("clips", step.clips().stream().map(clip -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("sourceNodeId", clip.sourceNodeId());
@@ -1088,6 +1247,7 @@ public class WorkflowRunService {
             item.put("trimEnd", clip.trimEnd());
             item.put("muted", clip.muted());
             item.put("volume", clip.volume());
+            if (clip.localKey() != null) item.put("localKey", clip.localKey());
             return item;
         }).toList());
         map.put("staticRefs", step.refs().stream().map(ref -> {

@@ -202,6 +202,59 @@ class FfmpegWorkflowFilmComposerTest {
     }
 
     @Test
+    void mixesAudioTrackWithAdelayAndAmixWhenAudioClipsPresent() {
+        List<String> args = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")),
+                List.of(new Clip("v.mp4", 0, 5, false, 1)),
+                List.of(true), null, Path.of("out.mp4"),
+                List.of(new cn.aigc.dit.server.workflow.WorkflowFilmComposer.AudioClip("bgm.mp3", 2.5, 0, 3, false, 0.8)),
+                List.of(Path.of("bgm.mp3")));
+
+        String command = String.join(" ", args);
+        // 音轨输入追加在视频输入之后
+        assertTrue(command.contains("-i v.mp4 -i bgm.mp3"));
+        // atrim 按音轨自身素材时间裁剪，volume 作用其上
+        assertTrue(command.contains("atrim=start=0.0:end=3.0"), command);
+        assertTrue(command.contains("aformat=channel_layouts=stereo,volume=0.8"));
+        // adelay 对齐成片内混入位置：start=2.5s → 2500ms 双声道
+        assertTrue(command.contains("adelay=2500|2500"), command);
+        // amix 混音：拼接音频 + 1 条音轨 = 2 输入，以视频时长为准
+        assertTrue(command.contains("amix=inputs=2:duration=first:dropout_transition=0"), command);
+        assertTrue(command.contains("-map [aout]"), command);
+        // concat 输出标签从 [v][a] 变为 [v] + [a]（供 amix 引用）
+        assertTrue(command.contains("concat=n=1:v=1:a=1[v]"), command);
+    }
+
+    @Test
+    void skipsAmixEntirelyWhenNoAudioClips() {
+        List<String> args = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")),
+                List.of(new Clip("v.mp4", 0, 5, false, 1)),
+                List.of(true), null, Path.of("out.mp4"));
+
+        String command = String.join(" ", args);
+        assertFalse(command.contains("amix"), command);
+        assertFalse(command.contains("adelay"), command);
+        assertTrue(command.contains("concat=n=1:v=1:a=1[v][a]"), command);
+        assertTrue(command.contains("-map [a]"), command);
+    }
+
+    @Test
+    void mutedAudioTrackGetsZeroVolumeAndZeroDelayKeepsNoAdelay() {
+        List<String> args = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")),
+                List.of(new Clip("v.mp4", 0, 5, false, 1)),
+                List.of(true), null, Path.of("out.mp4"),
+                List.of(new cn.aigc.dit.server.workflow.WorkflowFilmComposer.AudioClip("bgm.mp3", 0, 0, 3, true, 1)),
+                List.of(Path.of("bgm.mp3")));
+
+        String command = String.join(" ", args);
+        assertTrue(command.contains("volume=0"), command);
+        // start=0 不需要 adelay
+        assertFalse(command.contains("adelay="), command);
+    }
+
+    @Test
     void appliesWhitelistedTargetSizeInScaleAndPad() {
         for (var entry : Map.of(
                 new WorkflowFilmComposer.FilmSize(1920, 1080), "scale=1920:1080:force_original_aspect_ratio=decrease",

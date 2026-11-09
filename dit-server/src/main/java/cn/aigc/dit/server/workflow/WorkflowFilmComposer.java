@@ -9,6 +9,13 @@ public interface WorkflowFilmComposer {
     }
 
     /**
+     * 音频轨片段（剪辑台 A1 混入成片）：start 为成片内混入位置（秒，来自时间线绝对位置），
+     * 经 atrim 裁剪 + volume 后 adelay 对齐，amix 到视频拼接结果上。
+     */
+    record AudioClip(String storageKey, double start, double trimStart, double trimEnd, boolean muted, double volume) {
+    }
+
+    /**
      * 成片目标尺寸（白名单制，防任意尺寸注入 FFmpeg）。
      * 画幅×清晰度组合见 {@link #SUPPORTED_SIZES}；null 表示沿用历史默认 1280x720。
      * 2.35:1 的 1080p 高度取 816（1920/2.35=817.02，yuv420p 要求偶数，向下取偶）。
@@ -60,6 +67,18 @@ public interface WorkflowFilmComposer {
     FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
 
     FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
+
+    /** 带音频轨的合成：audioClips 为空时与无音轨行为完全一致。 */
+    default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                               List<AudioClip> audioClips) {
+        return compose(userId, runId, nodeId, clips, target);
+    }
+
+    /** 带音频轨的复用探测：audioClips 参与指纹，音轨变更不复用旧成片。 */
+    default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                     List<AudioClip> audioClips) {
+        return findExisting(userId, runId, nodeId, clips, target);
+    }
 
     /** 兼容旧调用：无目标尺寸（历史默认 1280x720）。 */
     default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips) {

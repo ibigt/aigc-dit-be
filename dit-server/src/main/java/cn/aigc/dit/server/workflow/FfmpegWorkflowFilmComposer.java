@@ -161,6 +161,12 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
 
     @Override
     public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
+        return findExisting(userId, runId, nodeId, clips, target, List.of());
+    }
+
+    @Override
+    public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                   List<AudioClip> audioClips) {
         validate(userId, runId, nodeId, clips);
         String key = filmKey(userId, runId, nodeId);
         if (!exists(key)) {
@@ -269,7 +275,23 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
 
     @Override
     public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
+        return compose(userId, runId, nodeId, clips, target, List.of());
+    }
+
+    @Override
+    public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                              List<AudioClip> audioClips) {
         validate(userId, runId, nodeId, clips);
+        List<AudioClip> tracks = audioClips == null ? List.of() : audioClips;
+        for (AudioClip track : tracks) {
+            if (track == null || track.storageKey() == null || track.storageKey().isBlank()
+                    || !Double.isFinite(track.start()) || track.start() < 0
+                    || !Double.isFinite(track.trimStart()) || !Double.isFinite(track.trimEnd())
+                    || track.trimStart() < 0 || track.trimEnd() <= track.trimStart()
+                    || !Double.isFinite(track.volume()) || track.volume() < 0 || track.volume() > 2) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "音频片段参数无效");
+            }
+        }
         if (!runner.available()) {
             throw new BizException(ErrorCode.INTERNAL, "服务器未安装 ffmpeg，无法生成工作流成片");
         }
@@ -297,12 +319,33 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 }
                 inputs.add(input);
             }
+            // 音轨文件落盘为临时文件（扩展名不参与 ffmpeg 解码，内容为准）
+            List<Path> audioInputs = new ArrayList<>();
+            for (AudioClip track : tracks) {
+                Path input = FfmpegSupport.tempFile("dit-workflow-audio-", ".audio");
+                temps.add(input);
+                try {
+                    try (InputStream source = storage.get(track.storageKey())) {
+                        Files.copy(source, input, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (Exception e) {
+                    throw new BizException(ErrorCode.INTERNAL, "读取音频素材失败");
+                }
+                Double audioDuration = FfmpegSupport.durationSeconds(input);
+                if (audioDuration == null || !Double.isFinite(audioDuration) || audioDuration <= 0) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "音频素材无法读取有效时长");
+                }
+                if (track.trimStart() >= audioDuration || track.trimEnd() > audioDuration) {
+                    throw new BizException(ErrorCode.BAD_REQUEST, "音频裁剪范围超过素材时长");
+                }
+                audioInputs.add(input);
+            }
             Path output = FfmpegSupport.tempFile("dit-workflow-film-", ".mp4");
             temps.add(output);
             long timeout = generateProperties.getFfmpeg() == null ? 900
                     : generateProperties.getFfmpeg().getConcatEncodeTimeoutSeconds();
             try {
-                runner.run(args(inputs, clips, hasAudio, target, output), timeout);
+                runner.run(args(inputs, clips, hasAudio, target, output, tracks, audioInputs), timeout);
             } catch (BizException e) {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
                     throw new BizException(ErrorCode.INTERNAL, "工作流成片编码超时");
@@ -378,8 +421,22 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
     }
 
     static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target, Path output) {
+        return args(inputs, clips, hasAudio, target, output, List.of(), List.of());
+    }
+
+    /**
+     * 完整参数构造：视频片段拼接成主轨（含各自原声/静音），音频轨片段经 atrim+volume+adelay
+     * 后 amix 到拼接结果上。audioInputs 与 audioClips 一一对应（本地临时文件，由 compose 落盘）。
+     * 音轨为空时输出与旧版完全一致（无 amix 段）。
+     */
+    static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target,
+                             Path output, List<AudioClip> audioClips, List<Path> audioInputs) {
         if (inputs.size() != clips.size() || hasAudio.size() != clips.size()) {
             throw new IllegalArgumentException("clip inputs mismatch");
+        }
+        List<AudioClip> tracks = audioClips == null ? List.of() : audioClips;
+        if (audioInputs != null && audioInputs.size() != tracks.size()) {
+            throw new IllegalArgumentException("audio inputs mismatch");
         }
         if (target != null && !SUPPORTED_SIZES.containsValue(target)) {
             throw new IllegalArgumentException("不支持的成片尺寸：" + target.text());
@@ -401,6 +458,11 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 args.addAll(List.of("-f", "lavfi", "-t", Double.toString(clips.get(i).trimEnd() - clips.get(i).trimStart()),
                         "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"));
             }
+        }
+        // 音轨输入：追加在视频/静音输入之后，索引连续分配
+        for (Path audioInput : (audioInputs == null ? List.<Path>of() : audioInputs)) {
+            args.add("-i");
+            args.add(audioInput.toString());
         }
         StringBuilder filter = new StringBuilder();
         for (int i = 0; i < clips.size(); i++) {
@@ -424,8 +486,37 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         for (int i = 0; i < clips.size(); i++) {
             filter.append("[v").append(i).append("][a").append(i).append("]");
         }
-        filter.append("concat=n=").append(clips.size()).append(":v=1:a=1[v][a]");
-        args.addAll(List.of("-filter_complex", filter.toString(), "-map", "[v]", "-map", "[a]",
+        // 音频轨混入：每条 atrim 裁剪 → volume（muted 置 0）→ adelay 对齐成片内位置 → amix。
+        // duration=first 以视频拼接结果为准，超出成片尾部的音频被截断，与预览语义一致。
+        // 无音轨时 concat 直接产出 [v][a]（与旧版输出完全一致）；有音轨时产出 [v][a] 供 amix 引用。
+        String audioMap;
+        if (tracks.isEmpty()) {
+            filter.append("concat=n=").append(clips.size()).append(":v=1:a=1[v][a]");
+            audioMap = "[a]";
+        } else {
+            filter.append("concat=n=").append(clips.size()).append(":v=1:a=1[v][a]");
+            int base = silentInput;
+            for (int i = 0; i < tracks.size(); i++) {
+                AudioClip track = tracks.get(i);
+                long delayMs = Math.max(0, Math.round(track.start() * 1000));
+                filter.append("[").append(base + i).append(":a]atrim=start=").append(track.trimStart())
+                        .append(":end=").append(track.trimEnd())
+                        .append(",asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,volume=")
+                        .append(track.muted() ? "0" : track.volume());
+                if (delayMs > 0) {
+                    filter.append(",adelay=").append(delayMs).append("|").append(delayMs);
+                }
+                filter.append("[bg").append(i).append("]; ");
+            }
+            filter.append("[a]");
+            for (int i = 0; i < tracks.size(); i++) {
+                filter.append("[bg").append(i).append("]");
+            }
+            filter.append("amix=inputs=").append(tracks.size() + 1)
+                    .append(":duration=first:dropout_transition=0[aout]");
+            audioMap = "[aout]";
+        }
+        args.addAll(List.of("-filter_complex", filter.toString(), "-map", "[v]", "-map", audioMap,
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "48000",
                 "-ac", "2", "-movflags", "+faststart", output.toString()));
         return args;

@@ -35,8 +35,22 @@ public final class WorkflowGraphPlanner {
     public record Output(String name, String value) {
     }
 
+    /**
+     * localKey 非空 = 剪辑台本地导入素材：它不对应画布上的生成步骤，运行期直接按
+     * storageKey 读对象存储（并校验属于当前用户）。上游产物片段此字段恒为 null。
+     */
     public record Clip(String sourceNodeId, Integer outputIndex, int order,
-                       double trimStart, Double trimEnd, boolean muted, double volume) {
+                       double trimStart, Double trimEnd, boolean muted, double volume,
+                       String localKey) {
+    }
+
+    /**
+     * 音频轨片段（剪辑台 A1 混入成片）：start 是时间线上的绝对位置（秒），
+     * 后端据此 adelay 对齐混入点；storageKey 在运行期由上游产物解析，本地导入走 localKey。
+     */
+    public record AudioClip(String sourceNodeId, Integer outputIndex, double start,
+                            double trimStart, Double trimEnd, boolean muted, double volume,
+                            String localKey) {
     }
 
     private record ClipKey(String sourceNodeId, Integer outputIndex) {
@@ -65,6 +79,7 @@ public final class WorkflowGraphPlanner {
             String resolvedPrompt,
             List<Output> outputs,
             List<Clip> clips,
+            List<AudioClip> audioClips,
             Integer outputIndex,
             Map<String, Object> audio,
             String skipReason) {
@@ -267,6 +282,9 @@ public final class WorkflowGraphPlanner {
                 null,
                 outputs,
                 List.of(),
+                // 音频轨片段在解析期只做字段清洗；audioClips 的解析要读到上游音频节点的产物，
+                // 而产物在 run 推进后才落地，因此放 EDIT 分支的 withAudioResolved 处理
+                List.of(),
                 intValue(media.getOrDefault("selectedOutputIndex", media.get("outputIndex")), 0, 0, Integer.MAX_VALUE), audio,
                 skipReason);
     }
@@ -320,7 +338,7 @@ public final class WorkflowGraphPlanner {
                         String value = WorkflowVariables.resolve(output.value(), scopes(step, nodes, resolved, edges)).value();
                         outputs.add(new Output(output.name(), value));
                     }
-                    resolved.put(step.nodeId(), withResolved(step, null, List.copyOf(outputs), List.of()));
+                    resolved.put(step.nodeId(), withResolved(step, null, List.copyOf(outputs), List.of(), List.of()));
                 } else if ("GENERATE".equals(step.stepType())) {
                     // 提示词来源（需求：文本节点可连接任意生成节点作为提示词补充）：
                     // 1) 节点自填提示词为主；2) 上游文本节点的内容作为补充追加；
@@ -338,12 +356,13 @@ public final class WorkflowGraphPlanner {
                         throw new BizException("缺少提示词");
                     }
                     String value = WorkflowVariables.resolve(clip(prompt, 4096), scopes(step, nodes, resolved, edges)).value();
-                    resolved.put(step.nodeId(), withResolved(step, value, List.of(), List.of()));
+                    resolved.put(step.nodeId(), withResolved(step, value, List.of(), List.of(), List.of()));
                 } else if ("ASSET".equals(step.stepType())) {
                     resolved.put(step.nodeId(), step);
                 } else {
                     List<Clip> clips = editClips(step, data, selected);
-                    resolved.put(step.nodeId(), withResolved(step, null, List.of(), clips));
+                    List<AudioClip> audioClips = editAudioClips(data);
+                    resolved.put(step.nodeId(), withResolved(step, null, List.of(), clips, audioClips));
                 }
             } catch (BizException error) {
                 if (!lenient) {
@@ -463,24 +482,30 @@ public final class WorkflowGraphPlanner {
     private static List<Clip> editClips(Step step, Map<String, Object> data, Map<String, Step> selected) {
         List<String> videos = new ArrayList<>();
         visitVideos(step.nodeId(), selected, new LinkedHashSet<>(), videos);
-        if (videos.isEmpty()) {
+        List<Map<String, Object>> rawClips = mapList(map(data.get("editing")).get("clips"));
+        // 本地导入素材不依赖画布上游：只要草稿里有合法 localKey，纯导入时间线也能合成
+        boolean hasLocal = rawClips.stream().anyMatch(raw -> storageKey(text(raw.get("localKey"))));
+        if (videos.isEmpty() && !hasLocal) {
             throw new BizException("剪辑节点「" + step.title() + "」缺少上游视频生成节点");
         }
         List<Clip> clips = new ArrayList<>();
         Set<ClipKey> used = new LinkedHashSet<>();
         Set<String> disabled = new LinkedHashSet<>();
-        for (Map<String, Object> raw : mapList(map(data.get("editing")).get("clips"))) {
+        for (Map<String, Object> raw : rawClips) {
             String sourceId = text(raw.get("sourceNodeId"));
-            if (sourceId == null || !videos.contains(sourceId)) {
+            String localKey = text(raw.get("localKey"));
+            boolean local = storageKey(localKey);
+            if (local && sourceId == null) sourceId = "local";
+            if (!local && (sourceId == null || !videos.contains(sourceId))) {
                 continue;
             }
             // 片段启用开关（需求 4.2.5.3）：禁用片段不参与成片合成
             if (Boolean.FALSE.equals(raw.get("enabled"))) {
-                disabled.add(sourceId);
+                if (sourceId != null) disabled.add(sourceId);
                 continue;
             }
-            Integer outputIndex = intValue(raw.get("outputIndex"), selected.get(sourceId).outputIndex(),
-                    0, Integer.MAX_VALUE);
+            Integer outputIndex = intValue(raw.get("outputIndex"),
+                    local ? 0 : selected.get(sourceId).outputIndex(), 0, Integer.MAX_VALUE);
             if (!used.add(new ClipKey(sourceId, outputIndex))) {
                 continue;
             }
@@ -492,17 +517,22 @@ public final class WorkflowGraphPlanner {
             clips.add(new Clip(sourceId, outputIndex,
                     intValue(raw.get("order"), clips.size(), 0, Integer.MAX_VALUE),
                     trimStart, trimEnd, Boolean.TRUE.equals(raw.get("muted")),
-                    Math.max(0, Math.min(2, doubleValue(raw.get("volume"), 1.0)))));
+                    Math.max(0, Math.min(2, doubleValue(raw.get("volume"), 1.0))),
+                    local ? localKey : null));
         }
         clips.sort(Comparator.comparingInt(Clip::order));
-        for (String sourceId : videos) {
-            // 显式禁用的片段不再被自动补回，保证"禁用"在成片中真正生效
-            if (disabled.contains(sourceId)) {
-                continue;
-            }
-            Integer outputIndex = selected.get(sourceId).outputIndex();
-            if (used.stream().noneMatch(key -> key.sourceNodeId().equals(sourceId))) {
-                clips.add(new Clip(sourceId, outputIndex, clips.size(), 0, null, false, 1));
+        // 旧草稿没有 clips 字段时按默认参数补齐所有上游视频。时间线里一旦出现本地导入素材，
+        // 说明用户在显式编排，不再自动补上游，否则会混入时间线上根本没有的片段。
+        if (!hasLocal) {
+            for (String sourceId : videos) {
+                // 显式禁用的片段不再被自动补回，保证"禁用"在成片中真正生效
+                if (disabled.contains(sourceId)) {
+                    continue;
+                }
+                Integer outputIndex = selected.get(sourceId).outputIndex();
+                if (used.stream().noneMatch(key -> key.sourceNodeId().equals(sourceId))) {
+                    clips.add(new Clip(sourceId, outputIndex, clips.size(), 0, null, false, 1, null));
+                }
             }
         }
         if (clips.isEmpty()) {
@@ -517,6 +547,39 @@ public final class WorkflowGraphPlanner {
         if (source == null) return;
         for (String dep : source.dependsOn()) visitVideos(dep, selected, visited, videos);
         if ("VideoGenerator".equals(source.kind())) videos.add(id);
+    }
+
+    /**
+     * 音频轨片段解析（剪辑台 A1 → 成片混音）：读 data.editing.audioClips 原样清洗透传。
+     * 与视频 clips 不同：① 不校验 sourceId 是否在视频上游集合（音频源是 AudioGenerator，
+     * 不进 visitVideos）；② 非法条目静默丢弃而非抛错——音轨是增强项，不应阻断成片；
+     * ③ start 是时间线绝对位置，参与 adelay 对齐，必须 ≥0。
+     */
+    private static List<AudioClip> editAudioClips(Map<String, Object> data) {
+        List<AudioClip> audioClips = new ArrayList<>();
+        for (Map<String, Object> raw : mapList(map(data.get("editing")).get("audioClips"))) {
+            String sourceId = text(raw.get("sourceNodeId"));
+            String localKey = text(raw.get("localKey"));
+            boolean local = storageKey(localKey);
+            if (localKey != null && !local) continue; // 显式但非法的本地路径，静默丢弃
+            if (!local && sourceId == null) continue;
+            double start = doubleValue(raw.get("start"), 0.0);
+            double trimStart = doubleValue(raw.get("trimStart"), 0.0);
+            Double trimEnd = doubleValue(raw.get("trimEnd"), null);
+            if (!Double.isFinite(start) || start < 0
+                    || !Double.isFinite(trimStart) || trimStart < 0
+                    || (trimEnd != null && (!Double.isFinite(trimEnd) || trimEnd <= trimStart))) {
+                continue;
+            }
+            audioClips.add(new AudioClip(sourceId,
+                    intValue(raw.get("outputIndex"), 0, 0, Integer.MAX_VALUE),
+                    start, trimStart, trimEnd,
+                    Boolean.TRUE.equals(raw.get("muted")),
+                    Math.max(0, Math.min(2, doubleValue(raw.get("volume"), 1.0))),
+                    local ? localKey : null));
+        }
+        audioClips.sort(Comparator.comparingDouble(AudioClip::start));
+        return List.copyOf(audioClips);
     }
 
     private static Double doubleValue(Object value, Double fallback) {
@@ -561,12 +624,12 @@ public final class WorkflowGraphPlanner {
         return null;
     }
 
-    private static Step withResolved(Step step, String resolvedPrompt, List<Output> outputs, List<Clip> clips) {
+    private static Step withResolved(Step step, String resolvedPrompt, List<Output> outputs, List<Clip> clips, List<AudioClip> audioClips) {
         return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
-                step.stepType(), resolvedPrompt, outputs, clips, step.outputIndex(), step.audio(),
+                step.stepType(), resolvedPrompt, outputs, clips, audioClips, step.outputIndex(), step.audio(),
                 step.skipReason());
     }
 
@@ -576,7 +639,7 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
-                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(), step.outputIndex(),
                 step.audio(), reason);
     }
 
@@ -664,7 +727,7 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), List.copyOf(dependsOn), step.refs(),
-                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.outputIndex(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(), step.outputIndex(),
                 step.audio(), step.skipReason());
     }
 

@@ -396,6 +396,74 @@ class WorkflowGraphPlannerTest {
         assertEquals(List.of(0, 1), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
     }
 
+    @Test
+    void localImportedClipCanBePlannedWithoutUpstreamVideoGenerator() {
+        Map<String, Object> graph = graph(
+                List.of(editing("edit", List.of(Map.of(
+                        "sourceNodeId", "local:42", "outputIndex", 0, "order", 0,
+                        "trimStart", 0.5, "trimEnd", 4.5, "muted", false, "volume", 0.8,
+                        "enabled", true, "localKey", "users/7/assets/local.mp4")))),
+                List.of());
+
+        var steps = WorkflowGraphPlanner.plan(graph);
+
+        assertEquals(1, steps.size());
+        assertEquals("EDIT", steps.get(0).stepType());
+        assertEquals(1, steps.get(0).clips().size());
+        assertEquals("users/7/assets/local.mp4", steps.get(0).clips().get(0).localKey());
+        assertEquals("local:42", steps.get(0).clips().get(0).sourceNodeId());
+        assertEquals(0.5, steps.get(0).clips().get(0).trimStart());
+        assertEquals(4.5, steps.get(0).clips().get(0).trimEnd());
+    }
+
+    @Test
+    void localImportDisablesAutomaticUpstreamVideoBackfill() {
+        // 用户显式编排了导入素材时，不在时间线上的上游视频不应被自动补进成片
+        Map<String, Object> graph = graph(
+                List.of(generator("clip", "VideoGenerator", "奔跑"),
+                        editing("edit", List.of(Map.of(
+                                "sourceNodeId", "local:1", "outputIndex", 0, "order", 0,
+                                "trimStart", 0.0, "trimEnd", 3.0, "enabled", true,
+                                "localKey", "users/7/assets/i.mp4")))),
+                List.of(edge("clip", "edit")));
+
+        var steps = WorkflowGraphPlanner.plan(graph);
+        var edit = steps.stream().filter(item -> "EDIT".equals(item.stepType())).findFirst().orElseThrow();
+
+        assertEquals(1, edit.clips().size());
+        assertEquals("users/7/assets/i.mp4", edit.clips().get(0).localKey());
+        assertTrue(edit.clips().stream().noneMatch(item -> "clip".equals(item.sourceNodeId())));
+    }
+
+    @Test
+    void editWithoutUpstreamVideoOrLocalImportStillRejected() {
+        Map<String, Object> graph = graph(
+                List.of(editing("edit", List.of(Map.of("sourceNodeId", "ghost", "order", 0,
+                        "trimStart", 0.0, "trimEnd", 3.0, "enabled", true)))),
+                List.of());
+        BizException error = assertThrows(BizException.class, () -> WorkflowGraphPlanner.plan(graph));
+        assertTrue(error.getMessage().contains("缺少上游视频生成节点"));
+    }
+
+    @Test
+    void localImportedAudioClipKeepsLocalKeyAndStart() {
+        Map<String, Object> editNode = Map.of("id", "edit", "data", Map.of(
+                "kind", "VideoEditing", "title", "edit", "enabled", true,
+                "editing", Map.of(
+                        "clips", List.of(Map.of("sourceNodeId", "local:1", "outputIndex", 0, "order", 0,
+                                "trimStart", 0.0, "trimEnd", 3.0, "enabled", true,
+                                "localKey", "users/7/assets/i.mp4")),
+                        "audioClips", List.of(Map.of("sourceNodeId", "local:9", "outputIndex", 0,
+                                "start", 2.5, "trimStart", 0.0, "trimEnd", 4.0,
+                                "muted", false, "volume", 1.0,
+                                "localKey", "users/7/assets/voice.mp3")))));
+        var steps = WorkflowGraphPlanner.plan(graph(List.of(editNode), List.of()));
+
+        assertEquals(1, steps.get(0).audioClips().size());
+        assertEquals("users/7/assets/voice.mp3", steps.get(0).audioClips().get(0).localKey());
+        assertEquals(2.5, steps.get(0).audioClips().get(0).start());
+    }
+
     private static Map<String, Object> generator(String id, String kind, String prompt) {
         return generator(id, kind, prompt, Map.of());
     }
