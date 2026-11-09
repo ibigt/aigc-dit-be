@@ -236,6 +236,37 @@ class WorkflowGraphPlannerTest {
     }
 
     @Test
+    void sameSourceMultipleSegmentsAreAllKeptWhenClipIdPresent() {
+        // 同一上游节点的同一输出被拆成两段（不同裁剪区间）：
+        // 有 clipId 时两段都保留；按 (sourceNodeId, outputIndex) 去重会把它们合成一条，
+        // 导致导出成片只剩用户「选中」的那一段。
+        var steps = WorkflowGraphPlanner.plan(graph(
+                List.of(
+                        generator("a", "VideoGenerator", "a"),
+                        editing("edit", List.of(
+                                clip("c1", "a", 0, 0, 0.0, 5.0),
+                                clip("c2", "a", 0, 1, 5.0, 10.0)))),
+                List.of(edge("a", "edit"))));
+        var clips = steps.get(1).clips();
+        assertEquals(2, clips.size(), "同源同输出的两段都要保留");
+        assertEquals(List.of(0.0, 5.0), clips.stream().map(WorkflowGraphPlanner.Clip::trimStart).toList());
+        assertEquals(List.of(5.0, 10.0), clips.stream().map(WorkflowGraphPlanner.Clip::trimEnd).toList());
+    }
+
+    @Test
+    void legacyClipsWithoutClipIdStillDedupeBySourceAndOutput() {
+        // 旧草稿没有 clipId：保持原有去重口径（同源同输出只保留一条），不改变历史行为
+        var steps = WorkflowGraphPlanner.plan(graph(
+                List.of(
+                        generator("a", "VideoGenerator", "a"),
+                        editing("edit", List.of(
+                                clip(null, "a", 0, 0, 0.0, 5.0),
+                                clip(null, "a", 0, 1, 5.0, 10.0)))),
+                List.of(edge("a", "edit"))));
+        assertEquals(1, steps.get(1).clips().size());
+    }
+
+    @Test
     void directReferenceAssetsJoinRefsAfterEdgeStatics() {
         // 旧画布的素材节点连线引用在前，media.referenceAssets 直接附件在后，无效 key（无斜杠）丢弃
         var assetNode = Map.<String, Object>of("id", "ref", "data", Map.of(
@@ -484,6 +515,21 @@ class WorkflowGraphPlannerTest {
                 "kind", "MarkdownNote", "title", id, "enabled", true,
                 "fields", List.of(Map.of("label", "内容", "value", value)),
                 "variables", variables));
+    }
+
+    /** 剪辑片段配置：clipId 可为 null（模拟旧草稿没有该字段）。 */
+    private static Map<String, Object> clip(String clipId, String sourceId, int outputIndex,
+                                            int order, double trimStart, double trimEnd) {
+        Map<String, Object> clip = new java.util.LinkedHashMap<>();
+        if (clipId != null) {
+            clip.put("clipId", clipId);
+        }
+        clip.put("sourceNodeId", sourceId);
+        clip.put("outputIndex", outputIndex);
+        clip.put("order", order);
+        clip.put("trimStart", trimStart);
+        clip.put("trimEnd", trimEnd);
+        return clip;
     }
 
     private static Map<String, Object> editing(String id, List<Map<String, Object>> clips) {

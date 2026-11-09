@@ -64,6 +64,30 @@ public interface WorkflowFilmComposer {
         }
     }
 
+    /**
+     * 片段视觉样式（排期 #7 烧录）：调节 / 特效映射为该路输入的 ffmpeg 视频滤镜；
+     * 转场施加在本片段与右邻之间（xfade）。字段缺省（null / 0）= 无该效果，
+     * 全部缺省时 filter 输出与旧版逐字节一致。
+     */
+    record ClipStyle(Integer brightness, Integer contrast, Integer saturate,
+                     String effect, String transitionId, Double transitionSeconds) {
+
+        public static ClipStyle NONE = new ClipStyle(null, null, null, null, null, null);
+
+        public boolean isEmpty() {
+            return (brightness == null || brightness == 0)
+                    && (contrast == null || contrast == 0)
+                    && (saturate == null || saturate == 0)
+                    && effect == null && transitionId == null;
+        }
+    }
+
+    /** 叠加层片段（文字 / 图形轨）：成片内时间轴区间 + 渲染参数，Java2D 烧成 PNG 后 overlay。 */
+    record OverlayClip(double start, double end, String kind, String text,
+                       String color, double fontSize, int weight, String align,
+                       String shape, double x, double y, double scale, double opacity) {
+    }
+
     FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
 
     FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
@@ -78,6 +102,21 @@ public interface WorkflowFilmComposer {
     default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                      List<AudioClip> audioClips) {
         return findExisting(userId, runId, nodeId, clips, target);
+    }
+
+    /**
+     * 完整合成（排期 #7）：clips 带视觉样式、overlays 为文字/图形烧录层、audioClips 为 A1 混音。
+     * 任一为空/缺省时与低阶重载行为完全一致（filter 逐字节不变）。
+     */
+    default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                               List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
+        return compose(userId, runId, nodeId, clips, target, audioClips);
+    }
+
+    /** 完整复用探测：styles / overlays 同样参与指纹，样式或叠加层变更触发重合成。 */
+    default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                     List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
+        return findExisting(userId, runId, nodeId, clips, target, audioClips);
     }
 
     /** 兼容旧调用：无目标尺寸（历史默认 1280x720）。 */

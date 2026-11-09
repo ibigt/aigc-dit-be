@@ -459,9 +459,10 @@ public class WorkflowRunService {
                         target = null;
                     }
                     WorkflowFilmComposer.FilmOutput film = filmComposer.findExisting(run.getUserId(), run.getId(),
-                            nodeId, clips, target, audioClips);
+                            nodeId, clips, target, audioClips, editClipStyles(step, clips.size()), editOverlays(step));
                     if (film == null) {
-                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target, audioClips);
+                        film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target, audioClips,
+                                editClipStyles(step, clips.size()), editOverlays(step));
                     }
                     creationService.recordWorkflowFilm(run.getUserId(), run.getId(), text(step.get("nodeId")),
                             text(step.get("title")), film.storageKey(), film.posterKey(), film.durationSeconds());
@@ -1122,6 +1123,72 @@ public class WorkflowRunService {
      * ① 不做 VIDEO 硬校验（音频源本就是 audio 类型）；② 上游缺失/未成功时静默丢弃该条
      * 而非抛错——音轨是增强项，不应阻断成片合成；③ trimEnd 缺省兜底 metadata 时长。
      */
+    /**
+     * 片段视觉样式（排期 #7）：读 step 的 clipStyles（与 clips 同序）。
+     * 缺字段 / 长度不符时返回 null（= 无样式），合成器走旧链路，filter 与旧版逐字节一致。
+     */
+    private static List<WorkflowFilmComposer.ClipStyle> editClipStyles(Map<String, Object> step, int clipCount) {
+        if (!(step.get("clipStyles") instanceof List<?> raw) || raw.isEmpty()) {
+            return null;
+        }
+        List<WorkflowFilmComposer.ClipStyle> styles = new ArrayList<>();
+        for (int i = 0; i < clipCount; i++) {
+            Object item = i < raw.size() ? raw.get(i) : null;
+            if (!(item instanceof Map<?, ?> configured)) {
+                styles.add(WorkflowFilmComposer.ClipStyle.NONE);
+                continue;
+            }
+            styles.add(new WorkflowFilmComposer.ClipStyle(
+                    clampInt(configured.get("brightness"), -100, 100),
+                    clampInt(configured.get("contrast"), -100, 100),
+                    clampInt(configured.get("saturate"), -100, 100),
+                    text(configured.get("effect")),
+                    text(configured.get("transitionId")),
+                    doubleValue(configured.get("transitionSeconds"))));
+        }
+        return styles;
+    }
+
+    /**
+     * 叠加层（排期 #7）：读 step 的 overlays（文字 / 图形轨片段）。
+     * start/end 为成片内绝对时间；非法条目静默丢弃，不阻断成片。
+     */
+    private static List<WorkflowFilmComposer.OverlayClip> editOverlays(Map<String, Object> step) {
+        if (!(step.get("overlays") instanceof List<?> raw) || raw.isEmpty()) {
+            return List.of();
+        }
+        List<WorkflowFilmComposer.OverlayClip> overlays = new ArrayList<>();
+        for (Object item : raw) {
+            if (!(item instanceof Map<?, ?> configured)) {
+                continue;
+            }
+            String kind = text(configured.get("kind"));
+            if (!"text".equals(kind) && !"graphic".equals(kind)) {
+                continue;
+            }
+            Double start = doubleValue(configured.get("start"));
+            Double end = doubleValue(configured.get("end"));
+            if (start == null || end == null || start < 0 || end <= start) {
+                continue;
+            }
+            String content = text(configured.get("text"));
+            if ("text".equals(kind) && (content == null || content.isBlank())) {
+                continue;
+            }
+            overlays.add(new WorkflowFilmComposer.OverlayClip(start, end, kind, content,
+                    text(configured.get("color")),
+                    doubleOr(configured.get("fontSize"), 16.0),
+                    clampInt(configured.get("weight"), 100, 900),
+                    text(configured.get("align")),
+                    text(configured.get("shape")),
+                    doubleOr(configured.get("x"), 50.0),
+                    doubleOr(configured.get("y"), 50.0),
+                    doubleOr(configured.get("scale"), 100.0),
+                    doubleOr(configured.get("opacity"), 100.0)));
+        }
+        return overlays;
+    }
+
     private static List<WorkflowFilmComposer.AudioClip> editAudioClips(Map<String, Object> step,
                                                                         List<Map<String, Object>> steps,
                                                                         Long userId) {
@@ -1250,6 +1317,39 @@ public class WorkflowRunService {
             if (clip.localKey() != null) item.put("localKey", clip.localKey());
             return item;
         }).toList());
+        // 排期 #7：样式与叠加层参与运行指纹（改了调节/转场/文字要重合成）。
+        // null / 空列表时不写字段——step map 与旧版逐字节一致。
+        if (step.clipStyles() != null && !step.clipStyles().isEmpty()) {
+            map.put("clipStyles", step.clipStyles().stream().map(style -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("brightness", style.brightness());
+                item.put("contrast", style.contrast());
+                item.put("saturate", style.saturate());
+                item.put("effect", style.effect());
+                item.put("transitionId", style.transitionId());
+                item.put("transitionSeconds", style.transitionSeconds());
+                return item;
+            }).toList());
+        }
+        if (step.overlays() != null && !step.overlays().isEmpty()) {
+            map.put("overlays", step.overlays().stream().map(overlay -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("start", overlay.start());
+                item.put("end", overlay.end());
+                item.put("kind", overlay.kind());
+                item.put("text", overlay.text());
+                item.put("color", overlay.color());
+                item.put("fontSize", overlay.fontSize());
+                item.put("weight", overlay.weight());
+                item.put("align", overlay.align());
+                item.put("shape", overlay.shape());
+                item.put("x", overlay.x());
+                item.put("y", overlay.y());
+                item.put("scale", overlay.scale());
+                item.put("opacity", overlay.opacity());
+                return item;
+            }).toList());
+        }
         map.put("staticRefs", step.refs().stream().map(ref -> {
             Map<String, String> item = new LinkedHashMap<>();
             item.put("type", ref.type());
@@ -1582,5 +1682,18 @@ public class WorkflowRunService {
             return number.doubleValue();
         }
         return null;
+    }
+
+    /** 解析为 int 并钳制到区间；缺省回落 0（排期 #7 的样式参数用）。 */
+    private static int clampInt(Object value, int min, int max) {
+        Integer parsed = intValue(value);
+        int raw = parsed == null ? 0 : parsed;
+        return Math.max(min, Math.min(max, raw));
+    }
+
+    /** 无法解析时回落默认值（排期 #7 的叠加层几何参数用）。 */
+    private static double doubleOr(Object value, double fallback) {
+        Double parsed = doubleValue(value);
+        return parsed == null ? fallback : parsed;
     }
 }

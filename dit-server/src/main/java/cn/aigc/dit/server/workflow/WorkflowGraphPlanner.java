@@ -53,7 +53,18 @@ public final class WorkflowGraphPlanner {
                             String localKey) {
     }
 
-    private record ClipKey(String sourceNodeId, Integer outputIndex) {
+    /**
+     * 片段去重键。有 clipId 时按它去重——同一上游节点的同一输出可能被拆成多段
+     * （不同裁剪区间），按 (sourceNodeId, outputIndex) 去重会把它们合成一条，
+     * 导致「只导出了选中的那一段」。旧草稿没有 clipId 时回落到旧键。
+     */
+    private record ClipKey(String sourceNodeId, Integer outputIndex, String clipId) {
+
+        static ClipKey of(String sourceNodeId, Integer outputIndex, String clipId) {
+            return clipId != null && !clipId.isBlank()
+                    ? new ClipKey(sourceNodeId, outputIndex, clipId)
+                    : new ClipKey(sourceNodeId, outputIndex, null);
+        }
     }
 
     public record Step(
@@ -80,6 +91,8 @@ public final class WorkflowGraphPlanner {
             List<Output> outputs,
             List<Clip> clips,
             List<AudioClip> audioClips,
+            List<WorkflowFilmComposer.ClipStyle> clipStyles,
+            List<WorkflowFilmComposer.OverlayClip> overlays,
             Integer outputIndex,
             Map<String, Object> audio,
             String skipReason) {
@@ -285,6 +298,9 @@ public final class WorkflowGraphPlanner {
                 // 音频轨片段在解析期只做字段清洗；audioClips 的解析要读到上游音频节点的产物，
                 // 而产物在 run 推进后才落地，因此放 EDIT 分支的 withAudioResolved 处理
                 List.of(),
+                // 样式 / 叠加层（排期 #7）同样在 EDIT 分支解析（与 clips 对齐）
+                null,
+                null,
                 intValue(media.getOrDefault("selectedOutputIndex", media.get("outputIndex")), 0, 0, Integer.MAX_VALUE), audio,
                 skipReason);
     }
@@ -362,7 +378,13 @@ public final class WorkflowGraphPlanner {
                 } else {
                     List<Clip> clips = editClips(step, data, selected);
                     List<AudioClip> audioClips = editAudioClips(data);
-                    resolved.put(step.nodeId(), withResolved(step, null, List.of(), clips, audioClips));
+                    // 排期 #7：调节/特效/转场随 clips 逐条对齐；文字/图形轨独立解析为叠加层。
+                    // 有任何样式或叠加时才构建非空列表，否则保持 null——toStep 序列化时 null 不写字段，
+                    // step map 与旧版逐字节一致，运行指纹不漂移。
+                    List<WorkflowFilmComposer.ClipStyle> clipStyles = editClipStyles(data, clips.size());
+                    List<WorkflowFilmComposer.OverlayClip> overlays = editOverlays(data);
+                    resolved.put(step.nodeId(), withStyleResolved(
+                            withResolved(step, null, List.of(), clips, audioClips), clipStyles, overlays));
                 }
             } catch (BizException error) {
                 if (!lenient) {
@@ -506,7 +528,8 @@ public final class WorkflowGraphPlanner {
             }
             Integer outputIndex = intValue(raw.get("outputIndex"),
                     local ? 0 : selected.get(sourceId).outputIndex(), 0, Integer.MAX_VALUE);
-            if (!used.add(new ClipKey(sourceId, outputIndex))) {
+            // 去重优先用 clipId：同源同输出的多段（不同裁剪区间）必须都保留
+            if (!used.add(ClipKey.of(sourceId, outputIndex, text(raw.get("clipId"))))) {
                 continue;
             }
             double trimStart = doubleValue(raw.get("trimStart"), 0.0);
@@ -539,6 +562,74 @@ public final class WorkflowGraphPlanner {
             throw new BizException("剪辑节点「" + step.title() + "」的所有片段均已禁用，请至少启用一个片段");
         }
         return List.copyOf(clips);
+    }
+
+    /**
+     * 片段视觉样式解析（排期 #7）：读 data.editing.clipStyles（与 clips 同序的数组）。
+     * 只做字段清洗，任何非法条目按「无样式」处理，不阻断成片。
+     * 全部片段都无样式时返回 null——toStep 不写该字段，step map 与旧版逐字节一致。
+     */
+    private static List<WorkflowFilmComposer.ClipStyle> editClipStyles(Map<String, Object> data, int clipCount) {
+        List<Map<String, Object>> raw = mapList(map(data.get("editing")).get("clipStyles"));
+        if (raw.isEmpty()) return null;
+        List<WorkflowFilmComposer.ClipStyle> styles = new ArrayList<>();
+        boolean any = false;
+        for (int i = 0; i < clipCount; i++) {
+            Map<String, Object> item = i < raw.size() ? raw.get(i) : null;
+            WorkflowFilmComposer.ClipStyle style = parseStyle(item);
+            if (!style.isEmpty()) any = true;
+            styles.add(style);
+        }
+        return any ? List.copyOf(styles) : null;
+    }
+
+    private static WorkflowFilmComposer.ClipStyle parseStyle(Map<String, Object> raw) {
+        if (raw == null || raw.isEmpty()) return WorkflowFilmComposer.ClipStyle.NONE;
+        Integer brightness = intValue(raw.get("brightness"), 0, -100, 100);
+        Integer contrast = intValue(raw.get("contrast"), 0, -100, 100);
+        Integer saturate = intValue(raw.get("saturate"), 0, -100, 100);
+        String effect = text(raw.get("effect"));
+        if (effect != null && effect.isBlank()) effect = null;
+        String transitionId = text(raw.get("transitionId"));
+        if (transitionId != null && transitionId.isBlank()) transitionId = null;
+        Double transitionSeconds = doubleValue(raw.get("transitionSeconds"), null);
+        if (transitionSeconds != null && (!Double.isFinite(transitionSeconds) || transitionSeconds <= 0
+                || transitionSeconds > 5)) {
+            transitionSeconds = null;
+        }
+        return new WorkflowFilmComposer.ClipStyle(brightness, contrast, saturate, effect,
+                transitionId, transitionSeconds);
+    }
+
+    /**
+     * 叠加层解析（排期 #7）：读 data.editing.overlays（文字 / 图形轨的片段）。
+     * start/end 是成片内绝对时间（秒），end ≤ start 的条目静默丢弃。
+     * 空列表返回空 List（toStep 不写字段）。
+     */
+    private static List<WorkflowFilmComposer.OverlayClip> editOverlays(Map<String, Object> data) {
+        List<Map<String, Object>> raw = mapList(map(data.get("editing")).get("overlays"));
+        List<WorkflowFilmComposer.OverlayClip> overlays = new ArrayList<>();
+        for (Map<String, Object> item : raw) {
+            String kind = text(item.get("kind"));
+            if (!"text".equals(kind) && !"graphic".equals(kind)) continue;
+            double start = doubleValue(item.get("start"), 0.0);
+            double end = doubleValue(item.get("end"), 0.0);
+            if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end <= start) continue;
+            String text = text(item.get("text"));
+            if ("text".equals(kind) && (text == null || text.isBlank())) continue;
+            String color = text(item.get("color"));
+            double fontSize = doubleValue(item.get("fontSize"), 16.0);
+            int weight = intValue(item.get("weight"), 400, 100, 900);
+            String align = text(item.get("align"));
+            String shape = text(item.get("shape"));
+            double x = doubleValue(item.get("x"), 50.0);
+            double y = doubleValue(item.get("y"), 50.0);
+            double scale = doubleValue(item.get("scale"), 100.0);
+            double opacity = doubleValue(item.get("opacity"), 100.0);
+            overlays.add(new WorkflowFilmComposer.OverlayClip(start, end, kind, text,
+                    color, fontSize, weight, align, shape, x, y, scale, opacity));
+        }
+        return overlays.isEmpty() ? List.of() : List.copyOf(overlays);
     }
 
     private static void visitVideos(String id, Map<String, Step> selected, Set<String> visited, List<String> videos) {
@@ -629,8 +720,21 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
-                step.stepType(), resolvedPrompt, outputs, clips, audioClips, step.outputIndex(), step.audio(),
+                step.stepType(), resolvedPrompt, outputs, clips, audioClips,
+                step.clipStyles(), step.overlays(), step.outputIndex(), step.audio(),
                 step.skipReason());
+    }
+
+    /** 附加样式与叠加层（排期 #7）：两者都可为 null（= 无此效果），保持 step map 与旧版一致。 */
+    private static Step withStyleResolved(Step step,
+                                          List<WorkflowFilmComposer.ClipStyle> clipStyles,
+                                          List<WorkflowFilmComposer.OverlayClip> overlays) {
+        return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
+                step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
+                step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
+                step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
+                clipStyles, overlays, step.outputIndex(), step.audio(), step.skipReason());
     }
 
     /** 标记该步骤为「跳过」（需求 4.6.4.2）：保留原步骤信息，仅附跳过原因。 */
@@ -639,7 +743,8 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
-                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(), step.outputIndex(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
+                step.clipStyles(), step.overlays(), step.outputIndex(),
                 step.audio(), reason);
     }
 
@@ -727,7 +832,8 @@ public final class WorkflowGraphPlanner {
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), List.copyOf(dependsOn), step.refs(),
-                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(), step.outputIndex(),
+                step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
+                step.clipStyles(), step.overlays(), step.outputIndex(),
                 step.audio(), step.skipReason());
     }
 
