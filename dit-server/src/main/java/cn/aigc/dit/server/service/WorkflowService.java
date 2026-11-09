@@ -113,9 +113,53 @@ public class WorkflowService {
 
     public WorkflowResp update(Long id, WorkflowSaveReq req) {
         Workflow workflow = requireOwned(id);
+        Map<String, Object> previous = workflow.getGraph();
         apply(workflow, req);
+        // 节点级 outputs 是导入/模板工作流唯一的产物副本。旧标签页（改动前打开的画布）
+        // 自动保存时会带上「没有 outputs」的旧节点，直接落库会把产物永久抹掉。
+        // 客户端没带产物时沿用库里已有的，只有携带新产物才允许覆盖。
+        preserveCarriedOutputs(workflow.getGraph(), previous);
         workflowMapper.updateById(workflow);
         return toResp(workflow, true);
+    }
+
+    /** 只补空缺、不覆盖：客户端节点没有 outputs 且库里有时，沿用库里的本人产物。 */
+    private static void preserveCarriedOutputs(Map<String, Object> graph, Map<String, Object> previous) {
+        if (graph == null || previous == null || !(graph.get("nodes") instanceof List<?> nodes)
+                || !(previous.get("nodes") instanceof List<?> oldNodes)) return;
+        String prefix = "users/" + UserContext.requireUserId() + "/";
+        Map<String, List<Map<String, Object>>> owned = new LinkedHashMap<>();
+        for (Object raw : oldNodes) {
+            if (!(raw instanceof Map<?, ?> node) || !(node.get("outputs") instanceof List<?> outputs)
+                    || node.get("id") == null) continue;
+            List<Map<String, Object>> valid = new ArrayList<>();
+            for (Object item : outputs) {
+                if (!(item instanceof Map<?, ?> output)) continue;
+                Object key = output.get("storageKey");
+                if (key != null && String.valueOf(key).startsWith(prefix)) {
+                    Map<String, Object> copy = new LinkedHashMap<>();
+                    output.forEach((field, value) -> copy.put(String.valueOf(field), value));
+                    valid.add(copy);
+                }
+            }
+            if (!valid.isEmpty()) owned.put(String.valueOf(node.get("id")), valid);
+        }
+        if (owned.isEmpty()) return;
+        List<Map<String, Object>> merged = new ArrayList<>();
+        boolean changed = false;
+        for (Object raw : nodes) {
+            if (!(raw instanceof Map<?, ?> node)) continue;
+            Map<String, Object> copy = new LinkedHashMap<>();
+            node.forEach((field, value) -> copy.put(String.valueOf(field), value));
+            Object current = copy.get("outputs");
+            List<Map<String, Object>> carried = owned.get(String.valueOf(copy.get("id")));
+            if (carried != null && !(current instanceof List<?> list && !list.isEmpty())) {
+                copy.put("outputs", carried);
+                changed = true;
+            }
+            merged.add(copy);
+        }
+        if (changed) graph.put("nodes", merged);
     }
 
     public void delete(Long id) {

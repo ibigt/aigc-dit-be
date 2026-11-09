@@ -5,6 +5,7 @@ import cn.aigc.dit.common.security.UserContext;
 import cn.aigc.dit.server.entity.Workflow;
 import cn.aigc.dit.server.mapper.AiModelMapper;
 import cn.aigc.dit.server.mapper.WorkflowMapper;
+import cn.aigc.dit.server.model.req.WorkflowSaveReq;
 import cn.aigc.dit.server.model.resp.WorkflowResp;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -20,11 +21,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -183,5 +186,38 @@ class WorkflowTemplateServiceTest {
 
         assertNotNull(resp.getGraph());
         assertEquals("minimax-h3-i2v", resp.getTemplateCode());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void updateKeepsCarriedOutputsWhenStaleClientOmitsThemButAllowsFreshOverrides() {
+        Map<String, Object> carried = Map.of("type", "video", "storageKey", "users/7/outputs/2452/1.mp4");
+        Map<String, Object> foreign = Map.of("type", "video", "storageKey", "users/8/private.mp4");
+        Map<String, Object> fresh = Map.of("type", "video", "storageKey", "users/7/outputs/2600/1.mp4");
+        Workflow existing = new Workflow();
+        existing.setId(81L); existing.setUserId(7L); existing.setType("import");
+        existing.setGraph(new LinkedHashMap<>(Map.of("nodes", List.of(
+                Map.of("id", "v", "data", Map.of("kind", "VideoGenerator"), "outputs", List.of(carried)),
+                Map.of("id", "foreign", "data", Map.of("kind", "VideoGenerator"), "outputs", List.of(foreign)),
+                Map.of("id", "rerun", "data", Map.of("kind", "VideoGenerator"), "outputs", List.of(carried))),
+                "edges", List.of())));
+        when(workflowMapper.selectById(81L)).thenReturn(existing);
+
+        WorkflowSaveReq req = new WorkflowSaveReq();
+        req.setTitle("视频剪辑测试"); req.setType("import");
+        // 旧标签页只带空节点；rerun 节点带上了新一轮产物
+        req.setGraph(Map.of("nodes", List.of(
+                Map.of("id", "v", "data", Map.of("kind", "VideoGenerator")),
+                Map.of("id", "foreign", "data", Map.of("kind", "VideoGenerator")),
+                Map.of("id", "rerun", "data", Map.of("kind", "VideoGenerator"), "outputs", List.of(fresh))),
+                "edges", List.of()));
+        service.update(81L, req);
+
+        ArgumentCaptor<Workflow> captor = ArgumentCaptor.forClass(Workflow.class);
+        verify(workflowMapper).updateById(captor.capture());
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) captor.getValue().getGraph().get("nodes");
+        assertEquals(List.of(carried), nodes.get(0).get("outputs"), "旧标签页不能抹掉节点级产物");
+        assertNull(nodes.get(1).get("outputs"), "别人的私有对象不得回填");
+        assertEquals(List.of(fresh), nodes.get(2).get("outputs"), "客户端带来的新产物优先");
     }
 }

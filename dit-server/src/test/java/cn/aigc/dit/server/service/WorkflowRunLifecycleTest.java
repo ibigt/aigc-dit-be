@@ -368,6 +368,31 @@ class WorkflowRunLifecycleTest {
     }
 
     @Test
+    void snapshotRestoresGraphCarriedOutputsWhenOnlyUnrelatedNodesHaveRunHistory() throws Exception {
+        Harness h = new Harness();
+        var req = h.independentRequest("a", true);
+        var run = h.runs.start(req); h.succeedTasks(); h.runs.getMine(run.getId());
+
+        // 导入/模板工作流的产物只存在 graph 节点顶层 outputs，本地只跑过新加的配音节点。
+        Map<String, Object> imported = new LinkedHashMap<>(Harness.node("imported", "VideoGenerator", Map.of("prompt", "imported")));
+        imported.put("outputs", List.of(Map.of("type", "video", "storageKey", "users/7/imports/clip.mp4",
+                "metadata", Map.of("durationSec", 5))));
+        Map<String, Object> foreign = new LinkedHashMap<>(Harness.node("foreign", "VideoGenerator", Map.of("prompt", "foreign")));
+        foreign.put("outputs", List.of(Map.of("type", "video", "storageKey", "users/8/private.mp4")));
+        h.saved.setGraph(Map.of("nodes", List.of(
+                Harness.node("a", "VideoGenerator", Map.of("prompt", "changed")), imported, foreign),
+                "edges", List.of()));
+
+        JsonNode snapshot = snapshot(h);
+        assertEquals("SUCCEEDED", snapshotStep(snapshot, "imported").path("status").asText());
+        assertEquals("users/7/imports/clip.mp4",
+                snapshotStep(snapshot, "imported").path("outputs").get(0).path("storageKey").asText());
+        // 参数变了的历史节点、以及指向别人私有对象的产物都不该被回显
+        assertIdleSnapshotStep(snapshot, "a");
+        assertIdleSnapshotStep(snapshot, "foreign");
+    }
+
+    @Test
     void snapshotNeverExposesUnexecutedOrForeignUploadedRuntimeOutputs() throws Exception {
         Harness h = new Harness();
         var req = h.independentRequest("a", true);
