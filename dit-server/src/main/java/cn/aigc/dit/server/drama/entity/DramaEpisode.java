@@ -49,16 +49,27 @@ public class DramaEpisode {
     @TableField(updateStrategy = FieldStrategy.ALWAYS, typeHandler = JsonLongListTypeHandler.class)
     private List<Long> filmShotIds;
 
-    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    /** 分镜草稿锁：只能由 claim/release/fail 三条专用 SQL 写，稀疏更新不许碰它。 */
     private OffsetDateTime storyboardDraftingAt;
 
-    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    /**
+     * 分析锁的占用时间：前端用它算「已等待多久」，分析跑多久都不改。
+     * 只能由 claim/release/fail 三条专用 SQL 写，稀疏更新不许碰它。
+     */
     private OffsetDateTime scriptAnalyzingAt;
 
-    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    /**
+     * 分析心跳：分析期间每分钟续期一次。
+     *
+     * <p>{@code script_analyzing_at} 记的是开始时间（前端用它算已等待时长），
+     * 分析跑久了不能改它；是否「还在分析」改看这个心跳列，超过 15 分钟没续期才判过期。
+     */
+    private OffsetDateTime scriptAnalyzingHeartbeatAt;
+
+    /** 上一次分析失败的原因。只能由 claim/release/fail 三条专用 SQL 写。 */
     private String scriptAnalyzeError;
 
-    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    /** 分镜草稿失败的原因。只能由 claim/release/fail 三条专用 SQL 写。 */
     private String storyboardDraftError;
 
     @TableField(fill = FieldFill.INSERT)

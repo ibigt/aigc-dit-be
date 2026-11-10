@@ -718,8 +718,8 @@ public class DramaService {
             return;
         }
         OffsetDateTime now = OffsetDateTime.now();
-        boolean analyzing = episode.getScriptAnalyzingAt() != null
-                && episode.getScriptAnalyzingAt().isAfter(now.minus(DramaScriptAnalyzeLock.STALE_AFTER));
+        // 分析中看心跳（分析期间每分钟续期），没有心跳才退回开始时间。
+        boolean analyzing = DramaScriptAnalyzeLock.isActiveAt(episode, now);
         boolean drafting = episode.getStoryboardDraftingAt() != null
                 && episode.getStoryboardDraftingAt().isAfter(now.minus(DramaStoryboardDraftLock.STALE_AFTER));
         if (analyzing || drafting) {

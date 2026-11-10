@@ -157,6 +157,7 @@ public class FlywayConfig {
                     inherited_from_episode_id   BIGINT       REFERENCES drama_episode (id) ON DELETE SET NULL,
                     storyboard_drafting_at      TIMESTAMPTZ,
                     script_analyzing_at         TIMESTAMPTZ,
+                    script_analyzing_heartbeat_at TIMESTAMPTZ,
                     script_analyze_error        TEXT,
                     storyboard_draft_error      TEXT,
                     created_at                  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -164,7 +165,7 @@ public class FlywayConfig {
                     CONSTRAINT uq_drama_episode_series_num UNIQUE (series_id, episode_number),
                     CONSTRAINT ck_drama_episode_number CHECK (episode_number >= 1),
                     CONSTRAINT ck_drama_episode_status CHECK (status IN ('未开始', '待确认', '已锁定', '已过期')),
-                    CONSTRAINT ck_drama_episode_engine CHECK (engine IN ('pending', 'rules', 'llm'))
+                    CONSTRAINT ck_drama_episode_engine CHECK (engine IN ('pending', 'rules', 'llm', 'v2-agent'))
                 )
                 """);
         statement.execute("CREATE INDEX IF NOT EXISTS idx_drama_episode_series ON drama_episode (series_id, episode_number)");
@@ -211,7 +212,7 @@ public class FlywayConfig {
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.engine
-                IS '分场引擎：pending 尚未用文本模型成功解析；rules 仅兼容旧数据；llm 文本模型'
+                IS '分场引擎：pending 尚未用文本模型成功解析；rules 仅兼容旧数据；llm 文本模型；v2-agent 深度解析'
                 """);
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.script
@@ -548,6 +549,20 @@ public class FlywayConfig {
         statement.execute("""
                 COMMENT ON COLUMN drama_episode.script_analyzing_at
                 IS '正在一键分析剧本的开始时间；空表示空闲。超时视为僵死可重试'
+                """);
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD COLUMN IF NOT EXISTS script_analyzing_heartbeat_at TIMESTAMPTZ
+                """);
+        statement.execute("""
+                COMMENT ON COLUMN drama_episode.script_analyzing_heartbeat_at
+                IS '一键分析剧本的心跳；分析期间每分钟续期。超时视为僵死可重试'
+                """);
+        statement.execute("ALTER TABLE drama_episode DROP CONSTRAINT IF EXISTS ck_drama_episode_engine");
+        statement.execute("""
+                ALTER TABLE drama_episode
+                ADD CONSTRAINT ck_drama_episode_engine
+                CHECK (engine IN ('pending', 'rules', 'llm', 'v2-agent'))
                 """);
         statement.execute("""
                 ALTER TABLE drama_episode

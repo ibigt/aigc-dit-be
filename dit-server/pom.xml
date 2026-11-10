@@ -65,6 +65,11 @@
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
         </dependency>
+        <!-- 剧本 Prompt 本地缓存（ScriptPromptResolver 5 分钟 TTL），版本由 Spring Boot 3.2 管理 -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>com.github.xiaoymin</groupId>
