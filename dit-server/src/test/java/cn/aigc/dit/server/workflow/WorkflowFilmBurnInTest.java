@@ -175,6 +175,57 @@ class WorkflowFilmBurnInTest {
         assertTrue(command.contains("b.png"), command);
     }
 
+    /**
+     * 字号必须按成片宽度等比放大：前端字号预设是**预览器（.ce-monitor 宽 560px）上的 CSS px**，
+     * 直接把 16 画在 1920 宽成片上会小到预览的 1/3.4（用户报「字幕字号和预览不一致」）。
+     */
+    @Test
+    void fontSizeScalesWithOutputWidth() {
+        // 预览基准 560px 上的 16px → 1920 宽成片应为 16 * 1920/560 ≈ 54.9
+        assertEquals(55L, Math.round(OverlayRenderer.scaledFontSize(16, 1920)));
+        // 720p 成片：16 * 1280/560 ≈ 36.6
+        assertEquals(37L, Math.round(OverlayRenderer.scaledFontSize(16, 1280)));
+        // 竖屏 1080 宽（画幅 9:16 时 width 也是 1080）
+        assertEquals(31L, Math.round(OverlayRenderer.scaledFontSize(16, 1080)));
+        // 预览基准宽度上保持原值，不放大也不缩小
+        assertEquals(16L, Math.round(OverlayRenderer.scaledFontSize(16, 560)));
+        // 缺省字号按 16 处理
+        assertEquals(55L, Math.round(OverlayRenderer.scaledFontSize(0, 1920)));
+        // 标题预设 32px 也同比放大
+        assertEquals(110L, Math.round(OverlayRenderer.scaledFontSize(32, 1920)));
+        // 上下限在预览基准上钳制后再放大，与前端 input min=8 / max=120 同口径
+        assertEquals(Math.round(8 * 1920 / 560.0), Math.round(OverlayRenderer.scaledFontSize(1, 1920)));
+        assertEquals(Math.round(120 * 1920 / 560.0), Math.round(OverlayRenderer.scaledFontSize(999, 1920)));
+    }
+
+    /** 真实 PNG 上的文字像素高度也必须随画幅放大，而不只是纯函数返回了更大的数。 */
+    @Test
+    void renderedTextHeightScalesWithOutputWidth() throws Exception {
+        OverlayRenderer.Overlay text = new OverlayRenderer.Overlay(
+                "text", 0, 2, "字幕", "#ffffff", 32, 700, "center", null, 0, 0, 0, 100);
+        int small = textPixelHeight(OverlayRenderer.renderPng(List.of(text), 560, 315));
+        int large = textPixelHeight(OverlayRenderer.renderPng(List.of(text), 1120, 630));
+        assertTrue(small > 8, "预览基准画幅应能渲染出可见文字，实际=" + small);
+        assertTrue(large >= small * 2 - 4 && large <= small * 2 + 4,
+                "画幅宽度翻倍时文字像素高度应约翻倍，small=" + small + " large=" + large);
+    }
+
+    private static int textPixelHeight(byte[] png) throws Exception {
+        java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(png));
+        assertNotNull(image);
+        int minY = image.getHeight();
+        int maxY = -1;
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                if ((image.getRGB(x, y) >>> 24) != 0) {
+                    minY = Math.min(minY, y);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+        }
+        return maxY < 0 ? 0 : maxY - minY + 1;
+    }
+
     @Test
     void overlayRendererProducesPngWithExpectedSize() {
         byte[] png = OverlayRenderer.renderPng(

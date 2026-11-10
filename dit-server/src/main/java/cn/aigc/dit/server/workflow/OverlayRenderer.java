@@ -38,8 +38,32 @@ final class OverlayRenderer {
                    String shape, double x, double y, double scale, double opacity) {
     }
 
-    /** 与前端 textStyle 预设对齐的字号（px @720p 基准）上限，防止巨型文字打爆画布。 */
-    static final double MAX_FONT_SIZE = 96;
+    /** 与前端「文字样式」面板输入范围（min=8 / max=120）对齐的字号上下限，单位仍是预览基准 CSS px。 */
+    static final double MIN_FONT_SIZE = 8;
+    static final double MAX_FONT_SIZE = 120;
+
+    /**
+     * 预览基准宽度：前端 .ce-monitor 宽 min(78%, 560px)，字号预设（默认 16 / 标题 32 /
+     * 字幕 18 / 注释 13）与用户手填字号都是**这个预览器上的 CSS px**。烧录到 1920 宽成片时
+     * 必须按「成片宽 ÷ 预览基准宽」等比放大，否则 16px 的字在成片上只有预览里的 1/3.4 大小
+     * ——用户看到「字幕字号和预览不一致」。基准取 560px（预览器上限宽度）。
+     *
+     * <p>预览器实际宽度会随容器高度收缩，这里取设计基准值做等比换算，保证「字宽 / 画幅宽」
+     * 的视觉占比一致，而非追求与某一时刻的预览器像素级相等。
+     */
+    static final double PREVIEW_BASE_WIDTH = 560;
+
+    /** 缺省字号（与前端 Number(style.fontSize) || 16 一致）。 */
+    static final double DEFAULT_FONT_SIZE = 16;
+
+    /**
+     * 字号换算：预览 CSS px → 成片实际 px（按宽度等比）。上下限先在预览基准上钳制，
+     * 再随画幅一起放大，保证任意分辨率下视觉占比一致，也防止巨型文字打爆画布。
+     */
+    static double scaledFontSize(double previewPx, int width) {
+        double base = clamp(previewPx <= 0 ? DEFAULT_FONT_SIZE : previewPx, MIN_FONT_SIZE, MAX_FONT_SIZE);
+        return Math.max(1, base * width / PREVIEW_BASE_WIDTH);
+    }
 
     static byte[] renderPng(List<Overlay> overlays, int width, int height) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
@@ -82,7 +106,8 @@ final class OverlayRenderer {
     private static void drawText(Graphics2D g, Overlay overlay, int width, int height) {
         String text = overlay.text() == null ? "" : overlay.text();
         if (text.isBlank()) return;
-        double size = clamp(overlay.fontSize() <= 0 ? 16 : overlay.fontSize(), 8, MAX_FONT_SIZE);
+        // 字号按成片宽度等比放大（预览 CSS px → 成片 px），与前端预览同口径
+        double size = scaledFontSize(overlay.fontSize(), width);
         int style = overlay.weight() >= 700 ? Font.BOLD : Font.PLAIN;
         Font font = new Font(Font.SANS_SERIF, style, (int) Math.round(size));
         g.setFont(font);
