@@ -649,6 +649,12 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 index++;
             }
             if (index > 0) {
+                // amix / xfade 分支结尾的 [aout]（或 [a]）后面没有分号，直接接 overlay 链会拼成
+                // 「[aout][v][3:v]overlay=…」一句导致 filtergraph 解析失败（Trailing garbage after a filter）。
+                // 拼接前确保前文以 "; " 收尾；分号结尾对 ffmpeg 恒安全。
+                if (filter.length() > 0 && !filter.toString().endsWith("; ")) {
+                    filter.append("; ");
+                }
                 filter.append(chain);
                 videoMap = current;
             }

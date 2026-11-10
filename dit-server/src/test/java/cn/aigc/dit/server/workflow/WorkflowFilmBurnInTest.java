@@ -132,6 +132,27 @@ class WorkflowFilmBurnInTest {
     }
 
     /**
+     * 音轨 amix 分支结尾的 [aout] 后面没有分号，直接接 overlay 链会拼成
+     * 「[aout][v][1:v]overlay=…」一句，ffmpeg 报 Trailing garbage after a filter（14.48 实测）。
+     * 拼接 overlay 链前必须确保前文以 "; " 收尾。
+     */
+    @Test
+    void overlayChainAfterAmixMustBeSeparatedBySemicolon() {
+        List<String> args = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")), List.of(CLIP), List.of(true), null, Path.of("out.mp4"),
+                List.of(new WorkflowFilmComposer.AudioClip("a.mp3", 0, 0, 3, false, 1)),
+                List.of(Path.of("a.mp3")), null, Path.of("overlay.png"),
+                List.of(new WorkflowFilmComposer.OverlayClip(0, 5, "text", "字幕", "#ffffff", 16, 400, "center",
+                        null, 0, 0, 0, 0)));
+        String command = String.join(" ", args);
+        assertTrue(command.contains("amix=inputs=2"), "前提：有音轨 amix 分支：" + command);
+        // [aout] 之后必须紧跟分号，再接 overlay 链；连写 [aout][v] 会解析失败
+        assertTrue(command.contains("[aout]; ") && command.contains("overlay="),
+                "amix 结尾与 overlay 链之间必须有 '; ' 分隔：" + command);
+        assertFalse(command.contains("[aout][v]"), "amix 输出不能与视频流连写成一句：" + command);
+    }
+
+    /**
      * 多段叠加必须各用一张 PNG：挤在同一张图里时各段的时间窗会互相串
      * （同一张图里所有文字都在，只是按不同 enable 区间显示）。
      */
