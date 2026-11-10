@@ -426,12 +426,16 @@ public class GenerateWorker {
             resolvePendingRoundtripDescribe(task, model);
             // 可能已在图生文阶段刷新 prompt/params，重新装载
             task = genTaskMapper.selectById(taskId);
-            if (task == null) {
+            if (leaveBeforeSubmit(task)) {
                 return;
             }
             // 调用官方 Seedance 之前完成定妆绑定。失败则本镜不出片，原图不会送出去。
             if (seedreamShotBindService != null) {
                 seedreamShotBindService.prepare(task, model);
+            }
+            task = genTaskMapper.selectById(taskId);
+            if (leaveBeforeSubmit(task)) {
+                return;
             }
             GenerateRequest request = GenerateRequests.fromTask(task, modelKey);
             GenerateProvider provider = bindAndResolve(task, model, request);
@@ -440,13 +444,31 @@ public class GenerateWorker {
             if (task.getStartedAt() == null) {
                 task.setStartedAt(OffsetDateTime.now());
             }
+            task.setUpdatedAt(OffsetDateTime.now());
             genTaskMapper.updateById(task);
             SubmitResult submitted = provider.submit(request);
-            task.setProviderJobId(submitted.getJobId());
-            genTaskMapper.updateById(task);
+            GenTask latest = genTaskMapper.selectById(taskId);
+            if (latest == null
+                    || TaskStatus.CANCELLED.equals(latest.getStatus())
+                    || TaskStatus.FAILED.equals(latest.getStatus())
+                    || TaskStatus.SUCCEEDED.equals(latest.getStatus())) {
+                log.info("generate task {} status={} after submit, keep that status",
+                        taskId, latest == null ? "missing" : latest.getStatus());
+                if (latest != null && TaskStatus.CANCELLED.equals(latest.getStatus())) {
+                    cancelSubmittedJob(provider, submitted.getJobId(), taskId);
+                }
+                return;
+            }
+            if (StringUtils.hasText(latest.getProviderJobId())) {
+                log.info("generate task {} keep provider job {}", taskId, latest.getProviderJobId());
+                return;
+            }
+            latest.setProviderJobId(submitted.getJobId());
+            latest.setUpdatedAt(OffsetDateTime.now());
+            genTaskMapper.updateById(latest);
             PollResult result = provider.poll(submitted.getJobId());
             updateProgress(submitted.getJobId(), result);
-            applyPollResult(task, request, result);
+            applyPollResult(latest, request, result);
         } catch (Exception e) {
             String message = e.getMessage() == null ? "生成失败" : e.getMessage();
             if (!StringUtils.hasText(task.getProviderJobId()) && isRetryableSubmitError(message)) {
@@ -460,6 +482,35 @@ public class GenerateWorker {
             if (ark) {
                 arkSubmitting.set(false);
             }
+        }
+    }
+
+    /** 定妆或提交耗时期间任务已结束，或已经有方舟单号时，不再提交。 */
+    private boolean leaveBeforeSubmit(GenTask task) {
+        if (task == null) {
+            return true;
+        }
+        if (TaskStatus.SUCCEEDED.equals(task.getStatus())
+                || TaskStatus.FAILED.equals(task.getStatus())
+                || TaskStatus.CANCELLED.equals(task.getStatus())) {
+            log.info("generate task {} status={} before submit, stop", task.getId(), task.getStatus());
+            return true;
+        }
+        if (StringUtils.hasText(task.getProviderJobId())) {
+            log.info("generate task {} already submitted as {}", task.getId(), task.getProviderJobId());
+            return true;
+        }
+        return false;
+    }
+
+    private void cancelSubmittedJob(GenerateProvider provider, String jobId, Long taskId) {
+        if (provider == null || !StringUtils.hasText(jobId)) {
+            return;
+        }
+        try {
+            provider.cancel(jobId);
+        } catch (Exception e) {
+            log.warn("cancel provider job {} for task {} failed: {}", jobId, taskId, e.getMessage());
         }
     }
 

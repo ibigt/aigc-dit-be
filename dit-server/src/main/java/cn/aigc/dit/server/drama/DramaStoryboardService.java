@@ -1140,10 +1140,16 @@ public class DramaStoryboardService {
     }
 
     private DramaShotGenerateResp doGenerateShot(Long shotId, boolean forceR2v) {
-        DramaShot shot = requireShot(shotId);
+        DramaShot shot = lockShot(shotId);
         requireNotDrafting(shot.getEpisodeId());
         requireNotRecompiling(shot);
         DramaSeries series = requireOwnedSeries(shot.getSeriesId());
+        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
+        String prefix = stylePrefixOf(series);
+        DramaShotGenerateResp inFlight = reuseInFlightShot(shot, assets, prefix);
+        if (inFlight != null) {
+            return inFlight;
+        }
         String mode = forceR2v
                 ? DramaVideoGenerateModes.R2V
                 : modeForSingleGenerate(series, shot);
@@ -1152,8 +1158,6 @@ public class DramaStoryboardService {
         }
         boolean i2v = DramaVideoGenerateModes.isI2v(mode);
         AiModel model = requireBoundVideoModel(series, mode);
-        Map<Long, DramaAsset> assets = assetsById(shot.getEpisodeId());
-        String prefix = stylePrefixOf(series);
         if (i2v && !StringUtils.hasText(shot.getFirstFrameKey())) {
             throw new BizException(ErrorCode.BAD_REQUEST, "请先设置首帧");
         }
@@ -1306,9 +1310,6 @@ public class DramaStoryboardService {
         String prefix = stylePrefix(shot.getSeriesId());
         if (GenerateRequests.isOpeningStill(task.getParams())) {
             return continueOpeningStill(shot, task, assets, prefix);
-        }
-        if (shot.getGenTaskId() != null && !shot.getGenTaskId().equals(taskId)) {
-            task = generateService.getMine(shot.getGenTaskId());
         }
         applyTaskResult(shot, task);
         return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix, task);
@@ -3464,6 +3465,26 @@ public class DramaStoryboardService {
             throw new BizException(ErrorCode.NOT_FOUND, "分镜不存在");
         }
         return shot;
+    }
+
+    /** 出片全程锁住这一镜，避免第二次点击在定妆完成前再插入一条任务。 */
+    private DramaShot lockShot(Long id) {
+        shotMapper.lockById(id);
+        return requireShot(id);
+    }
+
+    /**
+     * 定妆和出片期间再点生成，继续同一次任务。待处理也算进行中，图生文阶段状态仍是待处理。
+     */
+    private DramaShotGenerateResp reuseInFlightShot(
+            DramaShot shot, Map<Long, DramaAsset> assets, String prefix) {
+        GenTask current = loadTask(shot.getGenTaskId());
+        if (!isActiveGenerateTask(current)) {
+            return null;
+        }
+        log.info("drama generate shot {} reuses in-flight task {}", shot.getId(), current.getId());
+        return toGenerateResp(shot, chapterOf(shot.getChapterId()), assets, prefix,
+                generateService.getMine(current.getId()));
     }
 
     private DramaSeries requireOwnedSeries(Long id) {

@@ -74,6 +74,21 @@ class GenerateWorkerCancelTest {
     }
 
     @Test
+    void processLockedStopsWhenTaskIsCancelledDuringPrepare() {
+        GenTask pending = new GenTask();
+        pending.setId(8L);
+        pending.setUserId(2L);
+        pending.setStatus(TaskStatus.PENDING);
+        pending.setParams(new java.util.LinkedHashMap<>());
+        when(genTaskMapper.selectById(8L)).thenReturn(pending, cancelledTask());
+
+        ReflectionTestUtils.invokeMethod(worker, "processLocked", 8L);
+
+        verify(providerRegistry, never()).resolveByAdapter(any(), any(), any(), any());
+        verify(genTaskMapper, never()).updateById(any(GenTask.class));
+    }
+
+    @Test
     void processLockedSkipsCancelledTask() {
         when(genTaskMapper.selectById(8L)).thenReturn(cancelledTask());
 

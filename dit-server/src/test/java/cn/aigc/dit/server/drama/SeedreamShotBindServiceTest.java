@@ -235,7 +235,7 @@ class SeedreamShotBindServiceTest {
     }
 
     @Test
-    void skipsWhenSeedreamIsDisabledEvenIfBindExists() {
+    void failsWhenSeedreamIsDisabledSoOriginalIsNotSent() {
         stubSeries(DramaStyles.LIVE_REALISM);
         when(dramaAssetService.resolveSeedreamConvertCatalogModel())
                 .thenThrow(new BizException(ErrorCode.BAD_REQUEST, "转资产图需要管理端启用官方 Seedream 5.0 模型"));
@@ -244,8 +244,10 @@ class SeedreamShotBindServiceTest {
         storage.put(SeedreamCharacterBinds.imageKey(ORIGINAL), new byte[]{9}, "image/png");
         GenTask task = shot("seedance-2.0", "r2v");
 
-        service.prepare(task, officialModel("seedance-2.0"));
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> service.prepare(task, officialModel("seedance-2.0")));
 
+        assertTrue(error.getMessage().contains("不能把角色原图送去出片"));
         assertEquals(ORIGINAL, refKey(task, 0));
         verify(seedream, never()).writeTextToImage(any(), any());
         assertTrue(storage.deleted.isEmpty());
