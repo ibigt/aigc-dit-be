@@ -99,8 +99,11 @@ public class SeedreamShotBindService {
         }
         Set<String> characterKeys = characterImageKeys(task.getUserId(), longVal(params.get("episodeId")));
         List<String> targets = characterImageRefs(params.get("references"), characterKeys);
-        if (targets.isEmpty() || !seedreamEnabled()) {
+        if (targets.isEmpty()) {
             return;
+        }
+        if (!seedreamEnabled()) {
+            throw new IllegalStateException("角色定妆图生成失败：未启用 Seedream 5.0，不能把角色原图送去出片");
         }
         Map<String, String> resolved = new LinkedHashMap<>();
         for (String key : targets) {

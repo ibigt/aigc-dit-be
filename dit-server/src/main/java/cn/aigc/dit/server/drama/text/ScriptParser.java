@@ -21,6 +21,13 @@ public final class ScriptParser {
 
     private static final Pattern SCENE_START = Pattern.compile(
             "^\\s*(?:第\\s*[0-9一二三四五六七八九十]{1,4}\\s*场|场\\s*[0-9]{1,3})\\s*(.*)$");
+    /**
+     * 方括号场标记：【场景 1：紫禁城，冷宫，深夜】【第1场 幻梦侦探社】【场 2 …】。
+     * 只给 v2 的 {@link #detectSceneMarkers} 用；现有 {@link #parse} 仍只认 {@link #SCENE_START}。
+     */
+    private static final Pattern SCENE_START_BRACKET = Pattern.compile(
+            "^\\s*【\\s*(?:场景|场|第\\s*[0-9一二三四五六七八九十]{1,4}\\s*场)"
+                    + "\\s*[0-9一二三四五六七八九十]{0,4}\\s*[：:、.．]?\\s*(.*?)\\s*】\\s*$");
     private static final Pattern DIALOGUE = Pattern.compile(
             "^\\s*([^：:\\s()（）「」『』\"]{1,12})\\s*[：:]\\s*(.+)$");
     private static final Pattern SEPARATOR = Pattern.compile("^[-=_—─\\s]*$");
@@ -76,6 +83,116 @@ public final class ScriptParser {
             return header;
         }
         return header + "\n\n" + body;
+    }
+
+    /**
+     * 原文里显式写出的场次锚点。
+     *
+     * @param index   按出现顺序的场次序号（从 1 起）
+     * @param heading 场次标题原文（可能是空串）
+     */
+    public record SceneMarker(int index, String heading) {
+    }
+
+    /**
+     * 识别原文里显式写出的场次标记，按出现顺序返回锚点。
+     *
+     * <p>v2 用它按原文场次切场。现有规则解析入口不调用本方法。
+     */
+    public static List<SceneMarker> detectSceneMarkers(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return List.of();
+        }
+        List<SceneMarker> markers = new ArrayList<>();
+        for (String line : raw.replace("\r\n", "\n").replace('\r', '\n').split("\n")) {
+            String heading = sceneHeading(line);
+            if (heading != null) {
+                markers.add(new SceneMarker(markers.size() + 1, heading));
+            }
+        }
+        return markers;
+    }
+
+    /** 场标记行的标题；不是场标记行时返回 null（标题本身可以是空串）。 */
+    private static String sceneHeading(String line) {
+        if (line == null) {
+            return null;
+        }
+        String text = line.strip();
+        Matcher plain = SCENE_START.matcher(text);
+        if (plain.matches()) {
+            return plain.group(1).strip();
+        }
+        Matcher bracket = SCENE_START_BRACKET.matcher(text);
+        if (bracket.matches()) {
+            return bracket.group(1).strip();
+        }
+        return null;
+    }
+
+    /**
+     * 场次标题里指明的那处地点。
+     *
+     * <p>【场景 1：紫禁城，冷宫，深夜】→ 冷宫；【第一场 幻梦侦探社 日 内】→ 幻梦侦探社；
+     * 判断不出来时返回空串。只给 v2 场次校验用，现有 {@link #parse} 不调用。
+     */
+    public static String headingPlace(String heading) {
+        if (!StringUtils.hasText(heading)) {
+            return "";
+        }
+        List<String> parts = splitHeadingParts(heading);
+        if (parts.size() > 1) {
+            List<String> places = new ArrayList<>();
+            for (String part : parts) {
+                if (!containsTimeWord(part)) {
+                    places.add(part);
+                }
+            }
+            return places.isEmpty() ? "" : places.get(places.size() - 1).strip();
+        }
+        List<String> rest = new ArrayList<>();
+        for (String token : parts.get(0).split("[\\s/、·／]+")) {
+            String word = token.strip();
+            if (!StringUtils.hasText(word) || isInteriorWord(word) || TIME_WORDS.contains(word)) {
+                continue;
+            }
+            rest.add(word);
+        }
+        return rest.isEmpty() ? "" : String.join(" ", rest);
+    }
+
+    private static boolean isInteriorWord(String word) {
+        return "内".equals(word) || "内景".equals(word) || "室内".equals(word)
+                || "外".equals(word) || "外景".equals(word) || "室外".equals(word);
+    }
+
+    private static List<String> splitHeadingParts(String heading) {
+        List<String> parts = new ArrayList<>();
+        for (String part : heading.split("[，,、]")) {
+            String text = part.strip();
+            if (StringUtils.hasText(text)) {
+                parts.add(text);
+            }
+        }
+        if (parts.isEmpty()) {
+            parts.add(heading.strip());
+        }
+        return parts;
+    }
+
+    private static boolean containsTimeWord(String part) {
+        String text = part.strip();
+        for (String word : TIME_WORDS) {
+            if (text.equals(word) || text.startsWith(word + "（") || text.startsWith(word + "(")) {
+                return true;
+            }
+        }
+        for (String token : text.split("[\\s/·／]+")) {
+            if (TIME_WORDS.contains(token.strip())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static ScriptDoc parse(String raw) {

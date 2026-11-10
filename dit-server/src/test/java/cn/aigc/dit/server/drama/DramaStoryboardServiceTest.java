@@ -1682,42 +1682,7 @@ class DramaStoryboardServiceTest {
     }
 
     @Test
-    void generateDoesNotReuseInFlightTaskFromAnotherModel() {
-        DramaChapter chapter = pendingChapter();
-        storedChapters.add(chapter);
-        DramaShot shot = pendingShot();
-        shot.setChapterId(chapter.getId());
-        shot.setGenTaskId(400L);
-        storedShots.add(shot);
-        when(assetMapper.selectList(any())).thenReturn(List.of(
-                lockedAsset(1L, "洛白", DramaContract.ASSET_TYPE_CHARACTER),
-                lockedAsset(5L, "幻梦侦探社", DramaContract.ASSET_TYPE_SCENE)));
-        DramaSeries series = ownedSeries();
-        series.setVideoModelId(88L);
-        when(seriesMapper.selectById(21L)).thenReturn(series);
-        when(aiModelMapper.selectById(88L)).thenReturn(r2vModel());
-        GenTask stale = new GenTask();
-        stale.setId(400L);
-        stale.setModelId(7L);
-        stale.setStatus(TaskStatus.RUNNING);
-        stale.setErrorMessage("Agnes 查询 HTTP 404");
-        when(genTaskMapper.selectById(400L)).thenReturn(stale);
-        GenerateTaskResp fresh = new GenerateTaskResp();
-        fresh.setId(502L);
-        fresh.setModelId(88L);
-        fresh.setStatus("PENDING");
-        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(fresh);
-
-        DramaShotGenerateResp resp = service.generateShot(201L);
-
-        verify(generateService).submit(any(GenerateSubmitReq.class), any());
-        assertEquals(TaskStatus.CANCELLED, stale.getStatus());
-        assertEquals(502L, shot.getGenTaskId());
-        assertEquals(502L, resp.getTask().getId());
-    }
-
-    @Test
-    void generateAbandonsInFlightTaskAndSubmitsNew() {
+    void generateReusesInFlightTaskInsteadOfSubmittingAgain() {
         DramaChapter chapter = pendingChapter();
         storedChapters.add(chapter);
         DramaShot shot = pendingShot();
@@ -1734,20 +1699,21 @@ class DramaStoryboardServiceTest {
         GenTask existing = new GenTask();
         existing.setId(400L);
         existing.setModelId(88L);
-        existing.setStatus(TaskStatus.RUNNING);
+        existing.setStatus(TaskStatus.PENDING);
         when(genTaskMapper.selectById(400L)).thenReturn(existing);
-        GenerateTaskResp fresh = new GenerateTaskResp();
-        fresh.setId(503L);
-        fresh.setModelId(88L);
-        fresh.setStatus("PENDING");
-        when(generateService.submit(any(GenerateSubmitReq.class), any())).thenReturn(fresh);
+        GenerateTaskResp current = new GenerateTaskResp();
+        current.setId(400L);
+        current.setModelId(88L);
+        current.setStatus(TaskStatus.PENDING);
+        when(generateService.getMine(400L)).thenReturn(current);
 
         DramaShotGenerateResp resp = service.generateShot(201L);
 
-        verify(generateService).submit(any(GenerateSubmitReq.class), any());
-        assertEquals(TaskStatus.CANCELLED, existing.getStatus());
-        assertEquals(503L, resp.getTask().getId());
-        assertEquals(503L, shot.getGenTaskId());
+        verify(generateService, never()).submit(any(GenerateSubmitReq.class), any());
+        assertEquals(TaskStatus.PENDING, existing.getStatus());
+        assertEquals(400L, shot.getGenTaskId());
+        assertEquals(400L, resp.getTask().getId());
+        assertEquals(TaskStatus.PENDING, resp.getShot().getGenTaskStatus());
     }
 
     @Test

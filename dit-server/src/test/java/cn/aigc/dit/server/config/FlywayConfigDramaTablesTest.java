@@ -36,6 +36,9 @@ class FlywayConfigDramaTablesTest {
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS prompt_override"), "应补 prompt_override");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS storyboard_drafting_at"), "应补 storyboard_drafting_at");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS script_analyzing_at"), "应补 script_analyzing_at");
+        assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS script_analyzing_heartbeat_at"), "应补分析心跳列");
+        assertTrue(joined.contains("ck_drama_episode_engine"), "应修补 engine 约束");
+        assertTrue(joined.contains("'v2-agent'"), "engine 应允许 v2-agent");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS script_analyze_error"), "应补 script_analyze_error");
         assertTrue(joined.contains("ADD COLUMN IF NOT EXISTS storyboard_draft_error"), "应补 storyboard_draft_error");
         assertTrue(joined.contains("真人实拍写真摄影"), "应将真人写实风前缀改为写真实拍");

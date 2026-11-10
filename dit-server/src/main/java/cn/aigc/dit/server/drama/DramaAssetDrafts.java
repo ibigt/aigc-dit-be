@@ -6,6 +6,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,6 +49,302 @@ public final class DramaAssetDrafts {
         }
         list.setAssets(new ArrayList<>(unique.values()));
         return list;
+    }
+
+    /**
+     * 规范资产骨架条目：名字、类型、状态标签由代码决定，模型只补描述字段。
+     *
+     * @param type      角色 / 场景 / 道具
+     * @param name      规范名（角色取族名，场景/道具取剧本原名）
+     * @param stateTag  base / dream / costume / custom
+     * @param mustSplit 是否是独立状态资产（入梦、换装等）
+     */
+    public record CanonicalAsset(String type, String name, String stateTag, boolean mustSplit) {
+    }
+
+    /**
+     * 规范名：族名 + 状态标签。
+     *
+     * @param name         族名（角色）或原名（场景/道具）
+     * @param stateTag     base / dream / costume / custom
+     * @param mustSplit    是否是独立状态资产（入梦、换装等）
+     * @param versionLabel 状态标签原文（「入梦」）；没有则空
+     */
+    public record CanonicalName(String name, String stateTag, boolean mustSplit, String versionLabel) {
+    }
+
+    /**
+     * 剧本里的名字归一成「族名 + 状态标签」。
+     *
+     * <p>同一个角色在剧本里会有好几种写法：「洛白」「洛白·入梦」「洛白（入梦）」「洛白（女主）」。
+     * 原样落库就是三条资产，页面看着像同一个角色抽了三遍。这里统一成族名 + 状态：
+     * 名字取族名（洛白），状态进 state_tag（dream），
+     * 于是「洛白·入梦」与「洛白」是同一个角色的两个版本 —— 与 v1 落库、前端的族名约定一致
+     * （drama_asset.name 存族名，版本靠 state_tag / version_label 区分）。
+     *
+     * <p>括号里的注释只有在是状态词（入梦/换装/湿身…）时才当版本标签，
+     * 「（女主）」这类说明直接丢掉 —— 那还是同一个人。
+     */
+    public static CanonicalName canonicalName(String raw, String type) {
+        String trimmed = raw == null ? "" : raw.trim();
+        if (!StringUtils.hasText(trimmed)) {
+            return new CanonicalName("", DramaContract.STATE_TAG_BASE, false, "");
+        }
+        if (!DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
+            String stateTag = inferStateTag(trimmed);
+            return new CanonicalName(trimmed, stateTag, !DramaContract.STATE_TAG_BASE.equals(stateTag), "");
+        }
+        String name = trimmed;
+        String bracketLabel = "";
+        int open = bracketOpenIndex(name);
+        if (open > 0 && name.length() > open + 1) {
+            bracketLabel = name.substring(open + 1, name.length() - 1).trim();
+            name = name.substring(0, open).trim();
+        }
+        DramaAssetVersions.ParsedName parsed = DramaAssetVersions.parseLegacyName(name);
+        String label = StringUtils.hasText(parsed.versionLabel()) ? parsed.versionLabel() : bracketLabel;
+        String stateTag;
+        if (StringUtils.hasText(parsed.versionLabel())) {
+            stateTag = parsed.stateTag();
+        } else if (StringUtils.hasText(bracketLabel)) {
+            String bracketState = inferStateTag(bracketLabel);
+            stateTag = DramaContract.STATE_TAG_BASE.equals(bracketState) ? inferStateTag(name) : bracketState;
+        } else {
+            stateTag = inferStateTag(name);
+        }
+        boolean mustSplit = !DramaContract.STATE_TAG_BASE.equals(stateTag);
+        return new CanonicalName(parsed.familyName(), stateTag, mustSplit, label);
+    }
+
+    /** 尾部括号注释的起点（支持中英文括号与方括号）；没有则 -1。 */
+    private static int bracketOpenIndex(String name) {
+        int open = -1;
+        int index = name.lastIndexOf('（');
+        if (index > open) {
+            open = index;
+        }
+        index = name.lastIndexOf('(');
+        if (index > open) {
+            open = index;
+        }
+        index = name.lastIndexOf('【');
+        if (index > open) {
+            open = index;
+        }
+        index = name.lastIndexOf('[');
+        if (index > open) {
+            open = index;
+        }
+        return open;
+    }
+
+    /**
+     * 规范资产骨架：资产阶段的唯一身份词表。
+     *
+     * <p>名字与类型全部由剧本推导 —— 角色取各场 characters、场景取各场 location、道具取各场 props，
+     * 旁白/画外音不算人物，模型只能补 description / identity_invariants / voice_lock。
+     *
+     * <p>为什么不让模型自己抽名字：模型会把道具写成角色、给道具加前缀（「拖鞋」→「大号塑料拖鞋」）、
+     * 漏掉道具，资产阶段的词表校验就会判死，整条分析流水线在资产步终止（2026-11-03 在 14 环境实测：
+     * 一集剧本抽出 50 条词表外资产，修复轮只让模型删条目，仍不通过，v2 分析直接失败）。
+     * 名字与类型由代码决定、模型只负责「写描述」，这一步就再也死不掉。
+     *
+     * <p>名字由剧本推导，也意味着剧本里的同一个东西写了几种说法就会抽成几条
+     * （「拖鞋」与「大号塑料拖鞋」、「洛白」与「洛白（女主）」）。
+     * 归一与合并都在 {@link #skeletonEntries} 里做，v1 与 v2 共用同一份规则。
+     */
+    public static List<CanonicalAsset> canonicalSkeleton(ScriptDoc doc) {
+        List<CanonicalAsset> skeleton = new ArrayList<>();
+        for (SkeletonEntry entry : skeletonEntries(doc)) {
+            skeleton.add(new CanonicalAsset(entry.type(), entry.name(), entry.stateTag(), entry.mustSplit()));
+        }
+        return skeleton;
+    }
+
+    /** 骨架条目（内部）：类型 + 规范名 + 状态标签 + 版本标签。 */
+    private record SkeletonEntry(String type, String name, String stateTag, boolean mustSplit, String versionLabel) {
+    }
+
+    /**
+     * 从剧本推导规范资产清单。v1（{@link #fromScript}）与 v2（{@link #canonicalSkeleton}）共用这一份规则。
+     *
+     * <p>三条归一规则：
+     * <ol>
+     *   <li>角色取族名 + 状态标签（「洛白·入梦」「洛白（入梦）」→「洛白」+ dream，
+     *       「洛白（女主）」→「洛白」+ base）；</li>
+     *   <li>同名同状态只留一条（「洛白」在五场里各出现一次也只抽一条）；</li>
+     *   <li>近义合并：短名是长名的后缀时算同一个东西（「拖鞋」与「大号塑料拖鞋」），
+     *       角色名又被写进道具/场景时以角色为准 —— 同一个东西不抽两遍。</li>
+     * </ol>
+     */
+    private static List<SkeletonEntry> skeletonEntries(ScriptDoc doc) {
+        List<SkeletonEntry> entries = new ArrayList<>();
+        if (doc == null || doc.getScenes() == null) {
+            return entries;
+        }
+        Map<String, Integer> byKey = new LinkedHashMap<>();
+        Set<String> characterNames = new LinkedHashSet<>();
+
+        // 第一轮：角色。族名统一，状态标签区分版本。
+        for (ScriptDoc.Scene scene : doc.getScenes()) {
+            if (scene == null) {
+                continue;
+            }
+            for (String raw : scene.getCharacters()) {
+                if (!StringUtils.hasText(raw)) {
+                    continue;
+                }
+                String trimmed = raw.trim();
+                if (DramaDialogueSpeakers.isNarration(trimmed)) {
+                    continue;
+                }
+                CanonicalName canonical = canonicalName(trimmed, DramaContract.ASSET_TYPE_CHARACTER);
+                if (!StringUtils.hasText(canonical.name())) {
+                    continue;
+                }
+                characterNames.add(canonical.name());
+                String key = uniqueKey(DramaContract.ASSET_TYPE_CHARACTER, canonical.name(), canonical.stateTag());
+                if (byKey.containsKey(key)) {
+                    continue;
+                }
+                byKey.put(key, entries.size());
+                entries.add(new SkeletonEntry(DramaContract.ASSET_TYPE_CHARACTER, canonical.name(),
+                        canonical.stateTag(), canonical.mustSplit(), canonical.versionLabel()));
+            }
+        }
+
+        // 第二轮：场景与道具。
+        for (ScriptDoc.Scene scene : doc.getScenes()) {
+            if (scene == null) {
+                continue;
+            }
+            for (String location : sceneAssetLocations(scene.getLocation())) {
+                addSceneOrProp(entries, byKey, characterNames, DramaContract.ASSET_TYPE_SCENE, location);
+            }
+            for (String raw : scene.getProps()) {
+                if (!StringUtils.hasText(raw)) {
+                    continue;
+                }
+                addSceneOrProp(entries, byKey, characterNames, DramaContract.ASSET_TYPE_PROP, raw.trim());
+            }
+        }
+        return entries;
+    }
+
+    /** 加一条场景/道具：先按「类型+名+状态」去重，再做近义合并与跨类型去重。 */
+    private static void addSceneOrProp(List<SkeletonEntry> entries, Map<String, Integer> byKey,
+                                       Set<String> characterNames, String type, String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return;
+        }
+        CanonicalName canonical = canonicalName(raw.trim(), type);
+        if (!StringUtils.hasText(canonical.name())) {
+            return;
+        }
+        // 角色名又被写进道具/场景（剧本解析的常见笔误）→ 以角色为准，不再抽一份
+        if (characterNames.contains(canonical.name())) {
+            return;
+        }
+        String key = uniqueKey(type, canonical.name(), canonical.stateTag());
+        if (byKey.containsKey(key)) {
+            return;
+        }
+        for (SkeletonEntry existing : entries) {
+            if (!existing.type().equals(type) || !existing.stateTag().equals(canonical.stateTag())) {
+                continue;
+            }
+            // 「拖鞋」与「大号塑料拖鞋」是同一个东西：短名是长名的后缀，且差得不多
+            if (isSuffixVariant(existing.name(), canonical.name())
+                    || isSuffixVariant(canonical.name(), existing.name())) {
+                return;
+            }
+        }
+        byKey.put(key, entries.size());
+        entries.add(new SkeletonEntry(type, canonical.name(), canonical.stateTag(),
+                canonical.mustSplit(), canonical.versionLabel()));
+    }
+
+    /**
+     * b 是不是 a 加了修饰词后的同一个东西：短名是长名的后缀，且长度差不超过 {@link #MERGE_SUFFIX_MAX_DIFF}。
+     *
+     * <p>只认后缀不认前缀：「大号塑料拖鞋」与「拖鞋」是同一个（模型爱在前面加修饰），
+     * 而「手机壳」与「手机」不是同一个（短名是前缀）。
+     */
+    private static boolean isSuffixVariant(String longer, String shorter) {
+        if (!StringUtils.hasText(longer) || !StringUtils.hasText(shorter)) {
+            return false;
+        }
+        if (shorter.length() < 2 || longer.length() - shorter.length() > MERGE_SUFFIX_MAX_DIFF) {
+            return false;
+        }
+        return longer.endsWith(shorter);
+    }
+
+    /** 近义合并允许的长度差：「大号塑料拖鞋」比「拖鞋」多 4 个字。 */
+    private static final int MERGE_SUFFIX_MAX_DIFF = 6;
+
+    /**
+     * 模型没覆盖到的骨架条目：给一句保底描述，避免资产页整格空白。
+     */
+    public static String fallbackDescription(String type, String name) {
+        String label = StringUtils.hasText(name) ? name.trim() : "";
+        if (DramaContract.ASSET_TYPE_CHARACTER.equals(type)) {
+            return label + "，剧本中的主要角色。";
+        }
+        if (DramaContract.ASSET_TYPE_SCENE.equals(type)) {
+            return label + "，剧本中的场景。";
+        }
+        if (DramaContract.ASSET_TYPE_PROP.equals(type)) {
+            return label + "，剧本中的道具。";
+        }
+        return label;
+    }
+
+    /**
+     * 把模型产出的描述字段合并到骨架条目上。
+     *
+     * <p>v1（{@code DramaTextServiceImpl.enrichAssets}）与 v2（资产 Agent）共用同一套合并规则：
+     * 只有模型写的具体设定才能覆盖骨架占位句；模型自己发明的条目一律丢弃（调用方按名字匹配）。
+     *
+     * <p>合并前统一走一遍 {@link DramaAssetText#clean}：模型偶尔把性别写成英文再自己改口
+     * （「35岁 male? no; 35岁，男，…」），这段垃圾不能进资产表，也不能拼进生图提示词。
+     */
+    public static void mergeEnrichmentFields(AssetDraftList.AssetDraft target,
+                                             AssetDraftList.AssetDraft update) {
+        if (target == null || update == null) {
+            return;
+        }
+        String description = DramaAssetText.clean(update.getDescription());
+        String identity = DramaAssetText.clean(update.getIdentityInvariants());
+        String imagePrompt = DramaAssetText.clean(update.getImagePrompt());
+        String voiceLock = DramaAssetText.clean(update.getVoiceLock());
+        copyIfText(description, target::setDescription);
+        if (StringUtils.hasText(identity)
+                && !isSkeletonIdentity(target.getName(), identity)
+                && !isCharacterIdentityMisapplied(target.getType(), identity)) {
+            target.setIdentityInvariants(identity);
+        } else if (DramaContract.ASSET_TYPE_CHARACTER.equals(target.getType())
+                && isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
+                && isAppearanceBlurb(description)) {
+            // 角色：模型只写了 description 时，把外貌短句提升为外形设定，避免页面只剩骨架句。
+            target.setIdentityInvariants(description);
+        } else if (isCharacterIdentityMisapplied(target.getType(), target.getIdentityInvariants())) {
+            target.setIdentityInvariants(defaultIdentity(target.getType(), target.getName(), target.getStateTag()));
+        }
+        if (StringUtils.hasText(imagePrompt)
+                && !shouldReplaceImagePrompt(imagePrompt)) {
+            target.setImagePrompt(imagePrompt);
+        }
+        copyIfText(voiceLock, target::setVoiceLock);
+        target.setNeedsHuman(!(StringUtils.hasText(target.getDescription())
+                && !isSkeletonIdentity(target.getName(), target.getIdentityInvariants())
+                && StringUtils.hasText(target.getImagePrompt())));
+    }
+
+    private static void copyIfText(String value, java.util.function.Consumer<String> setter) {
+        if (StringUtils.hasText(value)) {
+            setter.accept(value.strip());
+        }
     }
 
     /**
