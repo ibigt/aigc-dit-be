@@ -62,18 +62,37 @@ class WorkflowFilmBurnInTest {
     @Test
     void effectsMapToFfmpegFilters() {
         assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
-                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "mono", null, null)).contains("colorchannelmixer"));
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "mono", null, null), 1920).contains("colorchannelmixer"));
         assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
-                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "vintage", null, null)).contains("sepia=0.55"));
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "vintage", null, null), 1920).contains("sepia=0.55"));
         assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
-                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "blur", null, null)).contains("gblur=sigma=2"));
-        assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
-                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "cool", null, null)).contains("hue=h=-12"));
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "cool", null, null), 1920).contains("hue=h=-12"));
         // 未知特效 id 不阻断成片
         assertEquals("", FfmpegWorkflowFilmComposer.effectFilterOf(
-                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "unknown", null, null)));
-        assertEquals("", FfmpegWorkflowFilmComposer.effectFilterOf(null));
-        assertEquals("", FfmpegWorkflowFilmComposer.effectFilterOf(WorkflowFilmComposer.ClipStyle.NONE));
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "unknown", null, null), 1920));
+        assertEquals("", FfmpegWorkflowFilmComposer.effectFilterOf(null, 1920));
+        assertEquals("", FfmpegWorkflowFilmComposer.effectFilterOf(WorkflowFilmComposer.ClipStyle.NONE, 1920));
+    }
+
+    /**
+     * 模糊半径必须随成片宽度等比放大（14.51 字号同类问题）：前端预览是 CSS blur() 作用在
+     * ≤560px 预览器上，sigma 固定 2 画到 1920 宽成片上模糊强度只有预览的 ~1/3.4。
+     */
+    @Test
+    void blurSigmaScalesWithOutputWidth() {
+        // 1920 宽（1080P 横屏）：2 * 1920/560 ≈ 6.86
+        assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "blur", null, null), 1920).contains("gblur=sigma=6.86"),
+                "1920 宽成片 sigma 应约 6.86");
+        // 1280 宽（720P）：2 * 1280/560 ≈ 4.57
+        assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "blur", null, null), 1280).contains("gblur=sigma=4.57"));
+        // 预览基准宽度上保持原值
+        assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "blur", null, null), 560).contains("gblur=sigma=2.00"));
+        // 柔光的轻微模糊同口径放大：0.5 * 1920/560 ≈ 1.71
+        assertTrue(FfmpegWorkflowFilmComposer.effectFilterOf(
+                new WorkflowFilmComposer.ClipStyle(0, 0, 0, "soft", null, null), 1920).contains("gblur=sigma=1.71"));
     }
 
     @Test

@@ -567,7 +567,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             double duration = clip.trimEnd() - clip.trimStart();
             durations.add(duration);
             String effectFilters = styled && clipStyles.get(i) != null
-                    ? effectFilterOf(clipStyles.get(i)) : "";
+                    ? effectFilterOf(clipStyles.get(i), width) : "";
             filter.append("[").append(i).append(":v]trim=start=").append(clip.trimStart())
                     .append(":end=").append(clip.trimEnd())
                     .append(",setpts=PTS-STARTPTS,fps=30,scale=").append(width).append(":").append(height)
@@ -665,8 +665,13 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         return args;
     }
 
-    /** 调节 + 特效 → ffmpeg 滤镜串（与前端 clipFilter 同口径）。空串 = 无效果。 */
-    static String effectFilterOf(WorkflowFilmComposer.ClipStyle style) {
+    /**
+     * 调节 + 特效 → ffmpeg 滤镜串（与前端 clipFilter 同口径）。空串 = 无效果。
+     *
+     * <p>模糊半径与字号同理（14.51 口径）：前端预览的 CSS blur() 作用在 ≤560px 宽的预览器上，
+     * sigma 必须按「成片宽 / 预览基准宽」等比放大，否则 1080P 成片的模糊只有预览的 ~1/3.4。
+     */
+    static String effectFilterOf(WorkflowFilmComposer.ClipStyle style, int width) {
         if (style == null || style.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         List<String> parts = new ArrayList<>();
@@ -681,6 +686,8 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             parts.add(String.format(Locale.ROOT, "eq=brightness=%.3f:contrast=%.3f:saturation=%.3f",
                     eqBrightness, eqContrast, eqSaturation));
         }
+        // 预览 CSS px → 成片 px：模糊半径随画幅等比放大（基准同 OverlayRenderer.PREVIEW_BASE_WIDTH）
+        double blurScale = width / OverlayRenderer.PREVIEW_BASE_WIDTH;
         String effect = style.effect();
         if (effect != null && !effect.isBlank() && !"none".equals(effect)) {
             switch (effect) {
@@ -688,9 +695,9 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 case "vintage" -> parts.add(String.format(Locale.ROOT, "sepia=0.55,eq=contrast=1.12:saturation=0.85"));
                 case "warm" -> parts.add(String.format(Locale.ROOT, "eq=saturation=1.45,sepia=0.28"));
                 case "cool" -> parts.add(String.format(Locale.ROOT, "hue=h=-12:eq=saturation=1.1"));
-                case "soft" -> parts.add(String.format(Locale.ROOT, "eq=brightness=0.08,gblur=sigma=0.5"));
+                case "soft" -> parts.add(String.format(Locale.ROOT, "eq=brightness=0.08,gblur=sigma=%.2f", 0.5 * blurScale));
                 case "contrast" -> parts.add("eq=contrast=1.5");
-                case "blur" -> parts.add("gblur=sigma=2");
+                case "blur" -> parts.add(String.format(Locale.ROOT, "gblur=sigma=%.2f", 2 * blurScale));
                 default -> { /* 未知特效 id 忽略，不阻断成片 */ }
             }
         }
