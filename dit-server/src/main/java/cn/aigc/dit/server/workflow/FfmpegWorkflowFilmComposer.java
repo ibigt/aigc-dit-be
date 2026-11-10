@@ -74,7 +74,9 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         Path logFile = null;
         try {
             logFile = FfmpegSupport.tempFile("dit-workflow-ffmpeg-", ".log");
-            List<String> command = new ArrayList<>(List.of("ffmpeg", "-y"));
+            // 必须用 FfmpegSupport.ffmpegBinary()（走 -Ddit.ffmpeg.path / DIT_FFMPEG_PATH 解析），
+            // 裸 "ffmpeg" 依赖 PATH——Java 进程的 PATH 里没有 ffmpeg 时直接「无法启动 ffmpeg」
+            List<String> command = new ArrayList<>(List.of(FfmpegSupport.ffmpegBinary(), "-y"));
             command.addAll(args);
             Process process = new ProcessBuilder(command)
                     .redirectErrorStream(true)
