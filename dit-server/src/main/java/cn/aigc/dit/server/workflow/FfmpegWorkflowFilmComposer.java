@@ -329,8 +329,13 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 }
                 inputs.add(input);
             }
-            // 音轨文件落盘为临时文件（扩展名不参与 ffmpeg 解码，内容为准）
+            // 音轨文件落盘为临时文件（扩展名不参与 ffmpeg 解码，内容为准）。
+            // 音频轨是增强项：裁剪范围超出素材真实时长时**钳制到可用范围**而不是抛错
+            // （上游产物的 durationSec/durationMs 元数据经常缺失，前端按 5s 兜底落轨，
+            // 实际素材更短——例如 3.4s 的配音配了 trimEnd=5.95——不该因此拦掉整个成片）。
+            // 整段不可用（钳制后 trimEnd<=trimStart）则静默丢弃该条音轨，与 Planner 静默丢弃口径一致。
             List<Path> audioInputs = new ArrayList<>();
+            List<AudioClip> usableTracks = new ArrayList<>();
             for (AudioClip track : tracks) {
                 Path input = FfmpegSupport.tempFile("dit-workflow-audio-", ".audio");
                 temps.add(input);
@@ -345,11 +350,20 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (audioDuration == null || !Double.isFinite(audioDuration) || audioDuration <= 0) {
                     throw new BizException(ErrorCode.BAD_REQUEST, "音频素材无法读取有效时长");
                 }
-                if (track.trimStart() >= audioDuration || track.trimEnd() > audioDuration) {
-                    throw new BizException(ErrorCode.BAD_REQUEST, "音频裁剪范围超过素材时长");
+                double clampedStart = Math.min(track.trimStart(), Math.max(0, audioDuration - 0.01));
+                double clampedEnd = Math.min(track.trimEnd(), audioDuration);
+                if (clampedEnd <= clampedStart) {
+                    continue;
                 }
+                AudioClip usable = clampedStart == track.trimStart() && clampedEnd == track.trimEnd()
+                        ? track
+                        : new AudioClip(track.storageKey(), track.start(), clampedStart, clampedEnd,
+                                track.muted(), track.volume());
+                usableTracks.add(usable);
                 audioInputs.add(input);
             }
+            AudioClip[] trackArray = usableTracks.toArray(AudioClip[]::new);
+            List<AudioClip> effectiveTracks = List.of(trackArray);
             Path output = FfmpegSupport.tempFile("dit-workflow-film-", ".mp4");
             temps.add(output);
             // 叠加层渲染（排期 #7）：文字/图形每段烧成**独立**的透明 PNG。
@@ -374,7 +388,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             long timeout = generateProperties.getFfmpeg() == null ? 900
                     : generateProperties.getFfmpeg().getConcatEncodeTimeoutSeconds();
             try {
-                runner.run(args(inputs, clips, hasAudio, target, output, tracks, audioInputs,
+                runner.run(args(inputs, clips, hasAudio, target, output, effectiveTracks, audioInputs,
                         clipStyles, overlayPngs.isEmpty() ? null : overlayPngs.get(0), overlayClips, overlayPngs), timeout);
             } catch (BizException e) {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
