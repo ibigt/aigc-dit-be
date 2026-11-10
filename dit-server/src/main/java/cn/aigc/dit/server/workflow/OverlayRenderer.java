@@ -101,7 +101,7 @@ final class OverlayRenderer {
         }
     }
 
-    // ── 文字：bottom 14%，max-width 88%，pre-wrap 逐行绘制，带黑色描边保证可读性 ──
+    // ── 文字：bottom 8%，max-width 88%，pre-wrap 逐行绘制，带黑色描边保证可读性 ──
 
     private static void drawText(Graphics2D g, Overlay overlay, int width, int height) {
         String text = overlay.text() == null ? "" : overlay.text();
@@ -116,7 +116,7 @@ final class OverlayRenderer {
         List<String> lines = wrap(text, metrics, maxWidth);
         int lineHeight = (int) Math.round(metrics.getHeight() * 1.35);
         int blockHeight = lines.size() * lineHeight;
-        int bottom = (int) Math.round(height * 0.14);
+        int bottom = (int) Math.round(height * 0.08);
         int top = Math.max(0, height - bottom - blockHeight);
         Color color = parseColor(overlay.color(), Color.WHITE);
         int margin = (int) Math.round(width * 0.06);
