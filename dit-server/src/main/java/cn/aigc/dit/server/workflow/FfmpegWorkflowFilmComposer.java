@@ -86,8 +86,12 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 throw new BizException(ErrorCode.INTERNAL, "ffmpeg 超时");
             }
             if (process.exitValue() != 0) {
-                log.warn("workflow ffmpeg failed: {}", Files.readString(logFile, StandardCharsets.UTF_8));
-                throw new BizException(ErrorCode.INTERNAL, "ffmpeg 执行失败");
+                // ffmpeg 的 stderr 是定位问题的唯一线索（滤镜语法/编解码器/输入问题都在这），
+                // 截尾带上：完整日志进 log.warn，最后 500 字符随异常透给前端，别再让「编码失败」吞根因
+                String full = Files.readString(logFile, StandardCharsets.UTF_8);
+                log.warn("workflow ffmpeg failed: {}", full);
+                String tail = full.length() > 500 ? full.substring(full.length() - 500) : full;
+                throw new BizException(ErrorCode.INTERNAL, "ffmpeg 执行失败：" + tail);
             }
         } catch (IOException e) {
             throw new BizException(ErrorCode.INTERNAL, "无法启动 ffmpeg");
@@ -394,9 +398,12 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
                     throw new BizException(ErrorCode.INTERNAL, "工作流成片编码超时");
                 }
-                throw new BizException(ErrorCode.INTERNAL, "工作流成片编码失败");
+                // BizException 已带根因（如「ffmpeg 执行失败：<stderr 尾部>」），原样透传，
+                // 别再包成「成片编码失败」吞掉 stderr——那是定位滤镜/编解码问题的唯一线索
+                throw e;
             } catch (Exception e) {
-                throw new BizException(ErrorCode.INTERNAL, "工作流成片编码失败");
+                log.warn("workflow film compose failed unexpectedly", e);
+                throw new BizException(ErrorCode.INTERNAL, "工作流成片编码失败：" + e.getMessage());
             }
             if (!playableMp4(output)) {
                 throw new BizException(ErrorCode.INTERNAL, "工作流成片不是可播放的 MP4 视频");
