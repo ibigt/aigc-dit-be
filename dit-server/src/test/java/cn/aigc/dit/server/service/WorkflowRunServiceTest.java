@@ -680,7 +680,7 @@ class WorkflowRunServiceTest {
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
         when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
                 new WorkflowFilmComposer.Clip("users/7/b-0.mp4", 0, 6, true, 1),
-                new WorkflowFilmComposer.Clip("users/7/a-1.mp4", 1, 4, false, 0.5))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of())))
+                new WorkflowFilmComposer.Clip("users/7/a-1.mp4", 1, 4, false, 0.5))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()), eq(List.of())))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", "users/7/poster.jpg", 9));
 
         WorkflowRunResp response = service.getMine(1L);
@@ -739,7 +739,7 @@ class WorkflowRunServiceTest {
         when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
                 new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1),
                 new WorkflowFilmComposer.Clip("users/7/b.mp4", 0, 5, false, 1),
-                new WorkflowFilmComposer.Clip("users/7/c.mp4", 0, 5, false, 1))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of())))
+                new WorkflowFilmComposer.Clip("users/7/c.mp4", 0, 5, false, 1))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()), eq(List.of())))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", null, 15));
 
         WorkflowRunResp response = service.getMine(1L);
@@ -820,6 +820,15 @@ class WorkflowRunServiceTest {
         }
 
         @Override
+        public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                  List<AudioClip> audioClips, List<WorkflowFilmComposer.ClipStyle> styles,
+                                  List<WorkflowFilmComposer.OverlayClip> overlays,
+                                  List<WorkflowFilmComposer.PipClip> pipClips) {
+            // V2 画中画新增重载：委托低阶实现，保持既有断言语义
+            return compose(userId, runId, nodeId, clips, target);
+        }
+
+        @Override
         public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target) {
             return recovery.findExisting(userId, runId, nodeId, clips, target);
         }
@@ -835,7 +844,7 @@ class WorkflowRunServiceTest {
         WorkflowRun run = run(video, edit);
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
         when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
-                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of())))
+                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))), isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()), eq(List.of())))
                 .thenThrow(new IllegalStateException("编码失败"));
 
         WorkflowRunResp response = service.getMine(1L);
@@ -955,7 +964,7 @@ class WorkflowRunServiceTest {
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
         when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
                 new WorkflowFilmComposer.Clip("users/7/assets/local.mp4", 0.5, 4.5, false, 0.8))),
-                isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of())))
+                isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()), eq(List.of())))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", "users/7/poster.jpg", 4));
 
         WorkflowRunResp response = service.getMine(1L);

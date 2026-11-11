@@ -491,9 +491,10 @@ class WorkflowRunLifecycleTest {
             WorkflowFilmComposer composer = mock(WorkflowFilmComposer.class);
             // 桩必须挂在**运行服务实际调用的 8 参重载**上（clips, target, audioClips, styles, overlays）。
             // Mockito mock 接口时 default 重载不会自动委托到低阶方法，挂 5 参会拿到 null 合成结果，
-            // 表现为 compose 复用路径 PARTIAL_FAILED（14.36 改签名时此桩未跟进，14.44 补齐）。
+            // 表现为 compose 复用路径 PARTIAL_FAILED（14.36 改签名时此桩未跟进，14.44 补齐；
+            // 14.55 新增第 9 参 pipClips 后再次需跟进——桩的参数个数必须与运行服务实际调用一致）。
             when(composer.compose(anyLong(), anyLong(), anyString(), anyList(), any(),
-                    any(), any(), any())).thenAnswer(call -> {
+                    any(), any(), any(), any())).thenAnswer(call -> {
                 List<WorkflowFilmComposer.Clip> clips = call.getArgument(3); composedKeys.clear();
                 clips.forEach(clip -> composedKeys.add(clip.storageKey()));
                 return new WorkflowFilmComposer.FilmOutput("users/7/workflows/film.mp4", null, 10);
