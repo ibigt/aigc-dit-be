@@ -120,10 +120,11 @@ public interface WorkflowFilmComposer {
      */
     default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
-        return compose(userId, runId, nodeId, clips, target, audioClips, styles, overlays, List.of());
+        // 只 override 低阶重载的历史实现：降级时不丢 clips / target / 音轨（styles、overlays 由实现类自行处理）
+        return compose(userId, runId, nodeId, clips, target, audioClips);
     }
 
-    /** V2 画中画完整合成：pipClips 为空时与四参重载逐字节一致。 */
+    /** V2 画中画完整合成：pipClips 为空时与四参重载逐字节一致。降级方向恒为 9→8→6→5，禁止反向委托成环。 */
     default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays,
                                List<PipClip> pipClips) {
@@ -133,7 +134,7 @@ public interface WorkflowFilmComposer {
     /** 完整复用探测：styles / overlays 同样参与指纹，样式或叠加层变更触发重合成。 */
     default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                      List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
-        return findExisting(userId, runId, nodeId, clips, target, audioClips, styles, overlays, List.of());
+        return findExisting(userId, runId, nodeId, clips, target, audioClips);
     }
 
     /** V2 画中画复用探测：pipClips 同样参与指纹。 */

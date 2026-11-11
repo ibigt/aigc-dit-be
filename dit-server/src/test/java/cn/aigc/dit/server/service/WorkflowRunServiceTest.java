@@ -977,6 +977,73 @@ class WorkflowRunServiceTest {
     }
 
     @Test
+    void editResolvesPipSourceKeyAndPassesItToTheNineArgComposer() {
+        Map<String, Object> main = step("video-a", TaskStatus.SUCCEEDED, 11L, List.of());
+        main.put("outputs", List.of(videoOutput("users/7/a.mp4", 5)));
+        Map<String, Object> pipSource = step("video-b", TaskStatus.SUCCEEDED, 22L, List.of());
+        pipSource.put("outputs", List.of(videoOutput("users/7/b.mp4", 5)));
+        Map<String, Object> edit = editStep();
+        edit.put("dependsOn", List.of("video-a", "video-b"));
+        edit.put("clips", List.of(clip("video-a", 0, 0, 0.0, 5.0, false, 1.0)));
+        Map<String, Object> pip = new LinkedHashMap<>();
+        pip.put("start", 1.0);
+        pip.put("end", 3.0);
+        pip.put("sourceNodeId", "video-b");
+        pip.put("outputIndex", 0);
+        pip.put("trimStart", 0.5);
+        pip.put("trimEnd", 2.5);
+        pip.put("x", 20);
+        pip.put("y", 80);
+        pip.put("scale", 45);
+        pip.put("opacity", 60);
+        pip.put("muted", true);
+        edit.put("pipClips", List.of(pip));
+        WorkflowRun run = run(main, pipSource, edit);
+        when(workflowRunMapper.selectById(1L)).thenReturn(run);
+        when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
+                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))),
+                isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()),
+                eq(List.of(new WorkflowFilmComposer.PipClip(1.0, 3.0, "users/7/b.mp4",
+                        0.5, 2.5, 20, 80, 45, 60, true)))))
+                .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", null, 5));
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        assertEquals(TaskStatus.SUCCEEDED, response.getStatus());
+        assertEquals(TaskStatus.SUCCEEDED, response.getSteps().get(2).getStatus());
+        // 画中画是同一条 EDIT 步骤里的 ffmpeg 叠加，不能额外扣积分
+        assertEquals(0L, response.getSteps().get(2).getCreditCost());
+        verify(generateService, never()).submit(any(), any());
+    }
+
+    @Test
+    void editDropsPipWithUnresolvedSourceInsteadOfFailingWholeFilm() {
+        Map<String, Object> main = step("video-a", TaskStatus.SUCCEEDED, 11L, List.of());
+        main.put("outputs", List.of(videoOutput("users/7/a.mp4", 5)));
+        Map<String, Object> edit = editStep();
+        edit.put("dependsOn", List.of("video-a"));
+        edit.put("clips", List.of(clip("video-a", 0, 0, 0.0, 5.0, false, 1.0)));
+        Map<String, Object> pip = new LinkedHashMap<>();
+        pip.put("start", 0.0);
+        pip.put("end", 2.0);
+        pip.put("sourceNodeId", "deleted-node"); // 上游节点已被删除
+        pip.put("outputIndex", 0);
+        pip.put("trimStart", 0.0);
+        pip.put("trimEnd", 2.0);
+        edit.put("pipClips", List.of(pip));
+        when(workflowRunMapper.selectById(1L)).thenReturn(run(main, edit));
+        when(filmComposer.compose(eq(7L), eq(1L), eq("edit"), eq(List.of(
+                new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))),
+                isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()),
+                eq(List.of())))
+                .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", null, 5));
+
+        WorkflowRunResp response = service.getMine(1L);
+
+        assertEquals(TaskStatus.SUCCEEDED, response.getStatus());
+    }
+
+    @Test
     void foreignLocalImportKeyIsRejectedBeforeComposing() {
         Map<String, Object> local = clip("local:42", 0, 0, 0.0, 3.0, false, 1.0);
         local.put("localKey", "users/99/assets/someone-else.mp4");

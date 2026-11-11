@@ -267,6 +267,26 @@ class WorkflowGraphPlannerTest {
     }
 
     @Test
+    void pipOnlySourceIsNotAutoAppendedAsMainClip() {
+        // V2 画中画素材只在 pipClips 里出现（主轨只导出 V1）：自动补齐绝不能把它当成额外主轨片段，
+        // 否则成片会被拼长、同一素材既拼接又叠加。
+        var edit = editingWithPip("edit",
+                List.of(clip("c1", "a", 0, 0, 0.0, 4.0)),
+                List.of(Map.of("sourceNodeId", "b", "start", 2.2, "end", 4.0,
+                        "trimStart", 2.0, "trimEnd", 4.0, "x", 70, "y", 25, "scale", 30, "opacity", 100)));
+        var steps = WorkflowGraphPlanner.plan(graph(
+                List.of(generator("a", "VideoGenerator", "a"),
+                        generator("b", "VideoGenerator", "b"),
+                        edit),
+                List.of(edge("a", "edit"), edge("b", "edit"))));
+        var step = steps.get(2);
+        assertEquals(List.of("a"), step.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList(),
+                "画中画素材 b 不应再被自动补成主轨片段");
+        assertEquals(1, step.pipClips().size());
+        assertEquals("b", step.pipClips().get(0).sourceNodeId());
+    }
+
+    @Test
     void directReferenceAssetsJoinRefsAfterEdgeStatics() {
         // 旧画布的素材节点连线引用在前，media.referenceAssets 直接附件在后，无效 key（无斜杠）丢弃
         var assetNode = Map.<String, Object>of("id", "ref", "data", Map.of(
@@ -536,6 +556,13 @@ class WorkflowGraphPlannerTest {
         return Map.of("id", id, "data", Map.of(
                 "kind", "VideoEditing", "title", id, "enabled", true,
                 "editing", Map.of("clips", clips)));
+    }
+
+    private static Map<String, Object> editingWithPip(String id, List<Map<String, Object>> clips,
+                                                      List<Map<String, Object>> pipClips) {
+        return Map.of("id", id, "data", Map.of(
+                "kind", "VideoEditing", "title", id, "enabled", true,
+                "editing", Map.of("clips", clips, "pipClips", pipClips)));
     }
 
     private static Map<String, Object> graph(List<Map<String, Object>> nodes, List<Map<String, Object>> edges) {

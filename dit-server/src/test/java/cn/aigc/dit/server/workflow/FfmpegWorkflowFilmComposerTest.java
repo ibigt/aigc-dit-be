@@ -461,6 +461,113 @@ class FfmpegWorkflowFilmComposerTest {
         }
     }
 
+    // ── V2 画中画（副视频轨）成片烧录 ────────────────────────────────────────
+
+    /** 一次构造出「音轨 amix + 文字叠加 + 画中画」的最复杂组合，供下列用例复用。 */
+    private static List<String> pipArgs(Path main, Path bgm, Path png, Path pip, Path out, double opacity) {
+        return FfmpegWorkflowFilmComposer.args(
+                List.of(main), List.of(new Clip("main.mp4", 0, 4, false, 1)), List.of(true),
+                WorkflowFilmComposer.FilmSize.of("16:9", "720p"), out,
+                List.of(new WorkflowFilmComposer.AudioClip("bgm.wav", 0, 0, 2, false, 1)),
+                List.of(bgm), null, null,
+                List.of(new WorkflowFilmComposer.OverlayClip(0, 2, "text", "hi", "#ffffff",
+                        24, 400, "center", null, 50, 50, 100, 100)),
+                List.of(png),
+                List.of(new WorkflowFilmComposer.PipClip(1, 3, "pip.mp4", 0, 2, 70, 25, 30, opacity, true)),
+                List.of(pip));
+    }
+
+    @Test
+    void pipArgsAppendInputAfterOverlaysAndSeparateAmixFromPipChain() {
+        List<String> args = pipArgs(Path.of("main.mp4"), Path.of("bgm.wav"), Path.of("overlay.png"),
+                Path.of("pip.mp4"), Path.of("out.mp4"), 60);
+        String command = String.join(" ", args);
+        // 输入顺序：主片 → 音轨 → 叠加 PNG → 画中画；索引 3 正是 PiP 输入
+        assertTrue(command.contains("-i main.mp4 -i bgm.wav -i overlay.png -i pip.mp4"));
+        String filter = args.get(args.indexOf("-filter_complex") + 1);
+        assertTrue(filter.contains("[3:v]trim=start=0.000:end=2.000"));
+        // 半透明必须保留 alpha，否则 yuva420p 之前的 format 会把 colorchannelmixer 的成果丢掉
+        assertTrue(filter.contains("colorchannelmixer=aa=0.60"));
+        assertTrue(filter.contains("format=yuva420p[pipv0]"));
+        assertTrue(filter.contains("overlay=format=auto:x="));
+        assertTrue(filter.contains("enable='between(t,1.000,3.000)'[pip0]"));
+        // amix / overlay 链结尾没有分号时，PiP 分支链前必须补上，否则拼成一条非法链
+        assertTrue(filter.contains("[aout]; [v][2:v]overlay"));
+        assertTrue(filter.contains("; [3:v]trim=start=0.000"));
+        // 最终视频 map 指向最后一级 PiP 输出，音频仍走 amix
+        assertEquals("[pip0]", args.get(args.indexOf("-map") + 1));
+        assertEquals("[aout]", args.get(args.lastIndexOf("-map") + 1));
+    }
+
+    @Test
+    void opaquePipUsesPlainYuv420pAndEmptyPipKeepsLegacyMap() {
+        List<String> opaque = pipArgs(Path.of("main.mp4"), Path.of("bgm.wav"), Path.of("overlay.png"),
+                Path.of("pip.mp4"), Path.of("out.mp4"), 100);
+        String filter = opaque.get(opaque.indexOf("-filter_complex") + 1);
+        assertFalse(filter.contains("colorchannelmixer"));
+        assertTrue(filter.contains("scale=384:-2,format=yuv420p[pipv0]"));
+
+        List<String> legacy = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("main.mp4")), List.of(new Clip("main.mp4", 0, 4, false, 1)),
+                List.of(true), WorkflowFilmComposer.FilmSize.of("16:9", "720p"), Path.of("out.mp4"),
+                List.of(), List.of(), null, null, List.of(), List.of(), List.of(), List.of());
+        String legacyFilter = legacy.get(legacy.indexOf("-filter_complex") + 1);
+        assertFalse(legacyFilter.contains("pip"));
+        assertEquals("[v]", legacy.get(legacy.indexOf("-map") + 1));
+    }
+
+    @Test
+    void pipIsActuallyBurnedIntoFilmWhenFfmpegInstalled() throws Exception {
+        Assumptions.assumeTrue(FfmpegSupport.available());
+        Path main = directory.resolve("main.mp4");
+        Path pip = directory.resolve("pip.mp4");
+        Path bgm = directory.resolve("bgm.wav");
+        Path png = directory.resolve("overlay.png");
+        Path out = directory.resolve("out.mp4");
+        ffmpegFixture("color=c=red:s=64x36:r=30", 4, main);
+        ffmpegFixture("color=c=blue:s=64x36:r=30", 3, pip);
+        ffmpeg("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-t", "2", "-c:a", "pcm_s16le", bgm.toString());
+        java.awt.image.BufferedImage transparent =
+                new java.awt.image.BufferedImage(8, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        assertTrue(javax.imageio.ImageIO.write(transparent, "png", png.toFile()));
+
+        FfmpegSupport.run(pipArgs(main, bgm, png, pip, out, 100), 90);
+
+        assertTrue(Files.size(out) > 0);
+        Double duration = FfmpegSupport.durationSeconds(out);
+        assertNotNull(duration);
+        assertTrue(duration >= 3.5, "成片时长异常：" + duration);
+        // 抽 t=2s 的一帧：主画面纯红、画中画纯蓝，必须能数出成片的蓝色像素
+        Path frame = directory.resolve("frame.rgb");
+        ffmpeg("-ss", "2", "-i", out.toString(), "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgb24", frame.toString());
+        byte[] pixels = Files.readAllBytes(frame);
+        int blue = 0;
+        for (int i = 0; i + 2 < pixels.length; i += 3) {
+            int r = pixels[i] & 0xff, g = pixels[i + 1] & 0xff, b = pixels[i + 2] & 0xff;
+            if (b > r + 60 && b > g + 60) blue++;
+        }
+        assertTrue(blue > 100, "画中画没有出现在成片里，蓝色像素数=" + blue);
+    }
+
+    private void ffmpegFixture(String color, int seconds, Path target) throws Exception {
+        ffmpeg("-f", "lavfi", "-i", color,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-t", Integer.toString(seconds), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest", target.toString());
+    }
+
+    private void ffmpeg(String... args) throws Exception {
+        List<String> command = new ArrayList<>(List.of(
+                FfmpegSupport.ffmpegBinary(), "-y", "-hide_banner", "-loglevel", "error"));
+        command.addAll(List.of(args));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String log = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertTrue(process.waitFor(60, TimeUnit.SECONDS), log);
+        assertEquals(0, process.exitValue(), log);
+    }
+
     private FfmpegWorkflowFilmComposer composer(LocalObjectStorage storage, FakeRunner runner) {
         return new FfmpegWorkflowFilmComposer(storage,
                 key -> "users/7/workflows/31/merge/poster.webp", new GenerateProperties(), runner);

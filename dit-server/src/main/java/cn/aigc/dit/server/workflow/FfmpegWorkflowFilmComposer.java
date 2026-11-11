@@ -175,8 +175,13 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                                    List<AudioClip> audioClips, List<WorkflowFilmComposer.ClipStyle> styles,
                                    List<WorkflowFilmComposer.OverlayClip> overlayClips,
                                    List<WorkflowFilmComposer.PipClip> pipClips) {
-        // PiP 变更经 WorkflowStepFingerprint（step.overlays 含 video 条目）驱动重合成，
-        // 复用探测本身只看产物 key 是否存在且可播放，与低阶重载同实现。
+        // PiP 参数写进 step.pipClips，由 WorkflowStepFingerprint 驱动重合成。
+        // 但 findExisting 只看 filmKey 是否已有可播放成片，不校验画中画是否烧进去了：
+        // 一旦崩溃恢复时复用了「同 run 早期无 PiP」的成片，画中画会静默丢失。
+        // 因此带 PiP 时一律不复用，直接重合成（正常流程只会进一次 EDITING，开销可接受）。
+        if (pipClips != null && !pipClips.isEmpty()) {
+            return null;
+        }
         return findExisting(userId, runId, nodeId, clips, target, audioClips);
     }
 
@@ -749,6 +754,11 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         // 位置 x/y 是画面百分比中心点，换算成 overlay 的左上角像素坐标（x%×W - w/2）。
         // 注意 overlay 的坐标接受 main_w/overlay_w 表达式，直接用表达式避免自己算。
         if (!pips.isEmpty()) {
+            // 前置链可能以 [aout]/[a] 结尾（amix / xfade 分支没有分号），若直接追加 [N:v]trim=…
+            // 会拼成一条链（Trailing garbage after a filter）。分号结尾对 ffmpeg 恒安全。
+            if (filter.length() > 0 && !filter.toString().endsWith("; ")) {
+                filter.append("; ");
+            }
             StringBuilder pipChain = new StringBuilder();
             for (int i = 0; i < pips.size(); i++) {
                 WorkflowFilmComposer.PipClip pip = pips.get(i);
@@ -756,13 +766,20 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 // PiP 分支链：trim（源内裁剪）→ setpts → fps → scale=成片宽×scale%:auto → format
                 int pw = Math.max(2, (int) Math.round(width * pip.scale() / 100.0 / 2.0) * 2); // 偶数化
                 double opacity = Math.max(0, Math.min(1, pip.opacity() / 100.0));
+                boolean translucent = opacity < 1;
                 filter.append("[").append(pipInput + i).append(":v]trim=start=").append(fmt(pip.trimStart()))
                         .append(":end=").append(fmt(pip.trimEnd()))
                         .append(",setpts=PTS-STARTPTS,fps=30,scale=").append(pw).append(":-2");
-                if (opacity < 1) {
-                    filter.append(",format=rgba,colorchannelmixer=aa=").append(String.format(Locale.ROOT, "%.2f", opacity));
+                if (translucent) {
+                    // 半透明必须保留 alpha：yuv420p 无 alpha 通道，colorchannelmixer 改完再转 yuv420p
+                    // 会把 alpha 整层丢掉，overlay 仍按不透明处理。改用 yuva420p + overlay=format=auto。
+                    filter.append(",format=rgba,colorchannelmixer=aa=")
+                            .append(String.format(Locale.ROOT, "%.2f", opacity))
+                            .append(",format=yuva420p");
+                } else {
+                    filter.append(",format=yuv420p");
                 }
-                filter.append(",format=yuv420p[pipv").append(i).append("]; ");
+                filter.append("[pipv").append(i).append("]; ");
             }
             String current = videoMap;
             for (int i = 0; i < pips.size(); i++) {
@@ -770,7 +787,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (pip == null) continue;
                 String label = "[pip" + i + "]";
                 pipChain.append(current).append("[pipv").append(i).append("]")
-                        .append("overlay=x=")
+                        .append("overlay=format=auto:x=")
                         .append(String.format(Locale.ROOT, "'round(main_w*%.4f-overlay_w/2)'", Math.max(0, Math.min(100, pip.x())) / 100.0))
                         .append(":y=")
                         .append(String.format(Locale.ROOT, "'round(main_h*%.4f-overlay_h/2)'", Math.max(0, Math.min(100, pip.y())) / 100.0))

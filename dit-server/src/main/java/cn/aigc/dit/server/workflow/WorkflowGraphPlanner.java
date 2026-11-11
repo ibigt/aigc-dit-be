@@ -560,12 +560,23 @@ public final class WorkflowGraphPlanner {
                     local ? localKey : null));
         }
         clips.sort(Comparator.comparingInt(Clip::order));
+        // 画中画专属素材：V2 副视频轨只在 pipClips 里出现（exportFlatClips 只导出主轨 V1），
+        // 若不排除，自动补齐会把 V2 素材当成额外主轨片段顺序拼接进正片（成片变长、画中画重复）。
+        Set<String> pipSources = new LinkedHashSet<>();
+        for (Map<String, Object> rawPip : mapList(map(data.get("editing")).get("pipClips"))) {
+            String sid = text(rawPip.get("sourceNodeId"));
+            if (sid != null) pipSources.add(sid);
+        }
         // 旧草稿没有 clips 字段时按默认参数补齐所有上游视频。时间线里一旦出现本地导入素材，
         // 说明用户在显式编排，不再自动补上游，否则会混入时间线上根本没有的片段。
         if (!hasLocal) {
             for (String sourceId : videos) {
                 // 显式禁用的片段不再被自动补回，保证"禁用"在成片中真正生效
                 if (disabled.contains(sourceId)) {
+                    continue;
+                }
+                // 仅作画中画的素材不自动进主轨
+                if (pipSources.contains(sourceId)) {
                     continue;
                 }
                 Integer outputIndex = selected.get(sourceId).outputIndex();
