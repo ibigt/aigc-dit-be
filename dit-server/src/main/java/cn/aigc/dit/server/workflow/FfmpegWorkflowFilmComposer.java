@@ -172,6 +172,16 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
 
     @Override
     public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                   List<AudioClip> audioClips, List<WorkflowFilmComposer.ClipStyle> styles,
+                                   List<WorkflowFilmComposer.OverlayClip> overlayClips,
+                                   List<WorkflowFilmComposer.PipClip> pipClips) {
+        // PiP 变更经 WorkflowStepFingerprint（step.overlays 含 video 条目）驱动重合成，
+        // 复用探测本身只看产物 key 是否存在且可播放，与低阶重载同实现。
+        return findExisting(userId, runId, nodeId, clips, target, audioClips);
+    }
+
+    @Override
+    public FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                    List<AudioClip> audioClips) {
         validate(userId, runId, nodeId, clips);
         String key = filmKey(userId, runId, nodeId);
@@ -294,10 +304,30 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
     public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                               List<AudioClip> audioClips, List<WorkflowFilmComposer.ClipStyle> styles,
                               List<WorkflowFilmComposer.OverlayClip> overlayClips) {
+        return compose(userId, runId, nodeId, clips, target, audioClips, styles, overlayClips, List.of());
+    }
+
+    @Override
+    public FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                              List<AudioClip> audioClips, List<WorkflowFilmComposer.ClipStyle> styles,
+                              List<WorkflowFilmComposer.OverlayClip> overlayClips,
+                              List<WorkflowFilmComposer.PipClip> pipClips) {
+        // V2 画中画：video 类叠加不走 PNG 管线，分流出去（OverlayRenderer 只处理 text/graphic）
+        List<WorkflowFilmComposer.OverlayClip> overlays = overlayClips == null ? List.of()
+                : overlayClips.stream().filter(clip -> clip != null && !"video".equals(clip.kind())).toList();
+        List<WorkflowFilmComposer.PipClip> pips = pipClips == null ? List.of() : pipClips;
+        validate(userId, runId, nodeId, clips);
         List<WorkflowFilmComposer.ClipStyle> clipStyles = styles == null ? null
                 : (styles.size() == clips.size() ? styles : null);
-        List<WorkflowFilmComposer.OverlayClip> overlays = overlayClips == null ? List.of() : overlayClips;
-        validate(userId, runId, nodeId, clips);
+        for (WorkflowFilmComposer.PipClip pip : pips) {
+            if (pip == null || pip.sourceKey() == null || pip.sourceKey().isBlank()
+                    || !Double.isFinite(pip.start()) || !Double.isFinite(pip.end()) || pip.end() <= pip.start()
+                    || !Double.isFinite(pip.trimStart()) || !Double.isFinite(pip.trimEnd())
+                    || pip.trimStart() < 0 || pip.trimEnd() <= pip.trimStart()
+                    || !Double.isFinite(pip.scale()) || pip.scale() <= 0 || pip.scale() > 100) {
+                throw new BizException(ErrorCode.BAD_REQUEST, "画中画片段参数无效");
+            }
+        }
         List<AudioClip> tracks = audioClips == null ? List.of() : audioClips;
         for (AudioClip track : tracks) {
             if (track == null || track.storageKey() == null || track.storageKey().isBlank()
@@ -370,16 +400,45 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             }
             AudioClip[] trackArray = usableTracks.toArray(AudioClip[]::new);
             List<AudioClip> effectiveTracks = List.of(trackArray);
+            // V2 画中画：PiP 素材落盘临时文件（与 clips 同口径：裁剪钳制到真实时长，整段不可用静默丢弃）
+            List<Path> pipInputs = new ArrayList<>();
+            List<WorkflowFilmComposer.PipClip> usablePips = new ArrayList<>();
+            for (WorkflowFilmComposer.PipClip pip : pips) {
+                Path input = FfmpegSupport.tempFile("dit-workflow-pip-", ".mp4");
+                temps.add(input);
+                try {
+                    try (InputStream source = storage.get(pip.sourceKey())) {
+                        Files.copy(source, input, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (Exception e) {
+                    throw new BizException(ErrorCode.INTERNAL, "读取画中画素材失败");
+                }
+                Double pipDuration = FfmpegSupport.durationSeconds(input);
+                if (pipDuration == null || !Double.isFinite(pipDuration) || pipDuration <= 0) {
+                    log.warn("pip source has no valid duration, skipped: {}", pip.sourceKey());
+                    continue;
+                }
+                double clampedStart = Math.min(pip.trimStart(), Math.max(0, pipDuration - 0.01));
+                double clampedEnd = Math.min(pip.trimEnd(), pipDuration);
+                if (clampedEnd <= clampedStart) {
+                    continue;
+                }
+                usablePips.add(clampedStart == pip.trimStart() && clampedEnd == pip.trimEnd()
+                        ? pip
+                        : new WorkflowFilmComposer.PipClip(pip.start(), pip.end(), pip.sourceKey(),
+                                clampedStart, clampedEnd, pip.x(), pip.y(), pip.scale(), pip.opacity(), pip.muted()));
+                pipInputs.add(input);
+            }
             Path output = FfmpegSupport.tempFile("dit-workflow-film-", ".mp4");
             temps.add(output);
             // 叠加层渲染（排期 #7）：文字/图形每段烧成**独立**的透明 PNG。
             // 必须一段一张：多段文字若挤在同一张图里，各段的时间窗会互相串
             // （同一张图里所有文字都在，只是按不同 enable 区间显示）。
             List<Path> overlayPngs = new ArrayList<>();
-            if (overlayClips != null && !overlayClips.isEmpty()) {
+            if (overlays != null && !overlays.isEmpty()) {
                 int ow = target == null ? DEFAULT_WIDTH : target.width();
                 int oh = target == null ? DEFAULT_HEIGHT : target.height();
-                for (WorkflowFilmComposer.OverlayClip clip : overlayClips) {
+                for (WorkflowFilmComposer.OverlayClip clip : overlays) {
                     // 每段都渲染（含无效段），保证 PNG 与 overlays 严格同序——args 侧按下标取图
                     Path png = FfmpegSupport.tempFile("dit-workflow-overlay-", ".png");
                     temps.add(png);
@@ -395,7 +454,8 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                     : generateProperties.getFfmpeg().getConcatEncodeTimeoutSeconds();
             try {
                 runner.run(args(inputs, clips, hasAudio, target, output, effectiveTracks, audioInputs,
-                        clipStyles, overlayPngs.isEmpty() ? null : overlayPngs.get(0), overlayClips, overlayPngs), timeout);
+                        clipStyles, overlayPngs.isEmpty() ? null : overlayPngs.get(0), overlays, overlayPngs,
+                        usablePips, pipInputs), timeout);
             } catch (BizException e) {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
                     throw new BizException(ErrorCode.INTERNAL, "工作流成片编码超时");
@@ -510,12 +570,32 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                              List<WorkflowFilmComposer.ClipStyle> styles, Path overlayPng,
                              List<WorkflowFilmComposer.OverlayClip> overlays,
                              List<Path> overlayPngPaths) {
+        return args(inputs, clips, hasAudio, target, output, audioClips, audioInputs, styles, overlayPng,
+                overlays, overlayPngPaths, List.of(), List.of());
+    }
+
+    /**
+     * V2 画中画全量构造：pipClips 与 pipInputs 一一对应（本地临时文件）。
+     * 每路 PiP：trim → setpts → fps → scale（成片宽 × scale%）→ format，
+     * 再按 enable 时间窗 overlay 到主画面（位置 x/y 百分比换算成像素）。
+     * pipClips 为空时 filter 与十一参重载逐字节一致。
+     */
+    static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target,
+                             Path output, List<AudioClip> audioClips, List<Path> audioInputs,
+                             List<WorkflowFilmComposer.ClipStyle> styles, Path overlayPng,
+                             List<WorkflowFilmComposer.OverlayClip> overlays,
+                             List<Path> overlayPngPaths,
+                             List<WorkflowFilmComposer.PipClip> pipClips, List<Path> pipInputs) {
         if (inputs.size() != clips.size() || hasAudio.size() != clips.size()) {
             throw new IllegalArgumentException("clip inputs mismatch");
         }
         List<AudioClip> tracks = audioClips == null ? List.of() : audioClips;
         if (audioInputs != null && audioInputs.size() != tracks.size()) {
             throw new IllegalArgumentException("audio inputs mismatch");
+        }
+        List<WorkflowFilmComposer.PipClip> pips = pipClips == null ? List.of() : pipClips;
+        if (pipInputs != null && pipInputs.size() != pips.size()) {
+            throw new IllegalArgumentException("pip inputs mismatch");
         }
         List<WorkflowFilmComposer.ClipStyle> clipStyles = styles == null || styles.size() != clips.size()
                 ? null : styles;
@@ -557,6 +637,12 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         for (Path png : overlayFiles) {
             args.add("-i");
             args.add(png.toString());
+        }
+        // V2 画中画输入：追加在叠加 PNG 之后（与 pipClips 同序）
+        int pipInput = overlayInput + overlayFiles.size();
+        for (Path pip : (pipInputs == null ? List.<Path>of() : pipInputs)) {
+            args.add("-i");
+            args.add(pip.toString());
         }
         StringBuilder filter = new StringBuilder();
         // 每路输入：trim → setpts → fps → scale → pad → [eq/hue/gblur 样式滤镜] → setsar → format
@@ -656,6 +742,47 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                     filter.append("; ");
                 }
                 filter.append(chain);
+                videoMap = current;
+            }
+        }
+        // V2 画中画：每路 PiP 先单独处理（trim → fps → scale 到成片宽×scale%），再串接 overlay。
+        // 位置 x/y 是画面百分比中心点，换算成 overlay 的左上角像素坐标（x%×W - w/2）。
+        // 注意 overlay 的坐标接受 main_w/overlay_w 表达式，直接用表达式避免自己算。
+        if (!pips.isEmpty()) {
+            StringBuilder pipChain = new StringBuilder();
+            for (int i = 0; i < pips.size(); i++) {
+                WorkflowFilmComposer.PipClip pip = pips.get(i);
+                if (pip == null) continue;
+                // PiP 分支链：trim（源内裁剪）→ setpts → fps → scale=成片宽×scale%:auto → format
+                int pw = Math.max(2, (int) Math.round(width * pip.scale() / 100.0 / 2.0) * 2); // 偶数化
+                double opacity = Math.max(0, Math.min(1, pip.opacity() / 100.0));
+                filter.append("[").append(pipInput + i).append(":v]trim=start=").append(fmt(pip.trimStart()))
+                        .append(":end=").append(fmt(pip.trimEnd()))
+                        .append(",setpts=PTS-STARTPTS,fps=30,scale=").append(pw).append(":-2");
+                if (opacity < 1) {
+                    filter.append(",format=rgba,colorchannelmixer=aa=").append(String.format(Locale.ROOT, "%.2f", opacity));
+                }
+                filter.append(",format=yuv420p[pipv").append(i).append("]; ");
+            }
+            String current = videoMap;
+            for (int i = 0; i < pips.size(); i++) {
+                WorkflowFilmComposer.PipClip pip = pips.get(i);
+                if (pip == null) continue;
+                String label = "[pip" + i + "]";
+                pipChain.append(current).append("[pipv").append(i).append("]")
+                        .append("overlay=x=")
+                        .append(String.format(Locale.ROOT, "'round(main_w*%.4f-overlay_w/2)'", Math.max(0, Math.min(100, pip.x())) / 100.0))
+                        .append(":y=")
+                        .append(String.format(Locale.ROOT, "'round(main_h*%.4f-overlay_h/2)'", Math.max(0, Math.min(100, pip.y())) / 100.0))
+                        .append(":enable='between(t,").append(fmt(pip.start()))
+                        .append(",").append(fmt(pip.end())).append(")'").append(label).append("; ");
+                current = label;
+            }
+            if (!pipChain.isEmpty()) {
+                if (filter.length() > 0 && !filter.toString().endsWith("; ")) {
+                    filter.append("; ");
+                }
+                filter.append(pipChain);
                 videoMap = current;
             }
         }

@@ -54,6 +54,17 @@ public final class WorkflowGraphPlanner {
     }
 
     /**
+     * V2 画中画片段（剪辑台副视频轨 → editing.pipClips）：解析期只做字段清洗，
+     * sourceKey 置 null——产物 key 由 WorkflowRunService.editPipClips 在运行期
+     * （上游 SUCCEEDED 后）按 sourceNodeId/localKey 解析。
+     * 与音频轨同口径：非法条目静默丢弃，不阻断成片。
+     */
+    public record PipDraft(String sourceNodeId, Integer outputIndex, String localKey,
+                           double start, double end, double trimStart, Double trimEnd,
+                           double x, double y, double scale, double opacity, boolean muted) {
+    }
+
+    /**
      * 片段去重键。有 clipId 时按它去重——同一上游节点的同一输出可能被拆成多段
      * （不同裁剪区间），按 (sourceNodeId, outputIndex) 去重会把它们合成一条，
      * 导致「只导出了选中的那一段」。旧草稿没有 clipId 时回落到旧键。
@@ -93,6 +104,7 @@ public final class WorkflowGraphPlanner {
             List<AudioClip> audioClips,
             List<WorkflowFilmComposer.ClipStyle> clipStyles,
             List<WorkflowFilmComposer.OverlayClip> overlays,
+            List<PipDraft> pipClips,
             Integer outputIndex,
             Map<String, Object> audio,
             String skipReason) {
@@ -298,7 +310,8 @@ public final class WorkflowGraphPlanner {
                 // 音频轨片段在解析期只做字段清洗；audioClips 的解析要读到上游音频节点的产物，
                 // 而产物在 run 推进后才落地，因此放 EDIT 分支的 withAudioResolved 处理
                 List.of(),
-                // 样式 / 叠加层（排期 #7）同样在 EDIT 分支解析（与 clips 对齐）
+                // 样式 / 叠加层 / 画中画（排期 #7 / V2）同样在 EDIT 分支解析（与 clips 对齐）
+                null,
                 null,
                 null,
                 intValue(media.getOrDefault("selectedOutputIndex", media.get("outputIndex")), 0, 0, Integer.MAX_VALUE), audio,
@@ -383,8 +396,11 @@ public final class WorkflowGraphPlanner {
                     // step map 与旧版逐字节一致，运行指纹不漂移。
                     List<WorkflowFilmComposer.ClipStyle> clipStyles = editClipStyles(data, clips.size());
                     List<WorkflowFilmComposer.OverlayClip> overlays = editOverlays(data);
+                    // V2 画中画（副视频轨）：与 overlays 同期解析，但产物 key 在运行期才解析
+                    // （editPips 只做字段清洗，sourceKey 留空）
+                    List<PipDraft> pips = editPips(data);
                     resolved.put(step.nodeId(), withStyleResolved(
-                            withResolved(step, null, List.of(), clips, audioClips), clipStyles, overlays));
+                            withResolved(step, null, List.of(), clips, audioClips), clipStyles, overlays, pips));
                 }
             } catch (BizException error) {
                 if (!lenient) {
@@ -612,6 +628,7 @@ public final class WorkflowGraphPlanner {
         for (Map<String, Object> item : raw) {
             String kind = text(item.get("kind"));
             if (!"text".equals(kind) && !"graphic".equals(kind)) continue;
+            // V2 画中画不走 overlays：完整字段经 editing.pipClips 独立通道（editPips）
             double start = doubleValue(item.get("start"), 0.0);
             double end = doubleValue(item.get("end"), 0.0);
             if (!Double.isFinite(start) || !Double.isFinite(end) || start < 0 || end <= start) continue;
@@ -673,6 +690,41 @@ public final class WorkflowGraphPlanner {
         return List.copyOf(audioClips);
     }
 
+    /**
+     * V2 画中画片段解析（剪辑台副视频轨 → 成片画中画）：读 data.editing.pipClips 原样清洗。
+     * 解析期不解析产物 key（sourceKey=null），运行期由 WorkflowRunService 补；
+     * start/end 是成片内绝对时间。非法条目静默丢弃（与音频轨同口径）。
+     */
+    private static List<PipDraft> editPips(Map<String, Object> data) {
+        List<PipDraft> pips = new ArrayList<>();
+        for (Map<String, Object> raw : mapList(map(data.get("editing")).get("pipClips"))) {
+            String sourceId = text(raw.get("sourceNodeId"));
+            String localKey = text(raw.get("localKey"));
+            boolean local = storageKey(localKey);
+            if (localKey != null && !local) continue;
+            if (!local && sourceId == null) continue;
+            double start = doubleValue(raw.get("start"), 0.0);
+            double end = doubleValue(raw.get("end"), 0.0);
+            Double trimEnd = doubleValue(raw.get("trimEnd"), null);
+            double trimStart = doubleValue(raw.get("trimStart"), 0.0);
+            if (!Double.isFinite(start) || start < 0 || !Double.isFinite(end) || end <= start
+                    || !Double.isFinite(trimStart) || trimStart < 0
+                    || (trimEnd != null && (!Double.isFinite(trimEnd) || trimEnd <= trimStart))) {
+                continue;
+            }
+            pips.add(new PipDraft(sourceId,
+                    intValue(raw.get("outputIndex"), 0, 0, Integer.MAX_VALUE),
+                    local ? localKey : null,
+                    start, end, trimStart, trimEnd,
+                    doubleValue(raw.get("x"), 70.0),
+                    doubleValue(raw.get("y"), 25.0),
+                    Math.max(5, Math.min(100, doubleValue(raw.get("scale"), 30.0))),
+                    Math.max(0, Math.min(100, doubleValue(raw.get("opacity"), 100.0))),
+                    Boolean.TRUE.equals(raw.get("muted"))));
+        }
+        return pips.isEmpty() ? List.of() : List.copyOf(pips);
+    }
+
     private static Double doubleValue(Object value, Double fallback) {
         if (value instanceof Number number) {
             return number.doubleValue();
@@ -721,20 +773,21 @@ public final class WorkflowGraphPlanner {
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
                 step.stepType(), resolvedPrompt, outputs, clips, audioClips,
-                step.clipStyles(), step.overlays(), step.outputIndex(), step.audio(),
+                step.clipStyles(), step.overlays(), step.pipClips(), step.outputIndex(), step.audio(),
                 step.skipReason());
     }
 
     /** 附加样式与叠加层（排期 #7）：两者都可为 null（= 无此效果），保持 step map 与旧版一致。 */
     private static Step withStyleResolved(Step step,
                                           List<WorkflowFilmComposer.ClipStyle> clipStyles,
-                                          List<WorkflowFilmComposer.OverlayClip> overlays) {
+                                          List<WorkflowFilmComposer.OverlayClip> overlays,
+                                          List<PipDraft> pipClips) {
         return new Step(step.nodeId(), step.title(), step.kind(), step.category(), step.prompt(),
                 step.ratio(), step.resolution(), step.quality(), step.durationSec(), step.copies(),
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
                 step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
-                clipStyles, overlays, step.outputIndex(), step.audio(), step.skipReason());
+                clipStyles, overlays, pipClips, step.outputIndex(), step.audio(), step.skipReason());
     }
 
     /** 标记该步骤为「跳过」（需求 4.6.4.2）：保留原步骤信息，仅附跳过原因。 */
@@ -744,7 +797,7 @@ public final class WorkflowGraphPlanner {
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), step.dependsOn(), step.refs(),
                 step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
-                step.clipStyles(), step.overlays(), step.outputIndex(),
+                step.clipStyles(), step.overlays(), step.pipClips(), step.outputIndex(),
                 step.audio(), reason);
     }
 
@@ -833,7 +886,7 @@ public final class WorkflowGraphPlanner {
                 step.speed(), step.modelName(), step.frameMode(), step.videoRefMode(),
                 step.firstFrameKey(), step.lastFrameKey(), List.copyOf(dependsOn), step.refs(),
                 step.stepType(), step.resolvedPrompt(), step.outputs(), step.clips(), step.audioClips(),
-                step.clipStyles(), step.overlays(), step.outputIndex(),
+                step.clipStyles(), step.overlays(), step.pipClips(), step.outputIndex(),
                 step.audio(), step.skipReason());
     }
 

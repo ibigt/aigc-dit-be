@@ -721,6 +721,26 @@ public class GenerateWorker {
             latest.setOutputStorageKey(keys.get(0));
             latest.setOutputKeys(keys);
             latest.setPosterKey(firstPoster);
+            // 音频产物元数据根治：供应商不回音频时长，下游（剪辑台/成片合成）拿不到
+            // durationSec/durationMs 只能按 5s 兜底落轨，导出时再被钳制/静默丢弃。
+            // 任务成功时用 ffprobe 探测真实时长写进 params.metadata.durationMs，
+            // WorkflowRunService 构建 outputs 时会自动 merge 进产物元数据。
+            // 探测失败只记日志，绝不影响任务终态。
+            if (ModelCategory.AUDIO.equalsIgnoreCase(latest.getCategory())) {
+                Long durationMs = probeAudioDurationMs(keys.get(0));
+                if (durationMs != null) {
+                    Map<String, Object> params = latest.getParams() == null
+                            ? new LinkedHashMap<>()
+                            : new LinkedHashMap<>(latest.getParams());
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> metadata = params.get("metadata") instanceof Map<?, ?> raw
+                            ? new LinkedHashMap<>((Map<String, Object>) raw)
+                            : new LinkedHashMap<>();
+                    metadata.put("durationMs", durationMs);
+                    params.put("metadata", metadata);
+                    latest.setParams(params);
+                }
+            }
             if (StringUtils.hasText(firstTail)) {
                 java.util.Map<String, Object> params = latest.getParams() == null
                         ? new java.util.LinkedHashMap<>()
@@ -748,6 +768,36 @@ public class GenerateWorker {
         }
         if (releaseDramaSlot) {
             kickDramaShotQueue();
+        }
+    }
+
+    /** 音频产物真实时长探测（ffprobe）；失败返回 null 不阻断任务终态。 */
+    private Long probeAudioDurationMs(String storageKey) {
+        if (objectStorage == null || !StringUtils.hasText(storageKey)) {
+            return null;
+        }
+        java.nio.file.Path temp = null;
+        try {
+            byte[] bytes = objectStorage.getBytes(storageKey);
+            if (bytes == null || bytes.length == 0) {
+                return null;
+            }
+            temp = java.nio.file.Files.createTempFile("dit-audio-probe-", ".audio");
+            java.nio.file.Files.write(temp, bytes);
+            cn.aigc.dit.server.media.AssetMetadataProbe.Metadata meta =
+                    cn.aigc.dit.server.media.AssetMetadataProbe.probeMedia(temp);
+            return meta == null ? null : meta.durationMs();
+        } catch (Exception e) {
+            log.warn("probe audio duration failed for {}: {}", storageKey, e.getMessage());
+            return null;
+        } finally {
+            if (temp != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(temp);
+                } catch (Exception ignored) {
+                    // temp 清理失败无需处理
+                }
+            }
         }
     }
 

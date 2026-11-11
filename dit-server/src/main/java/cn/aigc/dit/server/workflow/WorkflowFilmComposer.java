@@ -88,6 +88,16 @@ public interface WorkflowFilmComposer {
                        String shape, double x, double y, double scale, double opacity) {
     }
 
+    /**
+     * V2 画中画叠加（副视频轨）：sourceKey 为已解析的产物 storageKey（或本地导入素材 key），
+     * x/y 为画面百分比位置（默认 70/25），scale 为画面百分比宽（默认 30），
+     * trim 为源内裁剪区间。opacity 0-100。
+     */
+    record PipClip(double start, double end, String sourceKey,
+                   double trimStart, double trimEnd,
+                   double x, double y, double scale, double opacity, boolean muted) {
+    }
+
     FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
 
     FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);
@@ -110,13 +120,27 @@ public interface WorkflowFilmComposer {
      */
     default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
-        return compose(userId, runId, nodeId, clips, target, audioClips);
+        return compose(userId, runId, nodeId, clips, target, audioClips, styles, overlays, List.of());
+    }
+
+    /** V2 画中画完整合成：pipClips 为空时与四参重载逐字节一致。 */
+    default FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                               List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays,
+                               List<PipClip> pipClips) {
+        return compose(userId, runId, nodeId, clips, target, audioClips, styles, overlays);
     }
 
     /** 完整复用探测：styles / overlays 同样参与指纹，样式或叠加层变更触发重合成。 */
     default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
                                      List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays) {
-        return findExisting(userId, runId, nodeId, clips, target, audioClips);
+        return findExisting(userId, runId, nodeId, clips, target, audioClips, styles, overlays, List.of());
+    }
+
+    /** V2 画中画复用探测：pipClips 同样参与指纹。 */
+    default FilmOutput findExisting(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target,
+                                     List<AudioClip> audioClips, List<ClipStyle> styles, List<OverlayClip> overlays,
+                                     List<PipClip> pipClips) {
+        return findExisting(userId, runId, nodeId, clips, target, audioClips, styles, overlays);
     }
 
     /** 兼容旧调用：无目标尺寸（历史默认 1280x720）。 */

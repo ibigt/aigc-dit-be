@@ -458,11 +458,13 @@ public class WorkflowRunService {
                     } catch (IllegalArgumentException ignored) {
                         target = null;
                     }
+                    // V2 画中画（副视频轨）：kind=video 的叠加条目在运行期解析产物 key 后交给合成器
+                    List<WorkflowFilmComposer.PipClip> pipClips = editPipClips(step, steps, run.getUserId());
                     WorkflowFilmComposer.FilmOutput film = filmComposer.findExisting(run.getUserId(), run.getId(),
-                            nodeId, clips, target, audioClips, editClipStyles(step, clips.size()), editOverlays(step));
+                            nodeId, clips, target, audioClips, editClipStyles(step, clips.size()), editOverlays(step), pipClips);
                     if (film == null) {
                         film = filmComposer.compose(run.getUserId(), run.getId(), nodeId, clips, target, audioClips,
-                                editClipStyles(step, clips.size()), editOverlays(step));
+                                editClipStyles(step, clips.size()), editOverlays(step), pipClips);
                     }
                     creationService.recordWorkflowFilm(run.getUserId(), run.getId(), text(step.get("nodeId")),
                             text(step.get("title")), film.storageKey(), film.posterKey(), film.durationSeconds());
@@ -1045,6 +1047,63 @@ public class WorkflowRunService {
                 && !key.contains("..") && key.startsWith("users/" + userId + "/");
     }
 
+    /**
+     * V2 画中画叠加（副视频轨）：读 step 的 pipClips（Planner 已清洗、指纹已含），
+     * 运行期解析产物 storageKey（上游步骤 outputs / 本地导入 key），非法条目静默丢弃。
+     */
+    private static List<WorkflowFilmComposer.PipClip> editPipClips(Map<String, Object> step,
+                                                                   List<Map<String, Object>> steps,
+                                                                   Long userId) {
+        if (!(step.get("pipClips") instanceof List<?> raw) || raw.isEmpty()) {
+            return List.of();
+        }
+        List<WorkflowFilmComposer.PipClip> pips = new ArrayList<>();
+        for (Object item : raw) {
+            if (!(item instanceof Map<?, ?> configured)) {
+                continue;
+            }
+            Double start = doubleValue(configured.get("start"));
+            Double end = doubleValue(configured.get("end"));
+            if (start == null || end == null || start < 0 || end <= start) {
+                continue;
+            }
+            // 源解析：本地导入直读；上游节点按 sourceNodeId+outputIndex 取 outputs
+            String localKey = text(configured.get("localKey"));
+            String sourceKey;
+            if (localKey != null) {
+                if (!ownedStorageKey(localKey, userId)) continue;
+                sourceKey = localKey;
+            } else {
+                String sourceId = text(configured.get("sourceNodeId"));
+                Map<String, Object> source = steps.stream()
+                        .filter(entry -> sourceId != null && sourceId.equals(text(entry.get("nodeId"))))
+                        .findFirst().orElse(null);
+                if (source == null || !TaskStatus.SUCCEEDED.equals(text(source.get("status")))) {
+                    continue;
+                }
+                int index = intValue(configured.get("outputIndex")) == null ? 0 : intValue(configured.get("outputIndex"));
+                if (!(source.get("outputs") instanceof List<?> outputs) || index < 0 || index >= outputs.size()
+                        || !(outputs.get(index) instanceof Map<?, ?> output)
+                        || !ModelCategory.VIDEO.equals(text(output.get("type")))
+                        || !WorkflowGraphPlanner.storageKey(text(output.get("storageKey")))) {
+                    continue;
+                }
+                sourceKey = text(output.get("storageKey"));
+            }
+            double trimStart = doubleOr(configured.get("trimStart"), 0.0);
+            Double trimEnd = doubleValue(configured.get("trimEnd"));
+            if (trimEnd == null || trimEnd <= trimStart) continue;
+            pips.add(new WorkflowFilmComposer.PipClip(start, end, sourceKey,
+                    trimStart, trimEnd,
+                    doubleOr(configured.get("x"), 70.0),
+                    doubleOr(configured.get("y"), 25.0),
+                    Math.max(5, Math.min(100, doubleOr(configured.get("scale"), 30.0))),
+                    Math.max(0, Math.min(100, doubleOr(configured.get("opacity"), 100.0))),
+                    Boolean.TRUE.equals(configured.get("muted"))));
+        }
+        return pips;
+    }
+
     private static List<WorkflowFilmComposer.Clip> editClips(Map<String, Object> step,
                                                                List<Map<String, Object>> steps,
                                                                Long userId) {
@@ -1163,6 +1222,7 @@ public class WorkflowRunService {
                 continue;
             }
             String kind = text(configured.get("kind"));
+            // V2 画中画：video 类不经此处（editPipClips 单独解析），跳过
             if (!"text".equals(kind) && !"graphic".equals(kind)) {
                 continue;
             }
@@ -1336,8 +1396,7 @@ public class WorkflowRunService {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("start", overlay.start());
                 item.put("end", overlay.end());
-                item.put("kind", overlay.kind());
-                item.put("text", overlay.text());
+                item.put("kind", overlay.kind());                item.put("text", overlay.text());
                 item.put("color", overlay.color());
                 item.put("fontSize", overlay.fontSize());
                 item.put("weight", overlay.weight());
@@ -1347,6 +1406,26 @@ public class WorkflowRunService {
                 item.put("y", overlay.y());
                 item.put("scale", overlay.scale());
                 item.put("opacity", overlay.opacity());
+                return item;
+            }).toList());
+        }
+        // V2 画中画（副视频轨）：进 step map 参与运行指纹（改画中画触发重合成），
+        // 运行期 editPipClips 读回并解析产物 key。无画中画时不写字段（与旧版逐字节一致）。
+        if (step.pipClips() != null && !step.pipClips().isEmpty()) {
+            map.put("pipClips", step.pipClips().stream().map(pip -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("start", pip.start());
+                item.put("end", pip.end());
+                item.put("sourceNodeId", pip.sourceNodeId());
+                item.put("outputIndex", pip.outputIndex());
+                item.put("trimStart", pip.trimStart());
+                item.put("trimEnd", pip.trimEnd());
+                item.put("x", pip.x());
+                item.put("y", pip.y());
+                item.put("scale", pip.scale());
+                item.put("opacity", pip.opacity());
+                item.put("muted", pip.muted());
+                if (pip.localKey() != null) item.put("localKey", pip.localKey());
                 return item;
             }).toList());
         }
