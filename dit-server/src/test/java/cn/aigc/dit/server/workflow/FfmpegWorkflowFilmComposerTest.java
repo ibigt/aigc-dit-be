@@ -482,8 +482,8 @@ class FfmpegWorkflowFilmComposerTest {
         List<String> args = pipArgs(Path.of("main.mp4"), Path.of("bgm.wav"), Path.of("overlay.png"),
                 Path.of("pip.mp4"), Path.of("out.mp4"), 60);
         String command = String.join(" ", args);
-        // 输入顺序：主片 → 音轨 → 叠加 PNG → 画中画；索引 3 正是 PiP 输入
-        assertTrue(command.contains("-i main.mp4 -i bgm.wav -i overlay.png -i pip.mp4"));
+        // 输入顺序：主片 → 音轨 → 叠加 PNG（-loop 1 单帧循环）→ 画中画；索引 3 正是 PiP 输入
+        assertTrue(command.contains("-i main.mp4 -i bgm.wav -loop 1 -i overlay.png -i pip.mp4"));
         String filter = args.get(args.indexOf("-filter_complex") + 1);
         assertTrue(filter.contains("[3:v]trim=start=0.000:end=2.000"));
         // 半透明必须保留 alpha，否则 yuva420p 之前的 format 会把 colorchannelmixer 的成果丢掉
@@ -549,6 +549,61 @@ class FfmpegWorkflowFilmComposerTest {
             if (b > r + 60 && b > g + 60) blue++;
         }
         assertTrue(blue > 100, "画中画没有出现在成片里，蓝色像素数=" + blue);
+    }
+
+    /**
+     * 字幕/图形叠加真实落盘回归（ffmpeg 9.0.2 实测）：
+     * ① PNG 输入缺 -loop 1 → enable 窗口起点 > 0 时单帧 PNG 已 EOF，窗口内无帧可叠，字幕静默丢失；
+     * ② 加了 -loop 1 却没给每级 overlay 加 shortest=1 → 无限 PNG 流让 ffmpeg 永不结束（超时）。
+     * 这里直接跑真实命令：断言成片时长严格等于主片，并抽查窗口内/外的白色像素。
+     */
+    @Test
+    void pngOverlaysAreBurnedInsideEnableWindowsAndFilmTerminates() throws Exception {
+        Assumptions.assumeTrue(FfmpegSupport.available());
+        Path main = directory.resolve("overlay-main.mp4");
+        Path pngA = directory.resolve("overlay-a.png");
+        Path pngB = directory.resolve("overlay-b.png");
+        Path out = directory.resolve("overlay-out.mp4");
+        ffmpegFixture("color=c=red:s=64x36:r=30", 4, main);
+
+        int width = 1280, height = 720;
+        for (Path png : List.of(pngA, pngB)) {
+            Files.write(png, OverlayRenderer.renderPng(List.of(new OverlayRenderer.Overlay(
+                    "text", 0, 1, "字幕", "#ffffff", 32, 700, "center",
+                    null, 0, 0, 0, 100)), width, height));
+        }
+        List<WorkflowFilmComposer.OverlayClip> overlays = List.of(
+                new WorkflowFilmComposer.OverlayClip(0.5, 1.5, "text", "字幕", "#ffffff",
+                        32, 700, "center", null, 0, 0, 0, 100),
+                new WorkflowFilmComposer.OverlayClip(2.5, 3.5, "text", "字幕", "#ffffff",
+                        32, 700, "center", null, 0, 0, 0, 100));
+        FfmpegSupport.run(FfmpegWorkflowFilmComposer.args(
+                List.of(main), List.of(new Clip("overlay-main.mp4", 0, 4, false, 1)), List.of(true),
+                WorkflowFilmComposer.FilmSize.of("16:9", "720p"), out,
+                List.of(), List.of(), null, null, overlays,
+                List.of(pngA, pngB), List.of(), List.of()), 90);
+
+        Double duration = FfmpegSupport.durationSeconds(out);
+        assertNotNull(duration);
+        assertTrue(duration >= 3.8 && duration <= 4.2,
+                "成片必须随主片结束，不能因无限 PNG 流拖尾/超时：" + duration);
+        assertTrue(whitePixels(out, 1.0) > 500, "第一段窗口内应烧上白色字幕");
+        assertTrue(whitePixels(out, 3.0) > 500, "第二段窗口内应烧上白色字幕");
+        assertEquals(0, whitePixels(out, 2.0), "两段之间不应有叠加");
+        assertEquals(0, whitePixels(out, 3.8), "窗口结束后不应有叠加");
+    }
+
+    private int whitePixels(Path film, double atSecond) throws Exception {
+        Path frame = directory.resolve("frame-" + atSecond + ".rgb");
+        ffmpeg("-ss", Double.toString(atSecond), "-i", film.toString(), "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgb24", frame.toString());
+        byte[] pixels = Files.readAllBytes(frame);
+        int white = 0;
+        for (int i = 0; i + 2 < pixels.length; i += 3) {
+            int r = pixels[i] & 0xff, g = pixels[i + 1] & 0xff, b = pixels[i + 2] & 0xff;
+            if (r > 200 && g > 200 && b > 200) white++;
+        }
+        return white;
     }
 
     private void ffmpegFixture(String color, int seconds, Path target) throws Exception {

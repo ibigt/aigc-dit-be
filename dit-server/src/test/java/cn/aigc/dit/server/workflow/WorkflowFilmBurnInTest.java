@@ -135,6 +135,49 @@ class WorkflowFilmBurnInTest {
     }
 
     /**
+     * 单帧 PNG 叠加必须同时具备两件套（ffmpeg 9.0.2 实测，缺一不可）：
+     * ① 输入侧 -loop 1：enable 窗口起点 > 0 时（如 between(t,0.3,3)），t<start 期间 overlay
+     *    不消费副输入但单帧 PNG 已 EOF，窗口开启后无帧可叠、字幕静默丢失；
+     * ② 每级 overlay 的 shortest=1：-loop 1 让副输入变无限流，overlay 默认 eof_action=repeat
+     *    会在主画面 EOF 后一直重复尾帧，输出侧又没有 -t / -shortest，成片永不结束。
+     * 两者只在有叠加层时出现，无叠加层时命令必须与旧版逐字节一致。
+     */
+    @Test
+    void pngOverlaysNeedLoopInputAndShortestOverlay() {
+        List<String> args = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")), List.of(CLIP), List.of(true), null, Path.of("out.mp4"),
+                List.of(), List.of(), null, null,
+                List.of(new WorkflowFilmComposer.OverlayClip(0, 2, "text", "甲", "#ffffff", 16, 400, "center",
+                                null, 0, 0, 0, 0),
+                        new WorkflowFilmComposer.OverlayClip(3, 5, "text", "乙", "#ffffff", 16, 400, "center",
+                                null, 0, 0, 0, 0)),
+                List.of(Path.of("a.png"), Path.of("b.png")));
+        String command = String.join(" ", args);
+        assertTrue(command.contains("-loop 1 -i a.png"), command);
+        assertTrue(command.contains("-loop 1 -i b.png"), command);
+        assertEquals(2, occurrences(command, "-loop 1 -i"), command);
+        assertEquals(2, occurrences(command, ":shortest=1"), command);
+        assertTrue(command.contains("overlay=enable='between(t,0.000,2.000)':shortest=1[ov0]"), command);
+        assertTrue(command.contains("overlay=enable='between(t,3.000,5.000)':shortest=1[ov1]"), command);
+
+        List<String> legacy = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("v.mp4")), List.of(CLIP), List.of(true), null, Path.of("out.mp4"),
+                List.of(), List.of());
+        assertFalse(String.join(" ", legacy).contains("-loop 1"));
+        assertFalse(String.join(" ", legacy).contains(":shortest=1"));
+    }
+
+    private static int occurrences(String text, String needle) {
+        int count = 0;
+        int from = 0;
+        while ((from = text.indexOf(needle, from)) >= 0) {
+            count++;
+            from += needle.length();
+        }
+        return count;
+    }
+
+    /**
      * ffmpeg overlay 滤镜语义：第一个输入是主画面，第二个是覆盖层。
      * 写成 [png:v][v] 会把视频叠到透明 PNG 上——画面全黑、字幕出不来。
      */
@@ -186,8 +229,8 @@ class WorkflowFilmBurnInTest {
                                 null, 0, 0, 0, 0)),
                 List.of(Path.of("a.png"), Path.of("b.png")));
         String command = String.join(" ", args);
-        assertTrue(command.contains("[v][1:v]overlay=enable='between(t,0.000,2.000)'[ov0]"), command);
-        assertTrue(command.contains("[ov0][2:v]overlay=enable='between(t,3.000,5.000)'[ov1]"), command);
+        assertTrue(command.contains("[v][1:v]overlay=enable='between(t,0.000,2.000)':shortest=1[ov0]"), command);
+        assertTrue(command.contains("[ov0][2:v]overlay=enable='between(t,3.000,5.000)':shortest=1[ov1]"), command);
         assertTrue(command.contains("-map [ov1]"), command);
         // 两张 PNG 各占一个输入
         assertTrue(command.contains("a.png"), command);

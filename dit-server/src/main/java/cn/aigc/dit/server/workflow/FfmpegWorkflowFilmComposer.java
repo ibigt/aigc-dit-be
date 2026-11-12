@@ -637,9 +637,14 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             args.add("-i");
             args.add(audioInput.toString());
         }
-        // 叠加层 PNG 输入：追加在所有输入之后，每段一张（与 overlays 同序）
+        // 叠加层 PNG 输入：追加在所有输入之后，每段一张（与 overlays 同序）。
+        // -loop 1 必加：单帧 PNG 在 enable 窗口起点 > 0 时（如 between(t,0.3,3)），t<start 期间
+        // overlay 不消费副输入但流已 EOF，窗口开启后无帧可叠、字幕静默丢失（ffmpeg 9.0.2 实测）。
+        // 与之配套，下方每级 overlay 必须带 shortest=1，否则无限 PNG 流会把成片拖成永不结束。
         int overlayInput = silentInput + tracks.size();
         for (Path png : overlayFiles) {
+            args.add("-loop");
+            args.add("1");
             args.add("-i");
             args.add(png.toString());
         }
@@ -733,9 +738,13 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (overlay == null || overlay.end() <= overlay.start()) continue;
                 String label = "[ov" + index + "]";
                 // overlayFiles 与 overlays 严格同序（compose 按同序渲染 PNG），按下标取
+                // shortest=1 必加：-loop 1 让 PNG 变成无限流，overlay 默认 eof_action=repeat 会在
+                // 主画面 EOF 后继续重复最后一帧，成片永不结束（实测 timeout）。shortest=1 让该级
+                // overlay 随主画面（而非 PNG）结束，保证成片时长严格等于拼接结果且不拖尾。
                 chain.append(current).append("[").append(overlayInput + i).append(":v]")
                         .append("overlay=enable='between(t,").append(fmt(overlay.start()))
-                        .append(",").append(fmt(overlay.end())).append(")'").append(label).append("; ");
+                        .append(",").append(fmt(overlay.end())).append(")'").append(":shortest=1")
+                        .append(label).append("; ");
                 current = label;
                 index++;
             }
