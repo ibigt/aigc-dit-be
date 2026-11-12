@@ -181,8 +181,13 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    environment:
+      # 非空时覆盖 brand 文件。留空则读 ./brand 第一行，再空才用「同道」。
+      APP_NAME: ${APP_NAME:-}
     ports:
       - "${FRONTEND_PORT:-8088}:80"
+    volumes:
+      - ./brand:/etc/dit/brand:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 10s
