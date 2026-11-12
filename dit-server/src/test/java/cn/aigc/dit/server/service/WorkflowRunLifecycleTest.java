@@ -402,6 +402,25 @@ class WorkflowRunLifecycleTest {
         assertEquals(List.of(), mediaKeys(snapshot(h)));
     }
 
+    @Test
+    void snapshotMarksReusedStepsSoZeroCreditIsNotShownAsFree() throws Exception {
+        Harness h = new Harness();
+        // 先真跑一轮 source→target（source 扣 5 分）
+        var initial = h.runs.start(h.request("target", "source", 0));
+        h.succeedTasks(); h.runs.getMine(initial.getId());
+        h.succeedTasks(); h.runs.getMine(initial.getId());
+        // 再只跑剪辑节点：source 命中指纹被复用（creditCost=0 + reusedFromRunId）
+        var filmReq = h.request("edit", "source", 0);
+        h.saved.setGraph(filmReq.getGraph());
+        var film = h.runs.start(filmReq);
+        h.runs.getMine(film.getId());
+        JsonNode step = snapshotStep(snapshot(h), "source");
+        assertEquals("SUCCEEDED", step.path("status").asText());
+        assertEquals(0L, step.path("creditCost").asLong());
+        // 快照必须带复用标记，否则前端把「复用未扣分」误显示成「真跑过且 0 积分」
+        assertTrue(step.path("reused").asBoolean(), "snapshot step should carry reused flag");
+    }
+
     private static JsonNode snapshot(Harness h) throws Exception {
         return new ObjectMapper().findAndRegisterModules().valueToTree(h.runs.snapshotMine(99L));
     }

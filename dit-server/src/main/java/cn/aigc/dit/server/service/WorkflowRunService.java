@@ -276,7 +276,9 @@ public class WorkflowRunService {
                     matches = pendingPlanMatches(nodeId, steps, copySteps(run.getSteps()), new java.util.HashSet<>());
                 }
                 if (!matches || (TaskStatus.SUCCEEDED.equals(previous.get("status")) && !durableOutputs(previous))) continue;
-                for (String field : List.of("status", "progress", "creditCost", "taskId", "error", "outputs", "outputStorageKey", "posterKey")) {
+                // reusedFromRunId 必须一起拷贝：复用步骤 creditCost=0，快照缺了复用标记会被前端
+                // 当成「真跑过且免费」显示 0 积分（run 详情接口有该标记，仅快照遗漏）。
+                for (String field : List.of("status", "progress", "creditCost", "taskId", "error", "outputs", "outputStorageKey", "posterKey", "reusedFromRunId")) {
                     if (previous.containsKey(field)) step.put(field, previous.get(field));
                 }
                 sourceRuns.put(nodeId, run.getId());
