@@ -1,12 +1,16 @@
 package cn.aigc.dit.server.drama.agent.impl;
 
 import cn.aigc.dit.common.exception.BizException;
+import cn.aigc.dit.server.drama.DramaAssetDrafts;
 import cn.aigc.dit.server.drama.DramaErrorText;
 import cn.aigc.dit.server.drama.agent.AgentContext;
 import cn.aigc.dit.server.drama.agent.AgentResult;
+import cn.aigc.dit.server.drama.agent.ScriptAgent;
 import cn.aigc.dit.server.drama.agent.ScriptParseAgent;
 import cn.aigc.dit.server.drama.agent.ScriptParseReq;
+import cn.aigc.dit.server.drama.agent.SupervisorAgent;
 import cn.aigc.dit.server.drama.agent.SupervisorIssue;
+import cn.aigc.dit.server.drama.agent.SupervisorVerdict;
 import cn.aigc.dit.server.drama.text.DramaTextChunker;
 import cn.aigc.dit.server.drama.text.ScriptDoc;
 import cn.aigc.dit.server.drama.text.ScriptParser;
@@ -118,6 +122,78 @@ public class ScriptParseAgentImpl implements ScriptParseAgent {
         // 反馈单独存：原文还要拿去切分片，混进原文只会落在最后一片上。
         return new ScriptParseReq(input.seriesId(), input.raw(), input.skeleton(), input.memoryBlock(),
                 feedback.toString());
+    }
+
+    /**
+     * 修复重跑之后再校验一次。
+     *
+     * <p>默认契约把「JSON 能解析」当成修复通过。长剧本的修复稿经常打满输出预算，
+     * 解析出来却没有人物、地点和道具，整条流水线会在资产步被空清单判死。
+     * 修复稿仍有硬错误时，留下修复前那份还能抽出资产的剧本。
+     */
+    @Override
+    public AgentResult<ScriptDoc> executeWithSupervision(
+            AgentContext ctx, ScriptParseReq input, SupervisorAgent<ScriptDoc> supervisor) {
+        AgentResult<ScriptDoc> first = execute(ctx, input);
+        if (!first.success() || supervisor == null) {
+            return first;
+        }
+        SupervisorVerdict verdict = supervisor.validate(ctx, first.output(), input);
+        if (verdict.passed()) {
+            log.info("[script-supervisor] 校验通过 agentType=script episodeId={}", ctx.episodeId());
+            return first;
+        }
+        if (!verdict.hasErrors()) {
+            log.warn("[script-supervisor] 校验有提醒（不阻塞，不重跑）agentType=script episodeId={} 问题数={}",
+                    ctx.episodeId(), verdict.issues().size());
+            ScriptAgent.logIssues("script", ctx.episodeId(), verdict.issues());
+            return first.withSupervisorIssues(verdict.issues());
+        }
+        log.warn("[script-supervisor] 校验不通过 agentType=script episodeId={} 问题数={}，准备注入反馈修复重跑一次",
+                ctx.episodeId(), verdict.issues().size());
+        ScriptAgent.logIssues("script", ctx.episodeId(), verdict.issues());
+
+        ScriptParseReq repairedInput = withRepairFeedback(input, verdict.issues());
+        AgentResult<ScriptDoc> repaired = execute(ctx, repairedInput);
+        long promptTokens = first.promptTokens() + repaired.promptTokens();
+        long completionTokens = first.completionTokens() + repaired.completionTokens();
+        int retries = first.retryCount() + repaired.retryCount();
+
+        SupervisorVerdict repairedVerdict = null;
+        if (repaired.success() && repaired.output() != null) {
+            repairedVerdict = supervisor.validate(ctx, repaired.output(), input);
+        }
+        if (repairedVerdict != null && !repairedVerdict.hasErrors()) {
+            log.info("[script-supervisor] 修复后通过校验 agentType=script episodeId={}", ctx.episodeId());
+            List<SupervisorIssue> keptIssues = repairedVerdict.passed() ? List.of() : repairedVerdict.issues();
+            return new AgentResult<>(true, repaired.output(), null, true, keptIssues,
+                    retries, 1, promptTokens, completionTokens);
+        }
+        if (repairedVerdict != null) {
+            log.warn("[script-supervisor] 修复后仍不通过 agentType=script episodeId={} 问题数={}",
+                    ctx.episodeId(), repairedVerdict.issues().size());
+            ScriptAgent.logIssues("script", ctx.episodeId(), repairedVerdict.issues());
+        } else {
+            log.warn("[script-supervisor] 修复结果无法解析，准备沿用修复前的剧本 episodeId={} msg={}",
+                    ctx.episodeId(), repaired.error());
+        }
+        if (hasExtractableAssets(first.output())) {
+            log.warn("[script-supervisor] 修复稿不能用，沿用修复前仍有人物或场景的剧本 episodeId={}",
+                    ctx.episodeId());
+            return new AgentResult<>(true, first.output(), null, true, verdict.issues(),
+                    retries, 1, promptTokens, completionTokens);
+        }
+        List<SupervisorIssue> issues = repairedVerdict == null ? verdict.issues() : repairedVerdict.issues();
+        String reason = repairedVerdict == null
+                ? (repaired.error() == null ? "修复结果无法解析" : repaired.error())
+                : "按反馈改写了一次，剧本里仍然没有可抽取的人物和场景";
+        return new AgentResult<>(false, null, reason, true, issues,
+                retries, 1, promptTokens, completionTokens);
+    }
+
+    /** 这份剧本还能抽出角色、场景或道具，就值得留下。 */
+    private static boolean hasExtractableAssets(ScriptDoc doc) {
+        return !DramaAssetDrafts.canonicalSkeleton(doc).isEmpty();
     }
 
     // ─────────────────────────────────────

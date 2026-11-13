@@ -133,18 +133,19 @@ public class OpenAiCompatChatClient {
                         requestedTokens, outputTokens, contextWindowTokens, estimatedInputTokens);
             }
             body.put(tokenParameter, outputTokens);
-            // 全部模型一律关闭 vLLM chat_template 思考：32k JSON 输出再叠加 reasoning
-            // 会把耗时顶到分钟级，触发客户端超时且无 reasoning 价值。OpenAI 兼容的
-            // 非 vLLM 后端收到未知字段会忽略，不会报错。
-            body.putObject("chat_template_kwargs").put("enable_thinking", false);
-            // MiniMax M3 等思考模型不认 vLLM 的 chat_template_kwargs，思考照发且直接
-            // 挤占 max_tokens；这类模型在模型配置里指定顶层开关（thinkingField +
-            // thinkingType，如 thinking / disabled）才能真正关掉。官方亦不建议
-            // thinking 与 response_format 同开，本层全程 JSON mode，正好关死。
+            // vLLM 看 chat_template_kwargs.enable_thinking。DeepSeek、MiniMax 不认这个字段，
+            // 思考会照常进行并占满 max_tokens，正文变成空。它们要的是顶层 thinking.type。
+            boolean thinkingOn = booleanOption(adapterConfig, "enableThinking", false);
+            body.putObject("chat_template_kwargs").put("enable_thinking", thinkingOn);
             String thinkingField = option(adapterConfig, "thinkingField", "");
+            if (thinkingField.isBlank() && officialThinkingSwitch(model, endpoint)) {
+                thinkingField = "thinking";
+            }
             if (!thinkingField.isBlank()) {
-                body.putObject(thinkingField).put("type",
-                        option(adapterConfig, "thinkingType", "disabled"));
+                String thinkingType = thinkingOn
+                        ? "enabled"
+                        : option(adapterConfig, "thinkingType", "disabled");
+                body.putObject(thinkingField).put("type", thinkingType);
             }
             Double temperature = numberOption(adapterConfig, "temperature");
             if (temperature != null && temperature >= 0 && temperature <= 2) {
@@ -201,6 +202,12 @@ public class OpenAiCompatChatClient {
             if (value.canConvertToLong()) return Math.max(0L, value.asLong());
         }
         return 0L;
+    }
+
+    /** DeepSeek 与 MiniMax 的官方思考开关是请求体顶层的 {@code thinking.type}。 */
+    private static boolean officialThinkingSwitch(String model, String endpoint) {
+        String haystack = ((model == null ? "" : model) + " " + (endpoint == null ? "" : endpoint)).toLowerCase();
+        return haystack.contains("deepseek") || haystack.contains("minimax");
     }
 
     private static String option(Map<String, Object> config, String key, String fallback) {

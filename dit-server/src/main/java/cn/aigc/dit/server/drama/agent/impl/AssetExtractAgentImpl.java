@@ -79,6 +79,10 @@ public class AssetExtractAgentImpl implements AssetExtractAgent {
      */
     @Override
     public AgentResult<AssetDraftList> execute(AgentContext ctx, AssetExtractReq input) {
+        if (DramaAssetDrafts.canonicalSkeleton(input.script()).isEmpty()) {
+            log.warn("[asset-agent] 剧本没有可抽取的人物、场景或道具 episodeId={}", ctx.episodeId());
+            return AgentResult.fail("剧本里没有可抽取的人物和场景");
+        }
         long promptTokens = 0L;
         long completionTokens = 0L;
 

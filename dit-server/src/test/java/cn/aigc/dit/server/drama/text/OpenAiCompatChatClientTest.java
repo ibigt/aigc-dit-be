@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -216,6 +217,7 @@ class OpenAiCompatChatClientTest {
         JsonNode sent = mapper.readTree(body.get());
         assertTrue(sent.path("chat_template_kwargs").has("enable_thinking"));
         assertEquals(false, sent.path("chat_template_kwargs").path("enable_thinking").asBoolean());
+        assertFalse(sent.has("thinking"), "非 DeepSeek / MiniMax 模型不发送官方思考开关");
         assertEquals(0.15, sent.path("temperature").asDouble(), 0.0001);
     }
 
@@ -258,6 +260,47 @@ class OpenAiCompatChatClientTest {
         JsonNode sent = mapper.readTree(body.get());
         assertEquals("disabled", sent.path("thinking").path("type").asText(),
                 "配置了 thinkingField 的模型必须收到对象形思考开关（MiniMax M3 不认布尔也不认 chat_template_kwargs）");
+    }
+
+    @Test
+    void deepSeekWithoutSavedSwitchStillDisablesOfficialThinking() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://api.deepseek.com/v1", "sk", "deepseek-chat",
+                new TextChatRequest("sys", "user", true, 1024),
+                Map.of("enableThinking", false));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertEquals(false, sent.path("chat_template_kwargs").path("enable_thinking").asBoolean());
+        assertEquals("disabled", sent.path("thinking").path("type").asText());
+    }
+
+    @Test
+    void deepSeekThinkingCheckboxEnablesOfficialThinking() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        ObjectMapper mapper = new ObjectMapper();
+        OpenAiCompatChatClient client = new OpenAiCompatChatClient(mapper,
+                (target, apiKey, json, wait) -> {
+                    body.set(json);
+                    return new OpenAiCompatChatClient.Transport.Response(
+                            200, "{\"choices\":[{\"message\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}");
+                });
+
+        client.chat("https://proxy.example/v1", "sk", "custom-route",
+                new TextChatRequest("sys", "user", true, 1024),
+                Map.of("enableThinking", true, "thinkingField", "thinking", "thinkingType", "disabled"));
+
+        JsonNode sent = mapper.readTree(body.get());
+        assertEquals(true, sent.path("chat_template_kwargs").path("enable_thinking").asBoolean());
+        assertEquals("enabled", sent.path("thinking").path("type").asText(),
+                "勾选启用思考后，不能再沿用配置里残留的 disabled");
     }
 
     @Test
