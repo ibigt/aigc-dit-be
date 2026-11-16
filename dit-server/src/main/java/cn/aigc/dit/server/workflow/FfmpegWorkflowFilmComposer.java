@@ -234,8 +234,18 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         return new FilmOutput(key, posterKey, duration, width, height);
     }
 
-    private static boolean playableMp4(Path film) {
-        try (InputStream input = Files.newInputStream(film)) {
+    /** 图片素材判定：按 storageKey 扩展名（与前端 mediaKindOf 同口径）。 */
+    private static boolean isImageKey(String key) {
+        return key != null && key.matches("(?i).*\\.(png|jpe?g|webp|gif)$");
+    }
+
+    /** 图片素材的临时文件后缀（ffmpeg 按内容识别格式，后缀仅为可读性）。 */
+    private static String imageSuffix(String key) {
+        int dot = key == null ? -1 : key.lastIndexOf('.');
+        return dot >= 0 ? key.substring(dot) : ".png";
+    }
+
+    private static boolean playableMp4(Path film) {        try (InputStream input = Files.newInputStream(film)) {
             byte[] header = input.readNBytes(8);
             if (header.length < 8 || header[4] != 'f' || header[5] != 't'
                     || header[6] != 'y' || header[7] != 'p') {
@@ -350,9 +360,34 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         try {
             List<Path> inputs = new ArrayList<>();
             List<Boolean> hasAudio = new ArrayList<>();
+            List<Clip> normalized = new ArrayList<>();
             for (Clip clip : clips) {
                 Path input = FfmpegSupport.tempFile("dit-workflow-clip-", ".mp4");
                 temps.add(input);
+                // 图片素材（png/jpg/webp/gif）：先转成 trimEnd-trimStart 时长的静帧 mp4，
+                // 之后与视频片段完全同链路（Clip/args 零改动）。图片没有「源时长」概念，
+                // trimEnd 即展示时长，不做超界校验。
+                if (isImageKey(clip.storageKey())) {
+                    try {
+                        Path image = FfmpegSupport.tempFile("dit-workflow-image-", imageSuffix(clip.storageKey()));
+                        temps.add(image);
+                        try (InputStream source = storage.get(clip.storageKey())) {
+                            Files.copy(source, image, StandardCopyOption.REPLACE_EXISTING);
+                        }
+                        double stillSeconds = Math.max(0.1, clip.trimEnd() - clip.trimStart());
+                        FfmpegSupport.run(List.of("-hide_banner", "-loglevel", "error",
+                                "-loop", "1", "-i", image.toString(),
+                                "-t", Double.toString(stillSeconds),
+                                "-r", "30", "-pix_fmt", "yuv420p",
+                                "-c:v", "libx264", "-y", input.toString()), 120);
+                    } catch (Exception e) {
+                        throw new BizException(ErrorCode.BAD_REQUEST, "图片素材无法转为视频段落");
+                    }
+                    hasAudio.add(false);
+                    normalized.add(clip);
+                    inputs.add(input);
+                    continue;
+                }
                 try {
                     try (InputStream source = storage.get(clip.storageKey())) {
                         Files.copy(source, input, StandardCopyOption.REPLACE_EXISTING);
@@ -368,8 +403,10 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (clip.trimStart() >= sourceDuration || clip.trimEnd() > sourceDuration) {
                     throw new BizException(ErrorCode.BAD_REQUEST, "视频裁剪范围超过源视频时长");
                 }
+                normalized.add(clip);
                 inputs.add(input);
             }
+            clips = normalized;
             // 音轨文件落盘为临时文件（扩展名不参与 ffmpeg 解码，内容为准）。
             // 音频轨是增强项：裁剪范围超出素材真实时长时**钳制到可用范围**而不是抛错
             // （上游产物的 durationSec/durationMs 元数据经常缺失，前端按 5s 兜底落轨，

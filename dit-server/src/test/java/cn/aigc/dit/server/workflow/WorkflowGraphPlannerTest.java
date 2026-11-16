@@ -442,9 +442,10 @@ class WorkflowGraphPlannerTest {
                 steps.stream().map(WorkflowGraphPlanner.Step::stepType).toList());
 
         WorkflowGraphPlanner.Step edit = steps.get(3);
-        assertEquals(List.of("vid-1", "vid-2"),
+        // 14.61 图片落轨：ImageGenerator 上游与视频上游同等待遇，无草稿时也自动补进主轨（序 = 拓扑序）
+        assertEquals(List.of("img-1", "vid-1", "vid-2"),
                 edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
-        assertEquals(List.of(0, 1), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
+        assertEquals(List.of(0, 1, 2), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
     }
 
     @Test

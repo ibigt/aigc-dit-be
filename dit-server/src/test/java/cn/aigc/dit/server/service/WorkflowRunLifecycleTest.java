@@ -403,6 +403,26 @@ class WorkflowRunLifecycleTest {
     }
 
     @Test
+    void imageGeneratorOutputCanBeComposedAsMainTrackClip() {
+        Harness h = new Harness();
+        // 图片节点 → 剪辑节点；图片产物落主轨（14.61 静帧段）
+        WorkflowRunReq req = new WorkflowRunReq(); req.setWorkflowId(99L); req.setModelId(2L); req.setNodeId("edit");
+        req.setGraph(Map.of("nodes", List.of(
+                Harness.node("img", "ImageGenerator", Map.of("prompt", "poster", "model", "Image")),
+                Harness.node("edit", "VideoEditing", Map.of("editing", Map.of("clips", List.of(Map.of(
+                        "clipId", "c1", "sourceNodeId", "img", "outputIndex", 0, "order", 0,
+                        "trimStart", 0, "trimEnd", 2, "muted", false, "volume", 1, "enabled", true)))))),
+                "edges", List.of(Harness.edge("img", "edit"))));
+        h.saved.setGraph(req.getGraph());
+        var run = h.runs.start(req);
+        h.succeedTasks();
+        var done = h.runs.getMine(run.getId());
+        assertEquals("SUCCEEDED", done.getStatus(), () -> "steps=" + done.getSteps().stream().map(st -> st.getNodeId() + ":" + st.getStatus() + ":" + st.getErrorMessage()).toList());
+        // 图片产物 key 应原样传给合成器（由其转静帧 mp4）；测试桩产物统一是 .mp4 后缀
+        assertEquals(List.of("users/7/outputs/1/0.mp4"), h.composedKeys);
+    }
+
+    @Test
     void snapshotMarksReusedStepsSoZeroCreditIsNotShownAsFree() throws Exception {
         Harness h = new Harness();
         // 先真跑一轮 source→target（source 扣 5 分）
@@ -471,7 +491,11 @@ class WorkflowRunLifecycleTest {
             AiModel model = new AiModel(); model.setId(2L); model.setName("Video"); model.setCategory("video");
             model.setEnabled(true); model.setAdapterKey("mock"); model.setModelKey("mock-video");
             model.setPricing(Map.of("unit", "次", "sale", Map.of("output", 5)));
-            when(models.selectList(any())).thenReturn(List.of(model)); when(models.selectById(2L)).thenReturn(model);
+            AiModel imageModel = new AiModel(); imageModel.setId(3L); imageModel.setName("Image"); imageModel.setCategory("image");
+            imageModel.setEnabled(true); imageModel.setAdapterKey("mock"); imageModel.setModelKey("mock-image");
+            imageModel.setPricing(Map.of("unit", "次", "sale", Map.of("output", 5)));
+            when(models.selectList(any())).thenReturn(List.of(model, imageModel));
+            when(models.selectById(anyLong())).thenAnswer(call -> ((Long) call.getArgument(0)) == 3L ? imageModel : model);
             GenTaskMapper taskMapper = mock(GenTaskMapper.class);
             when(taskMapper.insert(any(GenTask.class))).thenAnswer(call -> {
                 GenTask task = call.getArgument(0); task.setId((long) tasks.size() + 1); tasks.put(task.getId(), task); return 1;

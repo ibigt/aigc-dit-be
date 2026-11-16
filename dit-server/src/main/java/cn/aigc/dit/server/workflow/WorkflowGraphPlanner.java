@@ -665,7 +665,8 @@ public final class WorkflowGraphPlanner {
         Step source = selected.get(id);
         if (source == null) return;
         for (String dep : source.dependsOn()) visitVideos(dep, selected, visited, videos);
-        if ("VideoGenerator".equals(source.kind())) videos.add(id);
+        // ImageGenerator 产物可落剪辑台主轨（图片静帧段，14.61），与视频上游同等待遇
+        if ("VideoGenerator".equals(source.kind()) || "ImageGenerator".equals(source.kind())) videos.add(id);
     }
 
     /**

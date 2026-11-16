@@ -606,6 +606,47 @@ class FfmpegWorkflowFilmComposerTest {
         return white;
     }
 
+    /**
+     * 图片素材落主轨（14.61）：图片 clip（按扩展名识别）在 compose 输入阶段被转成
+     * trimEnd-trimStart 时长的静帧 mp4，之后与视频片段同链路。真实 ffmpeg 编码：
+     * 断言成片时长 = 视频 1s + 图片 2s = 3s，且图片段（t=2s）确实是绿色静帧。
+     */
+    @Test
+    void imageClipIsComposedAsStillSegmentWhenFfmpegInstalled() throws Exception {
+        Assumptions.assumeTrue(FfmpegSupport.available());
+        Path video = directory.resolve("clip.mp4");
+        Path image = directory.resolve("still.png");
+        ffmpegFixture("color=c=red:s=64x36:r=30", 1, video);
+        java.awt.image.BufferedImage green = new java.awt.image.BufferedImage(64, 36,
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+        for (int x = 0; x < 64; x++) {
+            for (int y = 0; y < 36; y++) green.setRGB(x, y, 0xFF00C050);
+        }
+        assertTrue(javax.imageio.ImageIO.write(green, "png", image.toFile()));
+        LocalObjectStorage storage = new LocalObjectStorage(directory.resolve("objects"));
+        storage.put("clip.mp4", Files.readAllBytes(video), "video/mp4");
+        storage.put("still.png", Files.readAllBytes(image), "image/png");
+        FfmpegWorkflowFilmComposer composer = new FfmpegWorkflowFilmComposer(storage,
+                key -> null, new GenerateProperties());
+
+        WorkflowFilmComposer.FilmOutput output = composer.compose(7L, 31L, "merge", List.of(
+                new Clip("clip.mp4", 0, 1, false, 1),
+                new Clip("still.png", 0, 2, false, 1)));
+
+        assertEquals(3.0, output.durationSeconds(), 0.2);
+        Path out = directory.resolve("objects").resolve(output.storageKey());
+        Path frame = directory.resolve("still-frame.rgb");
+        ffmpeg("-ss", "2", "-i", out.toString(), "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgb24", frame.toString());
+        byte[] pixels = Files.readAllBytes(frame);
+        int greenCount = 0;
+        for (int i = 0; i + 2 < pixels.length; i += 3) {
+            int r = pixels[i] & 0xff, g = pixels[i + 1] & 0xff, b = pixels[i + 2] & 0xff;
+            if (g > r + 40 && g > b + 40) greenCount++;
+        }
+        assertTrue(greenCount > 500, "图片静帧段没有出现在成片里，绿色像素数=" + greenCount);
+    }
+
     private void ffmpegFixture(String color, int seconds, Path target) throws Exception {
         ffmpeg("-f", "lavfi", "-i", color,
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",

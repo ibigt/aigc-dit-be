@@ -1152,11 +1152,16 @@ public class WorkflowRunService {
                 throw new IllegalArgumentException("源视频输出索引无效：" + sourceId);
             }
             int index = selectedIndex;
+            // 图片产物也可作主轨片段（静帧段，14.61）：类型放行 VIDEO / IMAGE
             if (!(source.get("outputs") instanceof List<?> outputs) || index < 0 || index >= outputs.size()
                     || !(outputs.get(index) instanceof Map<?, ?> output)
-                    || !ModelCategory.VIDEO.equals(text(output.get("type")))
+                    || !(ModelCategory.VIDEO.equals(text(output.get("type"))) || ModelCategory.IMAGE.equals(text(output.get("type"))))
                     || !WorkflowGraphPlanner.storageKey(text(output.get("storageKey")))) {
-                throw new IllegalArgumentException("源视频输出不存在：" + sourceId + " #" + index);
+                throw new IllegalArgumentException("源视频输出不存在：" + sourceId + " #" + index
+                        + "（outputs=" + (source.get("outputs") instanceof List<?> rawOutputs
+                                ? rawOutputs.stream().limit(index + 1).map(item -> item instanceof Map<?, ?> om
+                                        ? text(om.get("type")) + ":" + text(om.get("storageKey")) : String.valueOf(item)).toList()
+                                : "null") + "）");
             }
             double start = doubleValue(configuredClip.get("trimStart")) == null
                     ? 0 : doubleValue(configuredClip.get("trimStart"));
@@ -1167,6 +1172,10 @@ public class WorkflowRunService {
                     Double durationMs = doubleValue(metadata.get("durationMs"));
                     end = durationMs == null ? null : durationMs / 1000;
                 }
+            }
+            // 图片产物没有时长概念：trimEnd 缺省按 5s 静帧（与前端默认落轨时长一致）
+            if (end == null && ModelCategory.IMAGE.equals(text(output.get("type")))) {
+                end = start + 5.0;
             }
             if (end == null) {
                 throw new IllegalArgumentException("源视频时长未知：" + sourceId + " #" + index);
