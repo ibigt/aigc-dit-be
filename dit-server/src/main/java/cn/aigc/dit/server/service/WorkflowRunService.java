@@ -1101,7 +1101,8 @@ public class WorkflowRunService {
                     doubleOr(configured.get("y"), 25.0),
                     Math.max(5, Math.min(100, doubleOr(configured.get("scale"), 30.0))),
                     Math.max(0, Math.min(100, doubleOr(configured.get("opacity"), 100.0))),
-                    Boolean.TRUE.equals(configured.get("muted"))));
+                    Boolean.TRUE.equals(configured.get("muted")),
+                    Math.max(0, Math.min(2, doubleOr(configured.get("volume"), 1.0)))));
         }
         return pips;
     }
@@ -1436,6 +1437,7 @@ public class WorkflowRunService {
                 item.put("scale", pip.scale());
                 item.put("opacity", pip.opacity());
                 item.put("muted", pip.muted());
+                item.put("volume", pip.volume());
                 if (pip.localKey() != null) item.put("localKey", pip.localKey());
                 return item;
             }).toList());
@@ -1509,7 +1511,8 @@ public class WorkflowRunService {
             }
             // 全部重新生成：跳过复用，所有生成/剪辑步骤都真跑（文本/已上传音频是零成本直通步骤，仍不重跑）
             if (forceRegenerate) continue;
-            // 整图运行(target=null)复用所有命中指纹的节点；单节点运行仅跳过目标节点本身，确保它被执行
+            // 整图运行(target=null)复用所有命中指纹的节点；单节点运行仅跳过目标节点本身，确保它被执行。
+            // 是否重跑只比较输入指纹。reusedFromRunId 只回给前端显示「复用」，不参与这次比较。
             if (target != null && target.equals(text(step.get("nodeId")))) continue;
             for (WorkflowRun prior : history) {
                 if (!userId.equals(prior.getUserId())) continue;

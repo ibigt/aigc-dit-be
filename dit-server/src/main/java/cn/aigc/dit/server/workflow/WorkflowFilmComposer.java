@@ -91,11 +91,13 @@ public interface WorkflowFilmComposer {
     /**
      * V2 画中画叠加（副视频轨）：sourceKey 为已解析的产物 storageKey（或本地导入素材 key），
      * x/y 为画面百分比位置（默认 70/25），scale 为画面百分比宽（默认 30），
-     * trim 为源内裁剪区间。opacity 0-100。
+     * trim 为源内裁剪区间。opacity 0-100。volume 为 0–2。
+     * muted=true 时只叠画面（旧草稿保持该行为）；未静音且素材有音轨时按 volume 混入成片。
      */
     record PipClip(double start, double end, String sourceKey,
                    double trimStart, double trimEnd,
-                   double x, double y, double scale, double opacity, boolean muted) {
+                   double x, double y, double scale, double opacity, boolean muted,
+                   double volume) {
     }
 
     FilmOutput compose(Long userId, Long runId, String nodeId, List<Clip> clips, FilmSize target);

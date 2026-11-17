@@ -339,7 +339,8 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                     || !Double.isFinite(pip.start()) || !Double.isFinite(pip.end()) || pip.end() <= pip.start()
                     || !Double.isFinite(pip.trimStart()) || !Double.isFinite(pip.trimEnd())
                     || pip.trimStart() < 0 || pip.trimEnd() <= pip.trimStart()
-                    || !Double.isFinite(pip.scale()) || pip.scale() <= 0 || pip.scale() > 100) {
+                    || !Double.isFinite(pip.scale()) || pip.scale() <= 0 || pip.scale() > 100
+                    || !Double.isFinite(pip.volume()) || pip.volume() < 0 || pip.volume() > 2) {
                 throw new BizException(ErrorCode.BAD_REQUEST, "画中画片段参数无效");
             }
         }
@@ -442,9 +443,11 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             }
             AudioClip[] trackArray = usableTracks.toArray(AudioClip[]::new);
             List<AudioClip> effectiveTracks = List.of(trackArray);
-            // V2 画中画：PiP 素材落盘临时文件（与 clips 同口径：裁剪钳制到真实时长，整段不可用静默丢弃）
+            // V2 画中画：PiP 素材落盘临时文件（与 clips 同口径：裁剪钳制到真实时长，整段不可用静默丢弃）。
+            // 未静音且探针确认有音轨才进 amix；静音、图片静帧或无音轨只叠画面。
             List<Path> pipInputs = new ArrayList<>();
             List<WorkflowFilmComposer.PipClip> usablePips = new ArrayList<>();
+            List<Boolean> pipHasAudio = new ArrayList<>();
             for (WorkflowFilmComposer.PipClip pip : pips) {
                 Path input = FfmpegSupport.tempFile("dit-workflow-pip-", ".mp4");
                 temps.add(input);
@@ -465,11 +468,22 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 if (clampedEnd <= clampedStart) {
                     continue;
                 }
-                usablePips.add(clampedStart == pip.trimStart() && clampedEnd == pip.trimEnd()
+                WorkflowFilmComposer.PipClip usable = clampedStart == pip.trimStart() && clampedEnd == pip.trimEnd()
                         ? pip
                         : new WorkflowFilmComposer.PipClip(pip.start(), pip.end(), pip.sourceKey(),
-                                clampedStart, clampedEnd, pip.x(), pip.y(), pip.scale(), pip.opacity(), pip.muted()));
+                                clampedStart, clampedEnd, pip.x(), pip.y(), pip.scale(), pip.opacity(),
+                                pip.muted(), pip.volume());
+                boolean mixAudio = false;
+                if (!usable.muted() && !isImageKey(usable.sourceKey())) {
+                    try {
+                        mixAudio = runner.hasAudio(input);
+                    } catch (Exception e) {
+                        throw new BizException(ErrorCode.INTERNAL, "读取画中画素材失败");
+                    }
+                }
+                usablePips.add(usable);
                 pipInputs.add(input);
+                pipHasAudio.add(mixAudio);
             }
             Path output = FfmpegSupport.tempFile("dit-workflow-film-", ".mp4");
             temps.add(output);
@@ -497,7 +511,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             try {
                 runner.run(args(inputs, clips, hasAudio, target, output, effectiveTracks, audioInputs,
                         clipStyles, overlayPngs.isEmpty() ? null : overlayPngs.get(0), overlays, overlayPngs,
-                        usablePips, pipInputs), timeout);
+                        usablePips, pipInputs, pipHasAudio), timeout);
             } catch (BizException e) {
                 if (e.getMessage() != null && e.getMessage().contains("超时")) {
                     throw new BizException(ErrorCode.INTERNAL, "工作流成片编码超时");
@@ -619,7 +633,8 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
     /**
      * V2 画中画全量构造：pipClips 与 pipInputs 一一对应（本地临时文件）。
      * 每路 PiP：trim → setpts → fps → scale（成片宽 × scale%）→ format，
-     * 再按 enable 时间窗 overlay 到主画面（位置 x/y 百分比换算成像素）。
+     * 再按 enable 时间窗 overlay 到主画面（位置 x/y 百分比换算成像素，不加 shortest=1）。
+     * pipHasAudio 为 null 时不混副轨原声，filter 与不传该参数逐字节一致。
      * pipClips 为空时 filter 与十一参重载逐字节一致。
      */
     static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target,
@@ -628,6 +643,22 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                              List<WorkflowFilmComposer.OverlayClip> overlays,
                              List<Path> overlayPngPaths,
                              List<WorkflowFilmComposer.PipClip> pipClips, List<Path> pipInputs) {
+        return args(inputs, clips, hasAudio, target, output, audioClips, audioInputs, styles, overlayPng,
+                overlays, overlayPngPaths, pipClips, pipInputs, null);
+    }
+
+    /**
+     * 带副轨原声探针的画中画构造：pipHasAudio 与 pipClips 同序。
+     * 未静音且对应项为 true 时，该路做 atrim、adelay（对齐成片内 start）、volume，再并入 amix。
+     * 静音或无音轨的 PiP 不进 amix。
+     */
+    static List<String> args(List<Path> inputs, List<Clip> clips, List<Boolean> hasAudio, FilmSize target,
+                             Path output, List<AudioClip> audioClips, List<Path> audioInputs,
+                             List<WorkflowFilmComposer.ClipStyle> styles, Path overlayPng,
+                             List<WorkflowFilmComposer.OverlayClip> overlays,
+                             List<Path> overlayPngPaths,
+                             List<WorkflowFilmComposer.PipClip> pipClips, List<Path> pipInputs,
+                             List<Boolean> pipHasAudio) {
         if (inputs.size() != clips.size() || hasAudio.size() != clips.size()) {
             throw new IllegalArgumentException("clip inputs mismatch");
         }
@@ -691,6 +722,7 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             args.add("-i");
             args.add(pip.toString());
         }
+        List<Integer> pipAudio = pipAudioIndexes(pips, pipHasAudio);
         StringBuilder filter = new StringBuilder();
         // 每路输入：trim → setpts → fps → scale → pad → [eq/hue/gblur 样式滤镜] → setsar → format
         // 无样式片段的链与旧版完全一致（仅当 styled 才插入滤镜段，保持逐字节兼容）。
@@ -733,24 +765,33 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
             }
         }
         // 音频轨混入：每条 atrim 裁剪 → volume（muted 置 0）→ adelay 对齐成片内位置 → amix。
+        // 未静音且有音轨的 PiP 同样 atrim → volume → adelay（对齐成片内 start）后并入同一路 amix。
         // duration=first 以视频拼接结果为准，超出成片尾部的音频被截断，与预览语义一致。
-        // 无音轨时 concat 直接产出 [v][a]（与旧版输出完全一致）；有音轨时产出 [v][a] 供 amix 引用。
+        // 无音轨且无 PiP 原声时 concat 直接产出 [v][a]（与旧版输出完全一致）。
+        // PiP 原声链必须写在 concat / xfade 收尾之后，不能插进 concat 的输入标签中间。
         String audioMap;
         boolean xfade = hasTransitions;
         if (tracks.isEmpty() && !xfade) {
             filter.append("concat=n=").append(clips.size()).append(":v=1:a=1[v][a]; ");
-            audioMap = "[a]";
+            if (pipAudio.isEmpty()) {
+                audioMap = "[a]";
+            } else {
+                appendPipAudioChains(filter, pipInput, pips, pipAudio);
+                appendAudioMix(filter, silentInput, tracks, pipAudio);
+                audioMap = "[aout]";
+            }
         } else if (!xfade) {
             filter.append("concat=n=").append(clips.size()).append(":v=1:a=1[v][a]; ");
-            appendAudioMix(filter, silentInput, tracks);
+            appendPipAudioChains(filter, pipInput, pips, pipAudio);
+            appendAudioMix(filter, silentInput, tracks, pipAudio);
             audioMap = "[aout]";
         } else {
             // 转场路径：视频 xfade 折叠出 [vout]；音频 concat 出 [a]（或 amix 出 [aout]）
             filter.append("concat=n=").append(clips.size()).append(":v=0:a=1[a]");
             appendXfadeChain(filter, clips, clipStyles, durations);
-            if (tracks.isEmpty()) {
+            if (tracks.isEmpty() && pipAudio.isEmpty()) {
                 audioMap = "[a]";
-            } else {
+            } else if (pipAudio.isEmpty()) {
                 // amix 的第一路要接 [vout] 对应不了——amix 只吃音频；视频 [vout] 单独 map。
                 // 这里音频轨与 [a] amix（把 [a] 作为 amix 第一输入）。
                 filter.append("[a]");
@@ -759,6 +800,13 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
                 }
                 filter.append("amix=inputs=").append(tracks.size() + 1)
                         .append(":duration=first:dropout_transition=0[aout]");
+                audioMap = "[aout]";
+            } else {
+                if (filter.length() > 0 && !filter.toString().endsWith("; ")) {
+                    filter.append("; ");
+                }
+                appendPipAudioChains(filter, pipInput, pips, pipAudio);
+                appendAudioMix(filter, silentInput, tracks, pipAudio);
                 audioMap = "[aout]";
             }
         }
@@ -936,7 +984,48 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         }
     }
 
-    private static void appendAudioMix(StringBuilder filter, int base, List<AudioClip> tracks) {
+    /**
+     * 未静音且探针确认有音轨的 PiP。静音、无音轨、或 pipHasAudio 为 null 时返回空列表（不进 amix）。
+     */
+    private static List<Integer> pipAudioIndexes(List<WorkflowFilmComposer.PipClip> pips,
+                                                List<Boolean> pipHasAudio) {
+        if (pipHasAudio == null) {
+            return List.of();
+        }
+        if (pipHasAudio.size() != pips.size()) {
+            throw new IllegalArgumentException("pip audio mismatch");
+        }
+        List<Integer> indexes = new ArrayList<>();
+        for (int i = 0; i < pips.size(); i++) {
+            WorkflowFilmComposer.PipClip pip = pips.get(i);
+            if (pip == null || pip.muted() || !Boolean.TRUE.equals(pipHasAudio.get(i))) {
+                continue;
+            }
+            indexes.add(i);
+        }
+        return indexes;
+    }
+
+    /** PiP 原声：atrim 裁源内区间，volume 用片段音量，adelay 对齐成片内 start（0 则省略）。 */
+    private static void appendPipAudioChains(StringBuilder filter, int pipInput,
+                                            List<WorkflowFilmComposer.PipClip> pips,
+                                            List<Integer> pipAudio) {
+        for (int index : pipAudio) {
+            WorkflowFilmComposer.PipClip pip = pips.get(index);
+            long delayMs = Math.max(0, Math.round(pip.start() * 1000));
+            filter.append("[").append(pipInput + index).append(":a]atrim=start=").append(pip.trimStart())
+                    .append(":end=").append(pip.trimEnd())
+                    .append(",asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,volume=")
+                    .append(pip.volume());
+            if (delayMs > 0) {
+                filter.append(",adelay=").append(delayMs).append("|").append(delayMs);
+            }
+            filter.append("[pipa").append(index).append("]; ");
+        }
+    }
+
+    private static void appendAudioMix(StringBuilder filter, int base, List<AudioClip> tracks,
+                                      List<Integer> pipAudio) {
         for (int i = 0; i < tracks.size(); i++) {
             AudioClip track = tracks.get(i);
             long delayMs = Math.max(0, Math.round(track.start() * 1000));
@@ -953,7 +1042,10 @@ public class FfmpegWorkflowFilmComposer implements WorkflowFilmComposer {
         for (int i = 0; i < tracks.size(); i++) {
             filter.append("[bg").append(i).append("]");
         }
-        filter.append("amix=inputs=").append(tracks.size() + 1)
+        for (int index : pipAudio) {
+            filter.append("[pipa").append(index).append("]");
+        }
+        filter.append("amix=inputs=").append(tracks.size() + pipAudio.size() + 1)
                 .append(":duration=first:dropout_transition=0[aout]");
     }
 

@@ -997,6 +997,7 @@ class WorkflowRunServiceTest {
         pip.put("scale", 45);
         pip.put("opacity", 60);
         pip.put("muted", true);
+        pip.put("volume", 0.4);
         edit.put("pipClips", List.of(pip));
         WorkflowRun run = run(main, pipSource, edit);
         when(workflowRunMapper.selectById(1L)).thenReturn(run);
@@ -1004,7 +1005,7 @@ class WorkflowRunServiceTest {
                 new WorkflowFilmComposer.Clip("users/7/a.mp4", 0, 5, false, 1))),
                 isNull(), eq(List.of()), eq((List<WorkflowFilmComposer.ClipStyle>) null), eq(List.of()),
                 eq(List.of(new WorkflowFilmComposer.PipClip(1.0, 3.0, "users/7/b.mp4",
-                        0.5, 2.5, 20, 80, 45, 60, true)))))
+                        0.5, 2.5, 20, 80, 45, 60, true, 0.4)))))
                 .thenReturn(new WorkflowFilmComposer.FilmOutput("users/7/film.mp4", null, 5));
 
         WorkflowRunResp response = service.getMine(1L);

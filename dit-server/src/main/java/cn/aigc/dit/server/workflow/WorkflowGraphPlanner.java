@@ -61,7 +61,8 @@ public final class WorkflowGraphPlanner {
      */
     public record PipDraft(String sourceNodeId, Integer outputIndex, String localKey,
                            double start, double end, double trimStart, Double trimEnd,
-                           double x, double y, double scale, double opacity, boolean muted) {
+                           double x, double y, double scale, double opacity, boolean muted,
+                           double volume) {
     }
 
     /**
@@ -518,8 +519,9 @@ public final class WorkflowGraphPlanner {
     }
 
     private static List<Clip> editClips(Step step, Map<String, Object> data, Map<String, Step> selected) {
+        // 时间线上已写明的片段可以引用整条上游里的视频/图像（剪辑台素材面板能拖进来）。
         List<String> videos = new ArrayList<>();
-        visitVideos(step.nodeId(), selected, new LinkedHashSet<>(), videos);
+        visitFilmSources(step.nodeId(), selected, new LinkedHashSet<>(), videos, true);
         List<Map<String, Object>> rawClips = mapList(map(data.get("editing")).get("clips"));
         // 本地导入素材不依赖画布上游：只要草稿里有合法 localKey，纯导入时间线也能合成
         boolean hasLocal = rawClips.stream().anyMatch(raw -> storageKey(text(raw.get("localKey"))));
@@ -567,10 +569,13 @@ public final class WorkflowGraphPlanner {
             String sid = text(rawPip.get("sourceNodeId"));
             if (sid != null) pipSources.add(sid);
         }
-        // 旧草稿没有 clips 字段时按默认参数补齐所有上游视频。时间线里一旦出现本地导入素材，
-        // 说明用户在显式编排，不再自动补上游，否则会混入时间线上根本没有的片段。
-        if (!hasLocal) {
-            for (String sourceId : videos) {
+        // 片段列表非空时，时间线就是成片：不再把没摆进去的祖先补进来。
+        // 参考图只决定上游视频能否生成，不该改变剪辑成片。
+        // 列表为空的旧草稿才补直接前驱（透明中转节点仍穿透）；视频自己的参考图、更前面的参考视频不补。
+        if (rawClips.isEmpty()) {
+            List<String> direct = new ArrayList<>();
+            visitFilmSources(step.nodeId(), selected, new LinkedHashSet<>(), direct, false);
+            for (String sourceId : direct) {
                 // 显式禁用的片段不再被自动补回，保证"禁用"在成片中真正生效
                 if (disabled.contains(sourceId)) {
                     continue;
@@ -660,19 +665,32 @@ public final class WorkflowGraphPlanner {
         return overlays.isEmpty() ? List.of() : List.copyOf(overlays);
     }
 
-    private static void visitVideos(String id, Map<String, Step> selected, Set<String> visited, List<String> videos) {
+    /**
+     * 收集能进入剪辑成片的视频/图像节点。
+     * includeGeneratorInputs 为 true 时继续走进生成节点的上游，供已有时间线片段校验来源；
+     * 为 false 时停在直接连到剪辑节点的生成卡片（中间的文本、中转节点仍穿透），
+     * 参考图和更前面的参考视频不会被当成成片片段。
+     */
+    private static void visitFilmSources(String id, Map<String, Step> selected, Set<String> visited,
+                                          List<String> sources, boolean includeGeneratorInputs) {
         if (!visited.add(id)) return;
         Step source = selected.get(id);
         if (source == null) return;
-        for (String dep : source.dependsOn()) visitVideos(dep, selected, visited, videos);
-        // ImageGenerator 产物可落剪辑台主轨（图片静帧段，14.61），与视频上游同等待遇
-        if ("VideoGenerator".equals(source.kind()) || "ImageGenerator".equals(source.kind())) videos.add(id);
+        boolean generator = "VideoGenerator".equals(source.kind()) || "ImageGenerator".equals(source.kind());
+        if (generator && !includeGeneratorInputs) {
+            sources.add(id);
+            return;
+        }
+        for (String dep : source.dependsOn()) {
+            visitFilmSources(dep, selected, visited, sources, includeGeneratorInputs);
+        }
+        if (generator) sources.add(id);
     }
 
     /**
      * 音频轨片段解析（剪辑台 A1 → 成片混音）：读 data.editing.audioClips 原样清洗透传。
      * 与视频 clips 不同：① 不校验 sourceId 是否在视频上游集合（音频源是 AudioGenerator，
-     * 不进 visitVideos）；② 非法条目静默丢弃而非抛错——音轨是增强项，不应阻断成片；
+     * 不进 visitFilmSources）；② 非法条目静默丢弃而非抛错——音轨是增强项，不应阻断成片；
      * ③ start 是时间线绝对位置，参与 adelay 对齐，必须 ≥0。
      */
     private static List<AudioClip> editAudioClips(Map<String, Object> data) {
@@ -732,7 +750,8 @@ public final class WorkflowGraphPlanner {
                     doubleValue(raw.get("y"), 25.0),
                     Math.max(5, Math.min(100, doubleValue(raw.get("scale"), 30.0))),
                     Math.max(0, Math.min(100, doubleValue(raw.get("opacity"), 100.0))),
-                    Boolean.TRUE.equals(raw.get("muted"))));
+                    Boolean.TRUE.equals(raw.get("muted")),
+                    Math.max(0, Math.min(2, doubleValue(raw.get("volume"), 1.0)))));
         }
         return pips.isEmpty() ? List.of() : List.copyOf(pips);
     }

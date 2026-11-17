@@ -10,6 +10,7 @@ import cn.aigc.dit.server.generate.GenerateTaskPublisher;
 import cn.aigc.dit.server.mapper.*;
 import cn.aigc.dit.server.model.req.WorkflowRunReq;
 import cn.aigc.dit.server.model.resp.GenerateTaskResp;
+import cn.aigc.dit.server.model.resp.WorkflowRunResp;
 import cn.aigc.dit.server.workflow.WorkflowFilmComposer;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -439,6 +440,124 @@ class WorkflowRunLifecycleTest {
         assertEquals(0L, step.path("creditCost").asLong());
         // 快照必须带复用标记，否则前端把「复用未扣分」误显示成「真跑过且 0 积分」
         assertTrue(step.path("reused").asBoolean(), "snapshot step should carry reused flag");
+    }
+
+    @Test
+    void secondFullRunReusesGeneratorsWhenOnlyOutputMetadataChanged() {
+        Harness h = new Harness();
+        WorkflowRunReq request = chainRequest(null, null);
+        WorkflowRunResp first = finish(h, h.runs.start(request));
+        int tasks = h.tasks.size();
+        assertEquals(2, tasks);
+        // 产物的海报、时长、地址是后补的展示字段。storageKey 没变时，下游不能因此整图重扣。
+        noiseOutputMetadata(storedStep(h, first.getId(), "source"));
+
+        WorkflowRunResp second = h.runs.start(request);
+
+        assertEquals("SUCCEEDED", second.getStatus(), () -> describe(second));
+        assertEquals(tasks, h.tasks.size());
+        for (String nodeId : List.of("source", "target")) {
+            WorkflowRunResp.StepResp step = runStep(second, nodeId);
+            assertEquals("SUCCEEDED", step.getStatus(), nodeId);
+            assertEquals(0L, step.getCreditCost(), nodeId);
+            assertTrue(Boolean.TRUE.equals(step.getReused()), nodeId);
+        }
+    }
+
+    @Test
+    void editDraftExportReusesUpstreamGenerators() {
+        Harness h = new Harness();
+        WorkflowRunResp first = finish(h, h.runs.start(chainRequest(null, null)));
+        int tasks = h.tasks.size();
+        noiseOutputMetadata(storedStep(h, first.getId(), "source"));
+        h.composedKeys.clear();
+
+        Map<String, Object> clip = new LinkedHashMap<>();
+        clip.put("sourceNodeId", "target");
+        clip.put("outputIndex", 0);
+        clip.put("order", 0);
+        clip.put("trimStart", 0.5);
+        clip.put("trimEnd", 3.0);
+        clip.put("muted", false);
+        clip.put("volume", 1);
+        clip.put("enabled", true);
+        WorkflowRunReq export = chainRequest("edit", Map.of("clips", List.of(clip)));
+        WorkflowRunResp film = h.runs.start(export);
+
+        assertEquals("SUCCEEDED", film.getStatus(), () -> describe(film));
+        assertEquals(tasks, h.tasks.size());
+        assertFalse(h.composedKeys.isEmpty(), "changed edit draft should still be composed");
+        for (String nodeId : List.of("source", "target")) {
+            WorkflowRunResp.StepResp step = runStep(film, nodeId);
+            assertEquals("SUCCEEDED", step.getStatus(), nodeId);
+            assertEquals(0L, step.getCreditCost(), nodeId);
+            assertTrue(Boolean.TRUE.equals(step.getReused()), nodeId);
+        }
+        assertNotEquals(Boolean.TRUE, runStep(film, "edit").getReused());
+    }
+
+    private static WorkflowRunReq chainRequest(String nodeId, Map<String, Object> editing) {
+        Map<String, Object> editData = new LinkedHashMap<>();
+        editData.put("kind", "VideoEditing");
+        editData.put("media", Map.of());
+        if (editing != null) {
+            editData.put("editing", editing);
+        }
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("id", "edit");
+        edit.put("data", editData);
+        WorkflowRunReq request = new WorkflowRunReq();
+        request.setWorkflowId(99L);
+        request.setModelId(2L);
+        request.setNodeId(nodeId);
+        request.setGraph(Map.of(
+                "nodes", List.of(
+                        Harness.node("source", "VideoGenerator", Map.of("prompt", "source")),
+                        Harness.node("target", "VideoGenerator", Map.of("prompt", "target")),
+                        edit),
+                "edges", List.of(Harness.edge("source", "target"), Harness.edge("target", "edit"))));
+        return request;
+    }
+
+    private static WorkflowRunResp finish(Harness h, WorkflowRunResp started) {
+        WorkflowRunResp current = started;
+        for (int attempt = 0; attempt < 6 && "RUNNING".equals(current.getStatus()); attempt++) {
+            h.succeedTasks();
+            current = h.runs.getMine(started.getId());
+        }
+        WorkflowRunResp done = current;
+        assertEquals("SUCCEEDED", done.getStatus(), () -> describe(done));
+        return done;
+    }
+
+    private static void noiseOutputMetadata(Map<String, Object> step) {
+        if (!(step.get("outputs") instanceof List<?> outputs) || outputs.isEmpty()
+                || !(outputs.get(0) instanceof Map<?, ?> first)) {
+            throw new AssertionError("missing outputs on " + step.get("nodeId"));
+        }
+        Map<String, Object> noisy = new LinkedHashMap<>();
+        first.forEach((key, value) -> noisy.put(String.valueOf(key), value));
+        noisy.put("posterKey", "users/7/posters/late.jpg");
+        noisy.put("url", "https://cdn.example/signed");
+        noisy.put("metadata", Map.of("durationSec", 11));
+        step.put("outputs", List.of(noisy));
+    }
+
+    private static Map<String, Object> storedStep(Harness h, long runId, String nodeId) {
+        return h.stored.get(runId).getSteps().stream()
+                .filter(step -> nodeId.equals(step.get("nodeId")))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static WorkflowRunResp.StepResp runStep(WorkflowRunResp run, String nodeId) {
+        return run.getSteps().stream().filter(step -> nodeId.equals(step.getNodeId())).findFirst().orElseThrow();
+    }
+
+    private static String describe(WorkflowRunResp run) {
+        return run.getSteps().stream()
+                .map(step -> step.getNodeId() + ":" + step.getStatus() + ":" + step.getErrorMessage())
+                .toList().toString();
     }
 
     private static JsonNode snapshot(Harness h) throws Exception {

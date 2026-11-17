@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -284,6 +285,23 @@ class WorkflowGraphPlannerTest {
                 "画中画素材 b 不应再被自动补成主轨片段");
         assertEquals(1, step.pipClips().size());
         assertEquals("b", step.pipClips().get(0).sourceNodeId());
+        assertEquals(1.0, step.pipClips().get(0).volume());
+        assertFalse(step.pipClips().get(0).muted());
+    }
+
+    @Test
+    void pipVolumeClampsToRangeAndKeepsExplicitMute() {
+        var edit = editingWithPip("edit",
+                List.of(clip("c1", "a", 0, 0, 0.0, 4.0)),
+                List.of(Map.of("sourceNodeId", "b", "start", 0.0, "end", 2.0,
+                        "trimStart", 0.0, "trimEnd", 2.0, "volume", 9, "muted", true)));
+        var steps = WorkflowGraphPlanner.plan(graph(
+                List.of(generator("a", "VideoGenerator", "a"),
+                        generator("b", "VideoGenerator", "b"),
+                        edit),
+                List.of(edge("a", "edit"), edge("b", "edit"))));
+        assertEquals(2.0, steps.get(2).pipClips().get(0).volume());
+        assertTrue(steps.get(2).pipClips().get(0).muted());
     }
 
     @Test
@@ -442,10 +460,64 @@ class WorkflowGraphPlannerTest {
                 steps.stream().map(WorkflowGraphPlanner.Step::stepType).toList());
 
         WorkflowGraphPlanner.Step edit = steps.get(3);
-        // 14.61 图片落轨：ImageGenerator 上游与视频上游同等待遇，无草稿时也自动补进主轨（序 = 拓扑序）
-        assertEquals(List.of("img-1", "vid-1", "vid-2"),
+        // 参考图只服务于两段视频的生成，无草稿时也不补进成片；成片只有直接连入的两段视频
+        assertEquals(List.of("vid-1", "vid-2"),
                 edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
-        assertEquals(List.of(0, 1, 2), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
+        assertEquals(List.of(0, 1), edit.clips().stream().map(WorkflowGraphPlanner.Clip::order).toList());
+    }
+
+    @Test
+    void explicitVideoClipsDoNotPickUpUpstreamReferenceImage() {
+        Map<String, Object> graph = graph(
+                List.of(
+                        generator("img-1", "ImageGenerator", "a cat"),
+                        generator("vid-1", "VideoGenerator", "cat walks"),
+                        generator("vid-2", "VideoGenerator", "cat jumps"),
+                        editing("edit-1", List.of(
+                                clip("c1", "vid-1", 0, 0, 0.0, 5.0),
+                                clip("c2", "vid-2", 0, 1, 0.0, 5.0)))),
+                List.of(
+                        edge("img-1", "vid-1"),
+                        edge("img-1", "vid-2"),
+                        edge("vid-1", "edit-1"),
+                        edge("vid-2", "edit-1")));
+
+        var edit = WorkflowGraphPlanner.plan(graph).stream()
+                .filter(step -> "edit-1".equals(step.nodeId())).findFirst().orElseThrow();
+
+        assertEquals(List.of("vid-1", "vid-2"),
+                edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
+    }
+
+    @Test
+    void imageWiredDirectlyToEditingNodeFillsEmptyTimelineAsStill() {
+        Map<String, Object> graph = graph(
+                List.of(
+                        generator("img-1", "ImageGenerator", "a poster"),
+                        editing("edit-1", List.of())),
+                List.of(edge("img-1", "edit-1")));
+
+        var edit = WorkflowGraphPlanner.plan(graph).stream()
+                .filter(step -> "edit-1".equals(step.nodeId())).findFirst().orElseThrow();
+
+        assertEquals(List.of("img-1"),
+                edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
+    }
+
+    @Test
+    void referenceVideoBehindDirectVideoIsNotBackfilled() {
+        Map<String, Object> graph = graph(
+                List.of(
+                        generator("ref", "VideoGenerator", "reference"),
+                        generator("shot", "VideoGenerator", "shot"),
+                        editing("edit-1", List.of())),
+                List.of(edge("ref", "shot"), edge("shot", "edit-1")));
+
+        var edit = WorkflowGraphPlanner.plan(graph).stream()
+                .filter(step -> "edit-1".equals(step.nodeId())).findFirst().orElseThrow();
+
+        assertEquals(List.of("shot"),
+                edit.clips().stream().map(WorkflowGraphPlanner.Clip::sourceNodeId).toList());
     }
 
     @Test

@@ -473,8 +473,9 @@ class FfmpegWorkflowFilmComposerTest {
                 List.of(new WorkflowFilmComposer.OverlayClip(0, 2, "text", "hi", "#ffffff",
                         24, 400, "center", null, 50, 50, 100, 100)),
                 List.of(png),
-                List.of(new WorkflowFilmComposer.PipClip(1, 3, "pip.mp4", 0, 2, 70, 25, 30, opacity, true)),
-                List.of(pip));
+                List.of(new WorkflowFilmComposer.PipClip(1, 3, "pip.mp4", 0, 2, 70, 25, 30, opacity, true, 1)),
+                List.of(pip),
+                List.of(true));
     }
 
     @Test
@@ -497,6 +498,138 @@ class FfmpegWorkflowFilmComposerTest {
         // 最终视频 map 指向最后一级 PiP 输出，音频仍走 amix
         assertEquals("[pip0]", args.get(args.indexOf("-map") + 1));
         assertEquals("[aout]", args.get(args.lastIndexOf("-map") + 1));
+        // muted=true 的旧草稿只出画面：即便探针报有音轨，也不进 amix，overlay 不加 shortest
+        assertFalse(filter.contains("[pipa"), filter);
+        assertFalse(filter.contains("[3:a]"), filter);
+        assertTrue(filter.contains("amix=inputs=2:duration=first:dropout_transition=0"), filter);
+        assertFalse(pipOverlayHasShortest(filter), filter);
+    }
+
+    @Test
+    void audiblePipJoinsAmixAndMutedOrSilentPipStaysPictureOnly() {
+        WorkflowFilmComposer.PipClip audible = new WorkflowFilmComposer.PipClip(
+                1.5, 3.5, "pip.mp4", 0.25, 2.25, 70, 25, 30, 100, false, 0.6);
+        List<String> mixed = pipAudioArgs(audible, List.of(true), List.of(), List.of());
+        String filter = filterOf(mixed);
+        assertTrue(filter.contains("[1:a]atrim=start=0.25:end=2.25"), filter);
+        assertTrue(filter.contains("aformat=channel_layouts=stereo,volume=0.6,adelay=1500|1500[pipa0]"), filter);
+        assertTrue(filter.contains("[a][pipa0]amix=inputs=2:duration=first:dropout_transition=0[aout]"), filter);
+        assertEquals("[aout]", mixed.get(mixed.lastIndexOf("-map") + 1));
+        assertFalse(pipOverlayHasShortest(filter), filter);
+
+        WorkflowFilmComposer.PipClip atZero = new WorkflowFilmComposer.PipClip(
+                0, 2, "pip.mp4", 0, 2, 70, 25, 30, 100, false, 1);
+        String zeroDelay = filterOf(pipAudioArgs(atZero, List.of(true), List.of(), List.of()));
+        assertTrue(zeroDelay.contains("[1:a]atrim=start=0.0:end=2.0"), zeroDelay);
+        assertTrue(zeroDelay.contains("volume=1.0[pipa0]"), zeroDelay);
+        assertFalse(zeroDelay.contains("adelay="), zeroDelay);
+
+        String silentSource = filterOf(pipAudioArgs(audible, List.of(false), List.of(), List.of()));
+        assertFalse(silentSource.contains("amix"), silentSource);
+        assertFalse(silentSource.contains("[1:a]"), silentSource);
+        assertEquals("[a]", filterArgsMap(pipAudioArgs(audible, List.of(false), List.of(), List.of())));
+
+        List<String> withoutProbe = FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("main.mp4")),
+                List.of(new Clip("main.mp4", 0, 4, false, 1)),
+                List.of(true),
+                WorkflowFilmComposer.FilmSize.of("16:9", "720p"),
+                Path.of("out.mp4"),
+                List.of(), List.of(), null, null, List.of(), List.of(),
+                List.of(audible), List.of(Path.of("pip.mp4")));
+        assertFalse(filterOf(withoutProbe).contains("amix"), filterOf(withoutProbe));
+        assertEquals("[a]", filterArgsMap(withoutProbe));
+
+        WorkflowFilmComposer.PipClip muted = new WorkflowFilmComposer.PipClip(
+                1.5, 3.5, "pip.mp4", 0.25, 2.25, 70, 25, 30, 100, true, 0.6);
+        String mutedOnly = filterOf(pipAudioArgs(muted, List.of(true), List.of(), List.of()));
+        assertFalse(mutedOnly.contains("[pipa"), mutedOnly);
+        assertFalse(mutedOnly.contains("amix"), mutedOnly);
+        assertEquals("[a]", filterArgsMap(pipAudioArgs(muted, List.of(true), List.of(), List.of())));
+
+        List<String> withTrack = pipAudioArgs(audible, List.of(true),
+                List.of(new WorkflowFilmComposer.AudioClip("bgm.wav", 0, 0, 2, false, 1)),
+                List.of(Path.of("bgm.wav")));
+        String both = filterOf(withTrack);
+        assertTrue(both.contains("[a][bg0][pipa0]amix=inputs=3:duration=first:dropout_transition=0[aout]"), both);
+        assertTrue(both.contains("adelay=1500|1500[pipa0]"), both);
+        assertFalse(pipOverlayHasShortest(both), both);
+    }
+
+    @Test
+    void rejectsPipVolumeOutsideZeroToTwoBeforeReadingSources() {
+        LocalObjectStorage storage = new LocalObjectStorage(directory.resolve("objects"));
+        FakeRunner runner = new FakeRunner();
+
+        BizException error = assertThrows(BizException.class, () -> composer(storage, runner).compose(
+                7L, 31L, "merge",
+                List.of(new Clip("main.mp4", 0, 2, false, 1)),
+                null, List.of(), null, List.of(),
+                List.of(new WorkflowFilmComposer.PipClip(0, 2, "pip.mp4", 0, 2, 70, 25, 30, 100, false, 2.5))));
+
+        assertTrue(error.getMessage().contains("画中画"));
+        assertEquals(0, runner.commands.size());
+    }
+
+    @Test
+    void composeMixesProbedPipAudioAndKeepsMutedPipPictureOnly() throws Exception {
+        Assumptions.assumeTrue(FfmpegSupport.available());
+        LocalObjectStorage storage = new LocalObjectStorage(directory.resolve("objects"));
+        byte[] video = Files.readAllBytes(validMp4());
+        storage.put("main.mp4", video, "video/mp4");
+        storage.put("pip.mp4", video, "video/mp4");
+        FakeRunner runner = new FakeRunner();
+        runner.skipExecute = true;
+        runner.pipHasAudio = true;
+        runner.placeholderFilm = video;
+        FfmpegWorkflowFilmComposer filmComposer = composer(storage, runner);
+        List<Clip> clips = List.of(new Clip("main.mp4", 0, 0.3, false, 1));
+
+        filmComposer.compose(7L, 31L, "merge", clips, null, List.of(), null, List.of(),
+                List.of(new WorkflowFilmComposer.PipClip(0.1, 0.3, "pip.mp4", 0, 0.2, 70, 25, 30, 100, false, 0.5)));
+
+        String mixed = String.join(" ", runner.commands.get(0));
+        assertTrue(mixed.contains("atrim=start=0.0:end=0.2"), mixed);
+        assertTrue(mixed.contains("volume=0.5"), mixed);
+        assertTrue(mixed.contains("adelay=100|100"), mixed);
+        assertTrue(mixed.contains("[a][pipa0]amix=inputs=2:duration=first:dropout_transition=0[aout]"), mixed);
+        assertFalse(pipOverlayHasShortest(mixed), mixed);
+
+        runner.commands.clear();
+        filmComposer.compose(7L, 31L, "quiet", clips, null, List.of(), null, List.of(),
+                List.of(new WorkflowFilmComposer.PipClip(0.1, 0.3, "pip.mp4", 0, 0.2, 70, 25, 30, 100, true, 0.5)));
+        String muted = String.join(" ", runner.commands.get(0));
+        assertFalse(muted.contains("[pipa"), muted);
+        assertFalse(muted.contains("amix"), muted);
+        assertTrue(muted.contains("-map [a]"), muted);
+    }
+
+    private static List<String> pipAudioArgs(WorkflowFilmComposer.PipClip pip, List<Boolean> hasAudio,
+                                            List<WorkflowFilmComposer.AudioClip> tracks, List<Path> trackInputs) {
+        return FfmpegWorkflowFilmComposer.args(
+                List.of(Path.of("main.mp4")),
+                List.of(new Clip("main.mp4", 0, 4, false, 1)),
+                List.of(true),
+                WorkflowFilmComposer.FilmSize.of("16:9", "720p"),
+                Path.of("out.mp4"),
+                tracks, trackInputs, null, null, List.of(), List.of(),
+                List.of(pip), List.of(Path.of("pip.mp4")), hasAudio);
+    }
+
+    private static String filterOf(List<String> args) {
+        return args.get(args.indexOf("-filter_complex") + 1);
+    }
+
+    private static String filterArgsMap(List<String> args) {
+        return args.get(args.lastIndexOf("-map") + 1);
+    }
+
+    private static boolean pipOverlayHasShortest(String filter) {
+        int at = filter.indexOf("overlay=format=auto:");
+        if (at < 0) return false;
+        int end = filter.indexOf("[pip0]", at);
+        if (end < 0) end = filter.length();
+        return filter.substring(at, end).contains("shortest");
     }
 
     @Test
@@ -745,6 +878,9 @@ class FfmpegWorkflowFilmComposerTest {
         private final List<Path> tempPaths = new ArrayList<>();
         private final List<byte[]> inputContents = new ArrayList<>();
         private boolean failRun;
+        private boolean skipExecute;
+        private boolean pipHasAudio;
+        private byte[] placeholderFilm;
 
         @Override
         public boolean available() {
@@ -755,7 +891,7 @@ class FfmpegWorkflowFilmComposerTest {
         public boolean hasAudio(Path input) throws Exception {
             tempPaths.add(input);
             inputContents.add(Files.readAllBytes(input));
-            return false;
+            return pipHasAudio && input.getFileName().toString().startsWith("dit-workflow-pip-");
         }
 
         @Override
@@ -765,6 +901,10 @@ class FfmpegWorkflowFilmComposerTest {
             tempPaths.add(output);
             if (failRun) {
                 throw new IllegalStateException("encoder failed");
+            }
+            if (skipExecute) {
+                Files.write(output, placeholderFilm);
+                return;
             }
             FfmpegWorkflowFilmComposer.execute(args, timeoutSeconds);
         }
